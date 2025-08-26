@@ -1,0 +1,72 @@
+{
+  "database_name": "testdb",
+  "timestamp": "2025-08-21T20:28:54.755357",
+  "tables": [
+    {
+      "name": "aid_info",
+      "columns": 8,
+      "rows": null
+    },
+    {
+      "name": "sjckc_zyccq_czdwxx",
+      "columns": 8,
+      "rows": null
+    },
+    {
+      "name": "sjckc_zyccq_djs",
+      "columns": 2,
+      "rows": null
+    },
+    {
+      "name": "sjckc_zyccq_htdtxx",
+      "columns": 19,
+      "rows": null
+    },
+    {
+      "name": "sjckc_zyccq_htjcxx",
+      "columns": 17,
+      "rows": null
+    },
+    {
+      "name": "sjckc_zyccq_htjdxx",
+      "columns": 23,
+      "rows": null
+    },
+    {
+      "name": "sjckc_zyccq_jdsxx",
+      "columns": 4,
+      "rows": null
+    },
+    {
+      "name": "sjckc_zyccq_xmxx",
+      "columns": 3,
+      "rows": null
+    },
+    {
+      "name": "sjckc_zyccq_zlwt",
+      "columns": 31,
+      "rows": null
+    }
+  ],
+  "domain": {
+    "type": "合同与项目管理",
+    "description": "本数据库核心围绕订单全生命周期管理构建，聚焦客户订单履约与资源调度领域。核心业务模块包含：1）订单主数据管理（sjckc_zyccq_xmxx表），通过项目编号(xmbzh)作为主键，记录订单基础信息及进度状态；2）隐含的客户资源管理模块，通过文本字段关联客户信息；3）维度数据管理，通过dimension字段承载分类属性。数据特点呈现三大特征：业务聚焦度高（9张表均服务于订单管理场景）、数据结构扁平化（缺乏实体-关系表结构）、主键设计特殊（采用业务编号而非自增ID）。建议后续补充库存调拨、履约进度等关联表以完善业务闭环，当前结构适合轻量级订单管理场景，但需注意扩展性限制。",
+    "key_entities": []
+  },
+  "statistics": {
+    "total_tables": 9,
+    "total_columns": 115,
+    "completed_steps": [
+      "extract_schema",
+      "analyze_domain",
+      "classify_fields",
+      "generate_column_desc",
+      "generate_table_desc",
+      "correct_column_desc",
+      "optimize_domain",
+      "analyze_er",
+      "finalize_result"
+    ],
+    "analysis_duration": "N/A"
+  }
+}

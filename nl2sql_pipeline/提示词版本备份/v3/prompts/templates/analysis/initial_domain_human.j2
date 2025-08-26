@@ -1,0 +1,16 @@
+请分析数据库 "{{ database_name }}" 的业务领域。
+
+数据库包含 {{ table_count }} 个表：
+{% for table in table_names %}
+- {{ table }}
+{% endfor %}
+
+请提供：
+1. 业务领域描述（description）
+2. 主要业务实体列表（main_entities）
+3. 关键业务规则列表（business_rules）
+4. 重要关系列表（key_relationships）
+
+{% if format_instructions %}
+{{ format_instructions }}
+{% endif %}

@@ -1,0 +1,86 @@
+# NL2SQL Pipeline 应用配置
+
+# 数据库配置
+database:
+  # MySQL连接配置
+  host: localhost
+  port: 3306
+  user: root
+  password: ""
+  charset: utf8mb4
+  # database: your_database  # 可以在运行时指定
+
+# LLM配置
+llm:
+  # 本地模型配置
+  model: "Qwen3-14B"
+  temperature: 0.7
+  max_tokens: 8192
+  
+  # API配置
+  api_key: not-needed
+  base_url: http://192.168.200.216:9009/v1
+  
+  # 注意：以上配置可以通过环境变量或命令行参数动态覆盖
+  # 环境变量：OPENAI_MODEL, OPENAI_API_KEY, OPENAI_BASE_URL
+
+# 分析配置
+analysis:
+  # 最大重试次数
+  max_retries: 3
+  
+  # 批处理大小
+  batch_size: 5
+  
+  # 缓存设置
+  enable_cache: true
+  cache_dir: cache/analysis
+
+# 生成配置
+generation:
+  # 默认目标数量
+  default_target_count: 100
+  
+  # 场景分配策略
+  scenario_allocation:
+    strategy: proportional  # proportional 或 equal
+    min_per_scenario: 5
+  
+  # 复杂度分配
+  complexity_distribution:
+    1: 0.3  # 30%
+    2: 0.4  # 40%
+    3: 0.2  # 20%
+    4: 0.1  # 10%
+  
+  # 生成参数
+  questions_per_batch: 10
+  max_retries_per_question: 3
+
+# 输出配置
+output:
+  # 默认输出目录
+  default_dir: output
+  
+  # 输出格式
+  formats:
+    - json
+    - csv
+  
+  # 是否包含元数据
+  include_metadata: true
+
+# 日志配置
+logging:
+  # 日志级别
+  level: INFO
+  
+  # 日志格式
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+  # 日志文件
+  file:
+    enabled: true
+    path: logs/nl2sql_pipeline.log
+    max_size: 10485760  # 10MB
+    backup_count: 5
