@@ -5,32 +5,18 @@
 """
 
 from tools.base import BaseSemanticSQLTool
-from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
-from models.schemas import TableInfo, ColumnInfo
+from models.analysis_models import (
+    SchemaExtractionInput,
+    SchemaExtractionOutput,
+    TableDetail,
+    ColumnDetail,
+    ForeignKeyInfo,
+    IndexInfo
+)
 import logging
 
 logger = logging.getLogger(__name__)
-
-
-class SchemaExtractionInput(BaseModel):
-    """输入模式"""
-    tables: Optional[List[str]] = Field(
-        default=None,
-        description="要提取的表名列表，为空则提取所有表"
-    )
-    include_row_count: bool = Field(
-        default=True,
-        description="是否包含表的行数统计"
-    )
-    include_foreign_keys: bool = Field(
-        default=True,
-        description="是否包含外键关系"
-    )
-    include_indexes: bool = Field(
-        default=False,
-        description="是否包含索引信息"
-    )
 
 
 class SchemaExtractionTool(BaseSemanticSQLTool):
@@ -53,7 +39,7 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
         include_row_count: bool = True,
         include_foreign_keys: bool = True,
         include_indexes: bool = False
-    ) -> Dict[str, Any]:
+    ) -> SchemaExtractionOutput:
         """执行 schema 提取"""
         logger.info("开始提取数据库结构信息")
         
@@ -88,19 +74,17 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
                 continue
         
         # 构建结果
-        result = {
-            "database_name": database_name,
-            "tables_count": len(table_infos),
-            "tables": table_infos,
-            "extraction_config": {
+        result = SchemaExtractionOutput(
+            database_name=database_name,
+            tables_count=len(table_infos),
+            tables=table_infos,
+            extraction_config={
                 "include_row_count": include_row_count,
                 "include_foreign_keys": include_foreign_keys,
                 "include_indexes": include_indexes
-            }
-        }
-        
-        # 生成摘要
-        result["summary"] = self._generate_summary(table_infos)
+            },
+            summary=self._generate_summary(table_infos)
+        )
         
         logger.info(f"结构提取完成: {len(table_infos)} 个表")
         return result
@@ -129,41 +113,39 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
         include_row_count: bool,
         include_foreign_keys: bool,
         include_indexes: bool
-    ) -> Dict[str, Any]:
+    ) -> TableDetail:
         """提取单个表的详细信息"""
         logger.debug(f"提取表 {table_name} 的信息")
         
-        # 基本信息
-        table_info = {
-            "name": table_name,
-            "comment": self._get_table_comment(table_name),
-            "columns": [],
-            "primary_keys": [],
-            "foreign_keys": [],
-            "indexes": []
-        }
-        
         # 获取列信息
         columns = self._get_columns_info(table_name)
-        table_info["columns"] = columns
         
         # 提取主键
-        primary_keys = [col["name"] for col in columns if col.get("is_primary_key")]
-        table_info["primary_keys"] = primary_keys
+        primary_keys = [col.name for col in columns if col.is_primary_key]
+        
+        # 创建表详情
+        table_detail = TableDetail(
+            name=table_name,
+            comment=self._get_table_comment(table_name),
+            columns=columns,
+            primary_keys=primary_keys,
+            foreign_keys=[],
+            indexes=[]
+        )
         
         # 获取行数
         if include_row_count:
-            table_info["row_count"] = self._get_row_count(table_name)
+            table_detail.row_count = self._get_row_count(table_name)
         
         # 获取外键
         if include_foreign_keys:
-            table_info["foreign_keys"] = self._get_foreign_keys(table_name)
+            table_detail.foreign_keys = self._get_foreign_keys(table_name)
         
         # 获取索引
         if include_indexes:
-            table_info["indexes"] = self._get_indexes(table_name)
+            table_detail.indexes = self._get_indexes(table_name)
         
-        return table_info
+        return table_detail
     
     def _get_table_comment(self, table_name: str) -> Optional[str]:
         """获取表注释"""
@@ -185,7 +167,7 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
             logger.debug(f"获取表 {table_name} 注释失败: {e}")
         return None
     
-    def _get_columns_info(self, table_name: str) -> List[Dict[str, Any]]:
+    def _get_columns_info(self, table_name: str) -> List[ColumnDetail]:
         """获取列信息"""
         try:
             # 使用 INFORMATION_SCHEMA 获取详细的列信息
@@ -218,17 +200,17 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
                         if line.strip() and not line.startswith('-'):
                             parts = [p.strip() for p in line.split('|')]
                             if len(parts) >= 6:
-                                col_info = {
-                                    "name": parts[0],
-                                    "data_type": self._format_data_type(parts[1], parts[6], parts[7], parts[8]),
-                                    "is_nullable": parts[2] == 'YES',
-                                    "default_value": parts[3] if parts[3] != 'NULL' else None,
-                                    "is_primary_key": 'PRI' in parts[4],
-                                    "is_unique": 'UNI' in parts[4],
-                                    "is_foreign_key": 'MUL' in parts[4],
-                                    "comment": parts[5] if parts[5] and parts[5] != 'NULL' else None
-                                }
-                                columns.append(col_info)
+                                col_detail = ColumnDetail(
+                                    name=parts[0],
+                                    data_type=self._format_data_type(parts[1], parts[6], parts[7], parts[8]),
+                                    is_nullable=parts[2] == 'YES',
+                                    default_value=parts[3] if parts[3] != 'NULL' else None,
+                                    is_primary_key='PRI' in parts[4],
+                                    is_unique='UNI' in parts[4],
+                                    is_foreign_key='MUL' in parts[4],
+                                    comment=parts[5] if parts[5] and parts[5] != 'NULL' else None
+                                )
+                                columns.append(col_detail)
             
             # 如果解析失败，使用备用方法
             if not columns:
@@ -257,7 +239,7 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
         else:
             return base_type
     
-    def _parse_columns_from_ddl(self, ddl: str) -> List[Dict[str, Any]]:
+    def _parse_columns_from_ddl(self, ddl: str) -> List[ColumnDetail]:
         """从 DDL 中解析列信息（备用方法）"""
         columns = []
         if not ddl:
@@ -275,14 +257,15 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
                 col_name = parts[0].strip('`,"')
                 col_type = parts[1].strip(',')
                 
-                columns.append({
-                    "name": col_name,
-                    "data_type": col_type,
-                    "is_nullable": 'NOT NULL' not in line.upper(),
-                    "is_primary_key": False,  # 需要单独查询
-                    "default_value": None,
-                    "comment": None
-                })
+                col_detail = ColumnDetail(
+                    name=col_name,
+                    data_type=col_type,
+                    is_nullable='NOT NULL' not in line.upper(),
+                    is_primary_key=False,  # 需要单独查询
+                    default_value=None,
+                    comment=None
+                )
+                columns.append(col_detail)
         
         return columns
     
@@ -300,7 +283,7 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
             logger.debug(f"获取表 {table_name} 行数失败: {e}")
         return None
     
-    def _get_foreign_keys(self, table_name: str) -> List[Dict[str, Any]]:
+    def _get_foreign_keys(self, table_name: str) -> List[ForeignKeyInfo]:
         """获取外键信息"""
         foreign_keys = []
         try:
@@ -325,19 +308,19 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
                         if line.strip() and not line.startswith('-'):
                             parts = [p.strip() for p in line.split('|')]
                             if len(parts) >= 4:
-                                fk_info = {
-                                    "constraint_name": parts[0],
-                                    "column": parts[1],
-                                    "referenced_table": parts[2],
-                                    "referenced_column": parts[3]
-                                }
+                                fk_info = ForeignKeyInfo(
+                                    constraint_name=parts[0],
+                                    column=parts[1],
+                                    referenced_table=parts[2],
+                                    referenced_column=parts[3]
+                                )
                                 foreign_keys.append(fk_info)
         except Exception as e:
             logger.debug(f"获取表 {table_name} 外键失败: {e}")
         
         return foreign_keys
     
-    def _get_indexes(self, table_name: str) -> List[Dict[str, Any]]:
+    def _get_indexes(self, table_name: str) -> List[IndexInfo]:
         """获取索引信息"""
         indexes = []
         try:
@@ -353,12 +336,12 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
                             if len(parts) >= 5:
                                 key_name = parts[2]
                                 if key_name not in index_map:
-                                    index_map[key_name] = {
-                                        "name": key_name,
-                                        "unique": parts[1] == '0',
-                                        "columns": []
-                                    }
-                                index_map[key_name]["columns"].append(parts[4])
+                                    index_map[key_name] = IndexInfo(
+                                        name=key_name,
+                                        unique=parts[1] == '0',
+                                        columns=[]
+                                    )
+                                index_map[key_name].columns.append(parts[4])
                     
                     indexes = list(index_map.values())
         except Exception as e:
@@ -366,22 +349,22 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
         
         return indexes
     
-    def _generate_summary(self, table_infos: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _generate_summary(self, table_infos: List[TableDetail]) -> Dict[str, Any]:
         """生成结构摘要"""
-        total_columns = sum(len(t.get("columns", [])) for t in table_infos)
-        total_rows = sum(t.get("row_count", 0) for t in table_infos if t.get("row_count"))
+        total_columns = sum(len(t.columns) for t in table_infos)
+        total_rows = sum(t.row_count for t in table_infos if t.row_count)
         
         # 统计数据类型
         type_stats = {}
         for table in table_infos:
-            for col in table.get("columns", []):
-                data_type = col.get("data_type", "").split('(')[0].upper()
+            for col in table.columns:
+                data_type = col.data_type.split('(')[0].upper()
                 type_stats[data_type] = type_stats.get(data_type, 0) + 1
         
         # 找出有外键关系的表
         tables_with_fk = [
-            t["name"] for t in table_infos 
-            if t.get("foreign_keys")
+            t.name for t in table_infos 
+            if t.foreign_keys
         ]
         
         return {
