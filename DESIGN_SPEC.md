@@ -1,666 +1,659 @@
-# SemanticSQL-Agent 核心组件设计规范
+# SemanticSQL-Agent 核心组件设计规范（LangChain & LangGraph）
 
-## 1. 类型定义规范
+## 1. 状态和模型定义
 
-### 1.1 基础类型定义
+### 1.1 LangGraph 状态定义
 
 ```python
-# agent/agent_basics.py
-from enum import Enum
-from dataclasses import dataclass
-from typing import List, Dict, Any, Optional
+# models/states.py
+from typing import TypedDict, List, Dict, Any, Optional, Literal
+from pydantic import BaseModel, Field
+from datetime import datetime
 
-class AgentState(Enum):
-    """智能体执行状态"""
-    IDLE = "idle"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    ERROR = "error"
-
-class AgentStepState(Enum):
-    """步骤执行状态 - 体现 TAO 循环"""
-    THINKING = "thinking"      # Thought 阶段
-    CALLING_TOOL = "calling_tool"  # Action 阶段
-    REFLECTING = "reflecting"   # 增强的 Observation
-    COMPLETED = "completed"
-    ERROR = "error"
-
-@dataclass
-class AgentStep:
-    """单个执行步骤"""
-    step_number: int
-    state: AgentStepState
-    llm_response: Optional['LLMResponse'] = None
-    tool_calls: Optional[List['ToolCall']] = None
-    tool_results: Optional[List['ToolResult']] = None
-    reflection: Optional[str] = None
-    error: Optional[str] = None
+# LangGraph 状态 - 使用 TypedDict
+class NL2SQLState(TypedDict):
+    """工作流状态定义"""
+    # 基础信息
+    query: str
+    database_name: str
+    timestamp: str
     
-@dataclass
-class AgentExecution:
-    """完整的执行记录"""
-    task: str
-    steps: List[AgentStep]
-    agent_state: AgentState = AgentState.IDLE
-    final_result: Optional[str] = None
-    success: bool = False
-    total_tokens: Optional[int] = None
-    execution_time: Optional[float] = None
+    # Schema 信息
+    schema_info: Optional[Dict[str, Any]]
+    table_count: Optional[int]
+    
+    # 分析结果
+    domain_analysis: Optional[Dict[str, Any]]
+    field_classification: Optional[Dict[str, Any]]
+    table_descriptions: Optional[Dict[str, List[str]]]
+    column_descriptions: Optional[Dict[str, Dict[str, str]]]
+    er_relations: Optional[List[Dict[str, Any]]]
+    
+    # 生成结果
+    scenario: Optional[Dict[str, Any]]
+    generated_sql: Optional[str]
+    sql_explanation: Optional[str]
+    
+    # 执行追踪
+    current_step: str
+    execution_steps: List[Dict[str, Any]]
+    errors: List[str]
+    
+# 步骤状态枚举
+StepStatus = Literal["pending", "running", "completed", "failed"]
 ```
 
-### 1.2 LLM 相关类型
+### 1.2 Pydantic 模型定义（格式化输入输出）
 
 ```python
-# utils/llm_clients/llm_basics.py
-from dataclasses import dataclass
+# models/schemas.py
+from pydantic import BaseModel, Field, validator
 from typing import List, Dict, Any, Optional
 
-@dataclass
-class LLMMessage:
-    """LLM 消息"""
-    role: str  # system, user, assistant
-    content: str
-    tool_result: Optional['ToolResult'] = None
+class DatabaseConfig(BaseModel):
+    """数据库配置模型"""
+    host: str = Field(description="数据库主机地址")
+    port: int = Field(default=3306, description="数据库端口")
+    user: str = Field(description="数据库用户名")
+    password: str = Field(description="数据库密码")
+    database: str = Field(description="数据库名称")
     
-@dataclass
-class ToolCall:
-    """工具调用请求"""
-    id: str
+    @validator('port')
+    def validate_port(cls, v):
+        if not 1 <= v <= 65535:
+            raise ValueError('端口必须在 1-65535 之间')
+        return v
+
+class QueryRequest(BaseModel):
+    """查询请求模型"""
+    query: str = Field(description="自然语言查询")
+    database: str = Field(description="目标数据库")
+    options: Dict[str, Any] = Field(default_factory=dict)
+    
+class TableInfo(BaseModel):
+    """表信息模型"""
     name: str
-    arguments: Dict[str, Any]
+    comment: Optional[str] = None
+    row_count: Optional[int] = None
+    columns: List['ColumnInfo'] = []
+    primary_key: Optional[List[str]] = None
+    foreign_keys: List[Dict[str, Any]] = []
+
+class ColumnInfo(BaseModel):
+    """列信息模型"""
+    name: str
+    data_type: str
+    nullable: bool = True
+    default: Optional[Any] = None
+    comment: Optional[str] = None
+    is_primary: bool = False
+    is_foreign: bool = False
+
+class SQLResult(BaseModel):
+    """SQL 生成结果模型"""
+    sql: str = Field(description="生成的 SQL 语句")
+    confidence: float = Field(ge=0, le=1, description="置信度分数")
+    tables_used: List[str] = Field(description="使用的表")
+    explanation: str = Field(description="SQL 解释")
+    complexity: str = Field(description="复杂度: simple/medium/complex")
+    execution_plan: List[Dict[str, Any]] = Field(default_factory=list)
     
-@dataclass
-class LLMResponse:
-    """LLM 响应"""
-    content: str
-    tool_calls: Optional[List[ToolCall]] = None
-    usage: Optional[Dict[str, int]] = None
-    model: Optional[str] = None
+class StepResult(BaseModel):
+    """步骤执行结果"""
+    step_name: str
+    status: StepStatus
+    start_time: datetime
+    end_time: Optional[datetime] = None
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
 ```
 
-### 1.3 工具相关类型
+## 2. LangChain 工具规范
+
+### 2.1 基础工具类
 
 ```python
 # tools/base.py
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from langchain.tools import BaseTool
+from pydantic import BaseModel, Field
+from typing import Type, Dict, Any, Optional
+from abc import abstractmethod
 
-@dataclass
-class ToolParameter:
-    """工具参数定义"""
-    name: str
-    type: str  # string, integer, object, array
-    description: str
-    required: bool = True
-    default: Any = None
+class BaseNL2SQLTool(BaseTool):
+    """NL2SQL 工具基类"""
     
-@dataclass
-class ToolResult:
-    """工具执行结果"""
-    success: bool
-    data: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    tool_name: Optional[str] = None
-    execution_time: Optional[float] = None
+    # 工具元数据
+    return_direct: bool = False
+    
+    # 输入模式
+    args_schema: Type[BaseModel] = None
+    
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """工具名称"""
+        pass
+    
+    @property
+    @abstractmethod
+    def description(self) -> str:
+        """工具描述"""
+        pass
+    
+    def _run(self, **kwargs) -> Dict[str, Any]:
+        """同步执行"""
+        try:
+            result = self.execute(**kwargs)
+            return self.format_output(result)
+        except Exception as e:
+            return {"error": str(e), "success": False}
+    
+    @abstractmethod
+    def execute(self, **kwargs) -> Any:
+        """执行具体逻辑"""
+        pass
+    
+    def format_output(self, result: Any) -> Dict[str, Any]:
+        """格式化输出"""
+        return {"result": result, "success": True}
 ```
 
-## 2. 接口规范
-
-### 2.1 工具接口
+### 2.2 数据库工具实现
 
 ```python
-# tools/base.py
-from abc import ABC, abstractmethod
+# tools/database_tools.py
+from langchain.sql_database import SQLDatabase
+from langchain.tools.sql_database.tool import (
+    InfoSQLDatabaseTool,
+    ListSQLDatabaseTool,
+    QuerySQLDatabaseTool
+)
 
-class Tool(ABC):
-    """所有工具必须实现的接口"""
+class SchemaExtractionTool(BaseNL2SQLTool):
+    """Schema 提取工具"""
     
-    def __init__(self, model_provider: str = "openai"):
-        self.model_provider = model_provider
+    name = "extract_database_schema"
+    description = "提取数据库完整的表结构信息"
     
-    @abstractmethod
-    def get_name(self) -> str:
-        """返回工具名称（唯一标识）"""
-        pass
+    # 输入参数定义
+    class InputSchema(BaseModel):
+        database_name: str = Field(description="数据库名称")
+        include_stats: bool = Field(default=True, description="是否包含统计信息")
     
-    @abstractmethod
-    def get_description(self) -> str:
-        """返回工具描述（供 LLM 理解）"""
-        pass
+    args_schema = InputSchema
+    db: SQLDatabase = Field(exclude=True)
     
-    @abstractmethod
-    def get_parameters(self) -> List[ToolParameter]:
-        """返回工具参数定义"""
-        pass
-    
-    @abstractmethod
-    def execute(self, **kwargs) -> ToolResult:
-        """执行工具逻辑"""
-        pass
-    
-    def to_openai_function(self) -> Dict[str, Any]:
-        """转换为 OpenAI function calling 格式"""
-        return {
-            "name": self.get_name(),
-            "description": self.get_description(),
-            "parameters": self._parameters_to_json_schema()
-        }
-    
-    def _parameters_to_json_schema(self) -> Dict[str, Any]:
-        """将参数转换为 JSON Schema"""
-        properties = {}
-        required = []
+    def execute(self, database_name: str, include_stats: bool = True) -> Dict[str, Any]:
+        """提取 schema"""
+        # 使用 LangChain SQL 工具
+        info_tool = InfoSQLDatabaseTool(db=self.db)
+        list_tool = ListSQLDatabaseTool(db=self.db)
         
-        for param in self.get_parameters():
-            properties[param.name] = {
-                "type": param.type,
-                "description": param.description
-            }
-            if param.required:
-                required.append(param.name)
+        tables = list_tool._run()
+        schema_info = info_tool._run(tables)
+        
+        # 格式化结果
+        result = {
+            "database": database_name,
+            "tables": self._parse_tables(tables),
+            "schema_ddl": schema_info,
+            "statistics": {}
+        }
+        
+        if include_stats:
+            result["statistics"] = self._get_statistics()
+            
+        return result
+    
+    def _parse_tables(self, tables_str: str) -> List[str]:
+        """解析表列表"""
+        return [t.strip() for t in tables_str.split(",")]
+    
+    def _get_statistics(self) -> Dict[str, Any]:
+        """获取数据库统计信息"""
+        query_tool = QuerySQLDatabaseTool(db=self.db)
+        
+        # 获取表行数
+        stats = {}
+        for table in self.db.get_usable_table_names():
+            try:
+                result = query_tool._run(f"SELECT COUNT(*) as cnt FROM {table}")
+                stats[table] = {"row_count": int(result.split()[0])}
+            except:
+                stats[table] = {"row_count": -1}
                 
-        return {
-            "type": "object",
-            "properties": properties,
-            "required": required
-        }
+        return stats
 ```
 
-### 2.2 LLM 客户端接口
+## 3. 提示词模板管理
+
+### 3.1 模板管理器
 
 ```python
-# utils/llm_clients/base_client.py
-from abc import ABC, abstractmethod
+# prompts/prompt_manager.py
+from langchain.prompts import (
+    ChatPromptTemplate,
+    SystemMessagePromptTemplate,
+    HumanMessagePromptTemplate,
+    PromptTemplate
+)
+from langchain.prompts.few_shot import FewShotPromptTemplate
+from pathlib import Path
+import yaml
 
-class BaseLLMClient(ABC):
-    """LLM 客户端基类"""
+class PromptManager:
+    """提示词模板管理器"""
     
-    @abstractmethod
-    def chat(
-        self,
-        messages: List[LLMMessage],
-        model: str,
-        temperature: float = 0.0,
-        tools: Optional[List[Tool]] = None
-    ) -> LLMResponse:
-        """发送聊天请求"""
-        pass
+    def __init__(self, template_dir: Path):
+        self.template_dir = template_dir
+        self.templates = {}
+        self.examples = {}
+        self._load_examples()
     
-    @abstractmethod
-    def count_tokens(self, text: str) -> int:
-        """计算 token 数量"""
-        pass
-```
-
-### 2.3 数据库服务接口
-
-```python
-# services/database_service.py
-from abc import ABC, abstractmethod
-from typing import List, Dict, Any
-
-class DatabaseService(ABC):
-    """数据库服务抽象基类"""
+    def _load_examples(self):
+        """加载示例数据"""
+        examples_file = self.template_dir / "examples.yaml"
+        if examples_file.exists():
+            with open(examples_file, 'r', encoding='utf-8') as f:
+                self.examples = yaml.safe_load(f)
     
-    @abstractmethod
-    def connect(self, config: Dict[str, Any]):
-        """建立数据库连接"""
-        pass
-    
-    @abstractmethod
-    def disconnect(self):
-        """断开数据库连接"""
-        pass
-    
-    @abstractmethod
-    def get_tables(self) -> List[Dict[str, Any]]:
-        """获取所有表的基本信息"""
-        pass
-    
-    @abstractmethod
-    def get_columns(self, table_name: str) -> List[Dict[str, Any]]:
-        """获取指定表的所有列信息"""
-        pass
-    
-    @abstractmethod
-    def get_primary_key(self, table_name: str) -> List[str]:
-        """获取表的主键列"""
-        pass
-    
-    @abstractmethod
-    def get_foreign_keys(self, table_name: str) -> List[Dict[str, Any]]:
-        """获取表的外键信息"""
-        pass
-    
-    @abstractmethod
-    def execute_query(self, query: str) -> List[Dict[str, Any]]:
-        """执行 SQL 查询"""
-        pass
-```
-
-## 3. 工具实现规范
-
-### 3.1 分析工具示例
-
-```python
-# tools/schema_extraction_tool.py
-class SchemaExtractionTool(Tool):
-    """数据库结构提取工具"""
-    
-    def __init__(self, db_connector: DatabaseConnector, model_provider: str = "openai"):
-        super().__init__(model_provider)
-        self.db_connector = db_connector
+    def get_chat_prompt(self, name: str, **kwargs) -> ChatPromptTemplate:
+        """获取聊天提示词模板"""
+        if name not in self.templates:
+            self.templates[name] = self._load_chat_template(name)
         
-    def get_name(self) -> str:
-        return "extract_database_schema"
-        
-    def get_description(self) -> str:
-        return (
-            "Extract the complete database schema including tables, columns, "
-            "data types, primary keys, foreign keys, and relationships. "
-            "Use this tool first to understand the database structure."
+        return self.templates[name].partial(**kwargs)
+    
+    def get_few_shot_prompt(self, name: str, examples_key: str) -> FewShotPromptTemplate:
+        """获取少样本提示词模板"""
+        example_prompt = PromptTemplate(
+            input_variables=["input", "output"],
+            template="Input: {input}\nOutput: {output}"
         )
         
-    def get_parameters(self) -> List[ToolParameter]:
-        return [
-            ToolParameter(
-                name="include_indexes",
-                type="boolean",
-                description="Whether to include index information",
-                required=False,
-                default=False
-            )
-        ]
+        examples = self.examples.get(examples_key, [])
         
-    def execute(self, **kwargs) -> ToolResult:
-        try:
-            # 获取所有表信息
-            tables = self.db_service.get_tables()
-            
-            # 获取每个表的详细信息
-            schema_info = []
-            for table in tables:
-                table_info = {
-                    "name": table["name"],
-                    "columns": self.db_service.get_columns(table["name"]),
-                    "primary_key": self.db_service.get_primary_key(table["name"]),
-                    "foreign_keys": self.db_service.get_foreign_keys(table["name"])
-                }
-                schema_info.append(table_info)
-            
-            return ToolResult(
-                success=True,
-                data={
-                    "tables": schema_info,
-                    "summary": {
-                        "total_tables": len(tables),
-                        "total_columns": sum(len(t["columns"]) for t in schema_info)
-                    }
-                },
-                tool_name=self.get_name()
-            )
-            
-        except Exception as e:
-            return ToolResult(
-                success=False,
-                error=f"Failed to extract schema: {str(e)}",
-                tool_name=self.get_name()
-            )
+        return FewShotPromptTemplate(
+            examples=examples,
+            example_prompt=example_prompt,
+            prefix=self._load_template_string(f"{name}_prefix.txt"),
+            suffix=self._load_template_string(f"{name}_suffix.txt"),
+            input_variables=["query"]
+        )
     
-    def _format_table(self, table: TableSchema) -> Dict[str, Any]:
-        """格式化表信息"""
-        return {
-            "name": table.name,
-            "columns": table.columns,
-            "primary_key": table.primary_key,
-            "foreign_keys": table.foreign_keys,
-            "indexes": table.indexes
-        }
+    def _load_chat_template(self, name: str) -> ChatPromptTemplate:
+        """加载聊天模板"""
+        system_template = self._load_template_string(f"{name}_system.txt")
+        human_template = self._load_template_string(f"{name}_human.txt")
+        
+        return ChatPromptTemplate.from_messages([
+            SystemMessagePromptTemplate.from_template(system_template),
+            HumanMessagePromptTemplate.from_template(human_template)
+        ])
+    
+    def _load_template_string(self, filename: str) -> str:
+        """加载模板字符串"""
+        file_path = self.template_dir / filename
+        if not file_path.exists():
+            raise FileNotFoundError(f"模板文件不存在: {file_path}")
+        
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return f.read()
 ```
 
-### 3.2 生成工具示例
+### 3.2 模板示例
+
+```text
+# prompts/templates/schema_analysis_system.txt
+你是一个数据库专家，擅长分析数据库结构和业务逻辑。
+
+你的任务是分析给定的数据库 schema，理解其业务含义和数据关系。
+
+分析时请注意：
+1. 识别核心业务实体
+2. 理解表之间的关系
+3. 推断业务逻辑和规则
+4. 发现潜在的数据质量问题
+
+请以结构化的格式输出分析结果。
+```
+
+## 4. 输出解析器
+
+### 4.1 基础解析器
 
 ```python
-# tools/sql_generation_tool.py
-class SQLGenerationTool(Tool):
-    """SQL 生成工具"""
+# utils/output_parser.py
+from langchain.output_parsers import (
+    PydanticOutputParser,
+    OutputFixingParser,
+    RetryOutputParser
+)
+from langchain.schema import OutputParserException
+from typing import Type, TypeVar, Generic
+import json
+import re
+
+T = TypeVar('T', bound=BaseModel)
+
+class StructuredOutputParser(Generic[T]):
+    """结构化输出解析器"""
     
-    def get_name(self) -> str:
-        return "generate_sql_query"
+    def __init__(self, pydantic_model: Type[T], llm=None):
+        self.pydantic_model = pydantic_model
+        self.base_parser = PydanticOutputParser(pydantic_object=pydantic_model)
         
-    def get_description(self) -> str:
-        return (
-            "Generate SQL query based on natural language request and database schema. "
-            "Provide the user query, relevant schema information, and any domain context."
+        # 添加修复和重试能力
+        if llm:
+            self.fixing_parser = OutputFixingParser.from_llm(
+                parser=self.base_parser,
+                llm=llm
+            )
+            self.retry_parser = RetryOutputParser.from_llm(
+                parser=self.base_parser,
+                llm=llm
+            )
+        else:
+            self.fixing_parser = None
+            self.retry_parser = None
+    
+    def parse(self, text: str) -> T:
+        """解析输出"""
+        try:
+            # 尝试提取 JSON
+            json_str = self._extract_json(text)
+            if json_str:
+                return self.pydantic_model.parse_raw(json_str)
+            
+            # 使用基础解析器
+            return self.base_parser.parse(text)
+            
+        except OutputParserException as e:
+            # 尝试修复
+            if self.fixing_parser:
+                try:
+                    return self.fixing_parser.parse(text)
+                except:
+                    pass
+            
+            # 尝试重试
+            if self.retry_parser:
+                try:
+                    return self.retry_parser.parse_with_prompt(text)
+                except:
+                    pass
+            
+            raise e
+    
+    def _extract_json(self, text: str) -> Optional[str]:
+        """从文本中提取 JSON"""
+        # 查找 JSON 代码块
+        json_pattern = r'```json\s*(.*?)\s*```'
+        matches = re.findall(json_pattern, text, re.DOTALL)
+        if matches:
+            return matches[0]
+        
+        # 查找大括号包围的内容
+        brace_pattern = r'\{[^{}]*\}'
+        matches = re.findall(brace_pattern, text)
+        if matches:
+            return matches[-1]  # 返回最后一个
+        
+        return None
+```
+
+### 4.2 SQL 专用解析器
+
+```python
+# utils/sql_parser.py
+class SQLOutputParser(StructuredOutputParser[SQLResult]):
+    """SQL 输出专用解析器"""
+    
+    def __init__(self, llm=None):
+        super().__init__(SQLResult, llm)
+    
+    def parse(self, text: str) -> SQLResult:
+        """解析 SQL 输出"""
+        # 提取 SQL 语句
+        sql = self._extract_sql(text)
+        if not sql:
+            raise OutputParserException("未找到有效的 SQL 语句")
+        
+        # 尝试结构化解析
+        try:
+            return super().parse(text)
+        except:
+            # 降级处理：手动构建
+            return SQLResult(
+                sql=sql,
+                confidence=self._extract_confidence(text),
+                tables_used=self._extract_tables(sql),
+                explanation=self._extract_explanation(text),
+                complexity=self._analyze_complexity(sql),
+                execution_plan=[]
+            )
+    
+    def _extract_sql(self, text: str) -> Optional[str]:
+        """提取 SQL 语句"""
+        # 查找 SQL 代码块
+        sql_pattern = r'```sql\s*(.*?)\s*```'
+        matches = re.findall(sql_pattern, text, re.DOTALL | re.IGNORECASE)
+        if matches:
+            return matches[0].strip()
+        
+        # 查找 SELECT/INSERT/UPDATE/DELETE 语句
+        sql_keywords = r'(SELECT|INSERT|UPDATE|DELETE)\s+.*?;'
+        matches = re.findall(sql_keywords, text, re.DOTALL | re.IGNORECASE)
+        if matches:
+            return matches[0]
+        
+        return None
+```
+
+## 5. LangGraph 节点实现
+
+### 5.1 节点函数规范
+
+```python
+# agent/nodes.py
+from typing import Dict, Any
+from langchain.schema import HumanMessage, SystemMessage
+
+def extract_schema_node(state: NL2SQLState) -> Dict[str, Any]:
+    """Schema 提取节点"""
+    # 记录步骤
+    step_result = StepResult(
+        step_name="extract_schema",
+        status="running",
+        start_time=datetime.now()
+    )
+    
+    try:
+        # 获取工具
+        tool = SchemaExtractionTool(db=state["db"])
+        
+        # 执行
+        result = tool._run(
+            database_name=state["database_name"],
+            include_stats=True
         )
         
-    def get_parameters(self) -> List[ToolParameter]:
-        return [
-            ToolParameter(
-                name="user_query",
-                type="string",
-                description="The natural language query from user"
-            ),
-            ToolParameter(
-                name="schema_context",
-                type="object",
-                description="Relevant database schema information"
-            ),
-            ToolParameter(
-                name="domain_context",
-                type="object",
-                description="Business domain understanding",
-                required=False
-            )
-        ]
+        # 更新状态
+        step_result.status = "completed"
+        step_result.result = result
         
-    def execute(self, **kwargs) -> ToolResult:
-        try:
-            user_query = kwargs['user_query']
-            schema_context = kwargs['schema_context']
-            domain_context = kwargs.get('domain_context', {})
-            
-            # 构建 prompt
-            prompt = self._build_generation_prompt(
-                user_query, schema_context, domain_context
-            )
-            
-            # 调用 LLM 生成 SQL
-            sql = self._generate_sql(prompt)
-            
-            # 基础验证
-            validation = self._validate_sql(sql, schema_context)
-            
-            return ToolResult(
-                success=True,
-                data={
-                    "sql": sql,
-                    "validation": validation,
-                    "confidence": validation.get("confidence", 0.8)
-                },
-                tool_name=self.get_name()
-            )
-            
-        except Exception as e:
-            return ToolResult(
-                success=False,
-                error=f"SQL generation failed: {str(e)}",
-                tool_name=self.get_name()
-            )
+        return {
+            "schema_info": result,
+            "table_count": len(result["tables"]),
+            "execution_steps": state["execution_steps"] + [step_result.dict()],
+            "current_step": "analyze_domain"
+        }
+        
+    except Exception as e:
+        step_result.status = "failed"
+        step_result.error = str(e)
+        
+        return {
+            "errors": state["errors"] + [str(e)],
+            "execution_steps": state["execution_steps"] + [step_result.dict()],
+            "current_step": "error"
+        }
+
+def analyze_domain_node(state: NL2SQLState) -> Dict[str, Any]:
+    """领域分析节点"""
+    # 构建提示词
+    prompt = prompt_manager.get_chat_prompt(
+        "domain_analysis",
+        schema=state["schema_info"],
+        query=state["query"]
+    )
+    
+    # 调用 LLM
+    llm = get_llm()
+    response = llm(prompt.format_messages())
+    
+    # 解析输出
+    parser = StructuredOutputParser(DomainAnalysisResult)
+    result = parser.parse(response.content)
+    
+    return {
+        "domain_analysis": result.dict(),
+        "current_step": "classify_fields"
+    }
 ```
 
-## 4. 配置规范
-
-### 4.1 配置类定义
+## 6. 数据库连接管理
 
 ```python
-# utils/config.py  
-# 参考 nl2sql_pipeline 的配置设计
-from dataclasses import dataclass
-from typing import List, Optional, Dict, Any
+# utils/database_connector.py
+from langchain.sql_database import SQLDatabase
+from sqlalchemy import create_engine, pool
+from typing import Dict, Any, Optional
+import pymysql
 
-@dataclass
-class ModelConfig:
-    """模型配置"""
-    provider: str  # openai
-    model: str     # gpt-4
-    temperature: float = 0.1
+class DatabaseConnector:
+    """数据库连接管理器"""
     
-@dataclass
-class DatabaseConfig:
-    """数据库配置 - 参考 nl2sql_pipeline"""
-    host: str
-    port: int = 3306
-    user: str
-    password: str
-    database: str
-    
-    def validate(self) -> bool:
-        """验证配置是否完整"""
-        required_fields = ['host', 'user', 'password', 'database']
-        return all(getattr(self, field) is not None for field in required_fields)
-    
-@dataclass
-class AgentConfig:
-    """智能体配置"""
-    model: ModelConfig
-    database: DatabaseConfig
-    max_steps: int = 15
-    tools: List[str] = None
+    _instances: Dict[str, SQLDatabase] = {}
     
     @classmethod
-    def from_yaml(cls, path: str) -> 'AgentConfig':
-        """从 YAML 文件加载配置"""
-        import yaml
-        with open(path, 'r') as f:
-            data = yaml.safe_load(f)
-        return cls._from_dict(data)
-```
-
-### 4.2 配置文件格式
-
-```yaml
-# semanticsql_config.yaml
-model:
-  provider: openai
-  model: gpt-4
-  temperature: 0.1
-  
-# 数据库配置（参考 nl2sql_pipeline）  
-database:
-  host: localhost
-  port: 3306
-  user: root
-  password: password
-  database: test_db
-  
-agent:
-  max_steps: 15
-  tools:
-    - schema_extraction
-    - initial_domain_analysis
-    - field_classification
-    - table_description
-    - column_description
-    - er_analysis
-    - scenario_generation
-    - sql_generation
-    - sequential_thinking
-    - task_done
-```
-
-## 5. 错误处理规范
-
-### 5.1 自定义异常
-
-```python
-# utils/exceptions.py
-class SemanticSQLError(Exception):
-    """基础异常类"""
-    pass
-
-class DatabaseConnectionError(SemanticSQLError):
-    """数据库连接错误"""
-    pass
-
-class SchemaExtractionError(SemanticSQLError):
-    """Schema 提取错误"""
-    pass
-
-class SQLGenerationError(SemanticSQLError):
-    """SQL 生成错误"""
-    pass
-
-class ToolExecutionError(SemanticSQLError):
-    """工具执行错误"""
-    def __init__(self, tool_name: str, error: str):
-        self.tool_name = tool_name
-        super().__init__(f"Tool '{tool_name}' failed: {error}")
-```
-
-### 5.2 错误处理模式
-
-```python
-# 工具中的错误处理
-async def execute(self, **kwargs) -> ToolResult:
-    try:
-        # 参数验证
-        self._validate_parameters(kwargs)
+    def get_connection(cls, config: DatabaseConfig) -> SQLDatabase:
+        """获取数据库连接（单例模式）"""
+        key = f"{config.host}:{config.port}/{config.database}"
         
-        # 执行核心逻辑
-        result = await self._core_logic(kwargs)
+        if key not in cls._instances:
+            cls._instances[key] = cls._create_connection(config)
         
-        return ToolResult(success=True, data=result)
-        
-    except ValidationError as e:
-        # 参数验证错误
-        return ToolResult(
-            success=False,
-            error=f"Invalid parameters: {str(e)}",
-            tool_name=self.get_name()
-        )
-    except DatabaseConnectionError as e:
-        # 数据库连接错误
-        return ToolResult(
-            success=False,
-            error=f"Database connection failed: {str(e)}",
-            tool_name=self.get_name()
-        )
-    except Exception as e:
-        # 未预期的错误
-        logger.exception(f"Unexpected error in {self.get_name()}")
-        return ToolResult(
-            success=False,
-            error=f"Unexpected error: {str(e)}",
-            tool_name=self.get_name()
-        )
-```
-
-## 6. 日志规范
-
-```python
-# utils/logging.py
-import logging
-from typing import Dict, Any
-
-class StructuredLogger:
-    """结构化日志记录器"""
+        return cls._instances[key]
     
-    def __init__(self, name: str):
-        self.logger = logging.getLogger(name)
+    @classmethod
+    def _create_connection(cls, config: DatabaseConfig) -> SQLDatabase:
+        """创建新的数据库连接"""
+        # 构建连接字符串
+        connection_string = cls._build_connection_string(config)
         
-    def log_tool_execution(
-        self,
-        tool_name: str,
-        parameters: Dict[str, Any],
-        result: ToolResult,
-        duration: float
-    ):
-        """记录工具执行"""
-        self.logger.info(
-            "tool_execution",
-            extra={
-                "tool_name": tool_name,
-                "parameters": parameters,
-                "success": result.success,
-                "duration": duration,
-                "error": result.error
+        # 创建引擎
+        engine = create_engine(
+            connection_string,
+            poolclass=pool.NullPool,  # 禁用连接池
+            connect_args={
+                "charset": "utf8mb4",
+                "connect_timeout": 10
             }
         )
         
-    def log_agent_step(self, step: AgentStep, execution_id: str):
-        """记录智能体步骤"""
-        self.logger.info(
-            "agent_step",
-            extra={
-                "execution_id": execution_id,
-                "step_number": step.step_number,
-                "state": step.state.value,
-                "has_reflection": step.reflection is not None
-            }
+        # 创建 SQLDatabase 实例
+        db = SQLDatabase(engine)
+        
+        # 测试连接
+        db.run("SELECT 1")
+        
+        return db
+    
+    @classmethod
+    def _build_connection_string(cls, config: DatabaseConfig) -> str:
+        """构建连接字符串"""
+        # 目前只支持 MySQL
+        return (
+            f"mysql+pymysql://{config.user}:{config.password}@"
+            f"{config.host}:{config.port}/{config.database}"
         )
+    
+    @classmethod
+    def close_all(cls):
+        """关闭所有连接"""
+        for db in cls._instances.values():
+            if hasattr(db, '_engine'):
+                db._engine.dispose()
+        cls._instances.clear()
 ```
 
-## 7. 测试规范
-
-### 7.1 单元测试模板
+## 7. LLM 客户端配置
 
 ```python
-# tests/tools/test_schema_extraction.py
-import pytest
-from unittest.mock import Mock, AsyncMock
+# utils/llm_client.py
+from langchain.chat_models import ChatOpenAI
+from langchain.llms import OpenAI
+from typing import Optional
 
-class TestSchemaExtractionTool:
+def get_llm(model_name: Optional[str] = None):
+    """获取 LLM 实例"""
+    settings = Settings()
     
-    @pytest.fixture
-    def mock_db_connector(self):
-        connector = Mock(spec=DatabaseConnector)
-        connector.extract_schema = AsyncMock()
-        return connector
-        
-    @pytest.fixture
-    def tool(self, mock_db_connector):
-        return SchemaExtractionTool(mock_db_connector)
-        
-    @pytest.mark.asyncio
-    async def test_successful_extraction(self, tool, mock_db_connector):
-        # Arrange
-        mock_schema = DatabaseSchema(
-            tables=[...],
-            relationships=[...]
-        )
-        mock_db_connector.extract_schema.return_value = mock_schema
-        
-        # Act
-        result = await tool.execute(include_indexes=True)
-        
-        # Assert
-        assert result.success
-        assert "tables" in result.data
-        assert result.error is None
-        
-    @pytest.mark.asyncio
-    async def test_extraction_failure(self, tool, mock_db_connector):
-        # Arrange
-        mock_db_connector.extract_schema.side_effect = Exception("Connection lost")
-        
-        # Act
-        result = await tool.execute()
-        
-        # Assert
-        assert not result.success
-        assert "Connection lost" in result.error
+    # 支持 vLLM 服务
+    return ChatOpenAI(
+        model_name=model_name or settings.model_name,
+        openai_api_key=settings.api_key,
+        openai_api_base=settings.base_url,
+        temperature=settings.temperature,
+        max_tokens=2048,
+        request_timeout=30
+    )
 ```
 
-### 7.2 集成测试模板
+## 8. 内存管理
 
 ```python
-# tests/test_nl2sql_integration.py
-@pytest.mark.integration
-class TestNL2SQLIntegration:
+# agent/memory.py
+from langchain.memory import ConversationSummaryBufferMemory
+from langchain.schema import BaseMessage
+
+class NL2SQLMemory:
+    """对话记忆管理"""
     
-    @pytest.mark.asyncio
-    async def test_end_to_end_flow(self, test_database):
-        # 设置测试数据库
-        await setup_test_database(test_database)
-        
-        # 创建智能体
-        config = AgentConfig(
-            model=ModelConfig(provider="openai", model="gpt-4"),
-            database=DatabaseConfig(connection_string=test_database.url),
-            max_steps=10
+    def __init__(self, llm):
+        self.memory = ConversationSummaryBufferMemory(
+            llm=llm,
+            max_token_limit=2000,
+            return_messages=True
         )
-        agent = NL2SQLAgent(config)
         
-        # 执行查询
-        agent.new_task(
-            query="Show me total sales by region",
-            database_url=test_database.url
-        )
-        execution = await agent.execute_task()
+        # 查询历史
+        self.query_history: List[Dict[str, Any]] = []
+    
+    def add_query(self, query: str, sql: str, success: bool):
+        """添加查询记录"""
+        self.query_history.append({
+            "query": query,
+            "sql": sql,
+            "success": success,
+            "timestamp": datetime.now()
+        })
+    
+    def get_similar_queries(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """获取相似的历史查询"""
+        # 简单的关键词匹配
+        keywords = set(query.lower().split())
         
-        # 验证结果
-        assert execution.success
-        assert "SELECT" in execution.final_result
-        assert execution.agent_state == AgentState.COMPLETED
+        scored_queries = []
+        for hist in self.query_history:
+            hist_keywords = set(hist["query"].lower().split())
+            score = len(keywords & hist_keywords) / len(keywords)
+            if score > 0.3:
+                scored_queries.append((score, hist))
+        
+        # 按分数排序
+        scored_queries.sort(key=lambda x: x[0], reverse=True)
+        
+        return [q[1] for q in scored_queries[:limit]]
 ```

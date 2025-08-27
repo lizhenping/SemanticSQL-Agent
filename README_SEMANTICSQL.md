@@ -1,13 +1,14 @@
 # SemanticSQL-Agent
 
-基于智能体架构的自然语言到SQL转换系统。
+基于 LangChain 和 LangGraph 的智能 SQL 生成系统。
 
 ## 特性
 
-- 基于 ReAct (Thought-Action-Observation) 模式
-- 工具驱动的渐进式数据库理解
-- 参考 TRAEAgent 的成熟架构
-- 借鉴 nl2sql_pipeline 的实现
+- 🔗 **LangGraph 工作流**：清晰的状态管理和流程控制
+- 🛠️ **LangChain 工具**：模块化的分析和生成工具
+- 📝 **格式化输出**：使用 Pydantic 确保输入输出格式
+- 🤖 **本地模型支持**：通过 vLLM 支持本地大模型
+- 💾 **MySQL 支持**：专注于 MySQL 数据库
 
 ## 快速开始
 
@@ -19,108 +20,159 @@ cd semanticsql-agent
 pip install -r requirements.txt
 ```
 
-### 基础使用
+### 配置
 
-```python
-from semanticsql import NL2SQLAgent, DatabaseConfig
-
-# 配置数据库
-db_config = DatabaseConfig(
-    host="localhost",
-    user="root",
-    password="password",
-    database="test_db"
-)
-
-# 创建智能体
-agent = NL2SQLAgent(db_config)
-
-# 执行查询
-result = agent.execute_nl2sql("查询每个部门的平均工资")
-print(result["sql"])
-```
-
-### 命令行使用
+创建 `.env` 文件：
 
 ```bash
-python -m semanticsql.cli "查询所有订单" --user root --password pass --database mydb
+# LLM 配置
+MODEL_NAME=Qwen3-14B
+API_KEY=not-needed
+BASE_URL=http://192.168.200.216:9009/v1
+
+# 数据库配置
+DB_HOST=192.168.200.216
+DB_PORT=13306
+DB_USER=testuser
+DB_PASSWORD=testpass
+DB_DATABASE=testdb
 ```
 
-## 配置
+### 使用
 
-创建 `semanticsql_config.yaml`:
+```python
+from agent.nl2sql_agent import NL2SQLAgent
 
-```yaml
-openai:
-  api_key: "your-api-key"
-  model: "gpt-4"
+# 创建智能体
+agent = NL2SQLAgent()
 
-database:
-  host: localhost
-  port: 3306
-  user: root
-  password: password
-  database: test_db
+# 生成 SQL
+result = agent.generate_sql("查询每个部门的平均工资")
+
+print(f"SQL: {result.sql}")
+print(f"置信度: {result.confidence}")
+print(f"使用的表: {result.tables_used}")
 ```
 
-## 支持的数据库
+### 命令行
 
-- MySQL 5.7+
+```bash
+# 基础使用
+python -m cli "查询所有订单信息"
+
+# 指定参数
+python -m cli "统计每月销售额" \
+  --model Qwen3-14B \
+  --base-url http://192.168.200.216:9009/v1 \
+  --host 192.168.200.216 \
+  --port 13306 \
+  --user testuser \
+  --password testpass \
+  --database testdb
+```
+
+## 架构
+
+```
+智能体执行流程:
+┌─────────────┐
+│   用户查询   │
+└──────┬──────┘
+       ▼
+┌─────────────┐
+│ Schema提取   │ ← LangChain SQL Tools
+└──────┬──────┘
+       ▼
+┌─────────────┐
+│ 领域分析     │ ← LLM + PromptTemplate
+└──────┬──────┘
+       ▼
+┌─────────────┐
+│ 字段分类     │ ← 格式化输出 (Pydantic)
+└──────┬──────┘
+       ▼
+┌─────────────┐
+│ 关系分析     │ ← ER 关系识别
+└──────┬──────┘
+       ▼
+┌─────────────┐
+│ SQL生成      │ ← 结构化生成
+└──────┬──────┘
+       ▼
+┌─────────────┐
+│ 格式化输出   │ ← SQLResult
+└─────────────┘
+```
 
 ## 工具列表
 
-1. **schema_extraction** - 提取数据库结构
-2. **initial_domain_analysis** - 初始领域分析
-3. **field_classification** - 字段分类
-4. **table_description** - 表描述生成
-5. **column_description** - 列描述生成
-6. **er_analysis** - 实体关系分析
-7. **scenario_generation** - 场景生成
-8. **sql_generation** - SQL生成
-9. **sequential_thinking** - 深度思考（可选）
-10. **task_done** - 任务完成标记
+| 工具名称 | 功能描述 | 输入 | 输出 |
+|---------|---------|------|------|
+| SchemaExtractionTool | 提取数据库结构 | database_name | 表结构信息 |
+| InitialDomainAnalysisTool | 分析业务领域 | schema, query | 领域描述 |
+| FieldClassificationTool | 字段分类 | tables | 维度/度量分类 |
+| TableDescriptionTool | 生成表描述 | tables | 表业务含义 |
+| ColumnDescriptionTool | 生成列描述 | columns | 列业务含义 |
+| ERAnalysisTool | 实体关系分析 | schema | 关系图谱 |
+| ScenarioGenerationTool | 场景识别 | context | 查询场景 |
+| SQLGenerationTool | SQL 生成 | all_context | SQL 语句 |
 
-## 项目结构
+## 配置说明
 
-```
-semanticsql-agent/
-├── semanticsql/
-│   ├── agent/          # 智能体核心
-│   ├── tools/          # 工具实现
-│   ├── config/         # 配置管理
-│   ├── services/       # 数据库服务
-│   └── utils/          # 工具函数
-├── examples/           # 使用示例
-└── tests/             # 测试用例
-```
+### LLM 配置
+- 支持 OpenAI API 兼容的服务
+- 推荐使用 vLLM 部署本地模型
+- 温度设置为 0.1 保证稳定输出
+
+### 数据库配置
+- 目前仅支持 MySQL
+- 需要 INFORMATION_SCHEMA 读取权限
+- 建议使用只读账户
 
 ## 开发
 
-### 添加新工具
+### 项目结构
 
-1. 在 `tools/` 目录创建新文件
-2. 继承 `Tool` 基类
-3. 实现 `get_name()`, `get_description()`, `execute()` 方法
-4. 在智能体中注册工具
-
-### 运行测试
-
-```bash
-pytest tests/
+```
+semanticsql-agent/
+├── agent/          # 智能体核心
+├── tools/          # LangChain 工具
+├── models/         # Pydantic 模型
+├── prompts/        # 提示词模板
+└── utils/          # 工具函数
 ```
 
-## 依赖
+### 添加新工具
 
-- Python 3.11+
-- OpenAI API
-- PyMySQL
-- PyYAML
-- Rich (CLI美化)
+1. 继承 `BaseTool`
+2. 定义 `args_schema`
+3. 实现 `_run` 方法
+4. 在工作流中添加节点
+
+### 测试
+
+```bash
+# 运行测试
+pytest tests/
+
+# 测试特定工具
+pytest tests/test_tools.py::test_schema_extraction
+```
+
+## 限制
+
+- 仅支持 MySQL 数据库
+- 需要稳定的 LLM 服务
+- 复杂查询可能需要多次优化
+
+## 贡献
+
+欢迎提交 Issue 和 Pull Request！
 
 ## 作者
 
 李振平 - lizhenping18@mails.ucas.ac.cn
 
-## 许可证
+## License
 
-MIT License
+MIT

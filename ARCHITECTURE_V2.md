@@ -1,20 +1,20 @@
-# SemanticSQL-Agent 架构设计文档（简化版）
+# SemanticSQL-Agent 架构设计文档（基于 LangChain & LangGraph）
 
 ## 1. 项目概述
 
-SemanticSQL-Agent 是一个基于智能体架构的自然语言到SQL转换系统，继承了 TRAEAgent 的设计理念，并参考了 nl2sql_pipeline 的实现方式。
+SemanticSQL-Agent 是一个基于 LangChain 和 LangGraph 的自然语言到SQL转换系统，采用智能体架构和图工作流设计。
 
 ### 1.1 核心特性
-- 基于 ReAct (Thought-Action-Observation) 模式
-- 工具驱动的渐进式理解
-- 简单有效的反思机制
-- 模块化的组件设计（参考 nl2sql_pipeline）
+- 基于 LangGraph 的状态图工作流
+- LangChain 工具和提示词管理
+- 格式化的输入输出（参考 nl2sql_pipeline）
+- 支持本地模型（通过 vLLM）
 
-### 1.2 设计原则
-- **简洁性优先**：避免过度设计
-- **同步执行**：不使用异步编程
-- **继承复用**：基于 TRAEAgent 的成熟模式
-- **实用主义**：参考 nl2sql_pipeline 的实现
+### 1.2 技术栈
+- **LangChain**: 工具、提示词模板、输出解析器
+- **LangGraph**: 状态管理、工作流编排
+- **LangChain SQL**: MySQL 数据库工具
+- **Pydantic**: 数据验证和格式化
 
 ## 2. 架构层次设计
 
@@ -24,253 +24,329 @@ semanticsql-agent/
 ├── 配置层 (Configuration Layer)
 │   └── config/
 │       ├── __init__.py
-│       ├── database.py              # 数据库配置（参考 nl2sql_pipeline）
-│       └── environment.py           # 环境配置
+│       ├── settings.py              # 全局配置
+│       └── database.py              # 数据库配置
 │
-├── 服务层 (Service Layer)
-│   └── services/
+├── 模型层 (Models Layer) 
+│   └── models/
 │       ├── __init__.py
-│       ├── database_service.py      # 数据库服务基类
-│       └── mysql_database_service.py # MySQL服务实现
-│
-├── 智能体核心层 (Agent Core Layer)
-│   └── agent/
-│       ├── __init__.py
-│       ├── agent_basics.py          # 状态定义
-│       ├── base_agent.py            # 基础智能体类
-│       └── nl2sql_agent.py          # NL2SQL 智能体实现
+│       ├── states.py                # LangGraph 状态定义 (TypedDict/Pydantic)
+│       ├── schemas.py               # 输入输出模式定义
+│       └── database.py              # 数据库模型
 │
 ├── 工具层 (Tools Layer)
 │   └── tools/
 │       ├── __init__.py
-│       ├── base.py                  # 工具基类
-│       ├── schema_extraction_tool.py # 数据库结构提取
-│       ├── initial_domain_analysis_tool.py # 初始领域分析
-│       ├── field_classification_tool.py    # 字段分类
-│       ├── table_description_tool.py       # 表描述生成
-│       ├── column_description_tool.py      # 列描述生成
-│       ├── er_analysis_tool.py            # 实体关系分析
-│       ├── scenario_generation_tool.py     # 场景生成
-│       ├── sql_generation_tool.py          # SQL生成
-│       ├── sequential_thinking_tool.py     # 深度思考（可选）
-│       └── task_done_tool.py              # 任务完成标记
+│       ├── base.py                  # LangChain Tool 基类
+│       ├── database_tools.py        # 数据库相关工具
+│       ├── analysis_tools.py        # 分析工具
+│       └── generation_tools.py      # SQL生成工具
 │
-├── LLM 客户端层
+├── 提示词层 (Prompts Layer)
+│   └── prompts/
+│       ├── __init__.py
+│       ├── templates/               # Jinja2 模板
+│       │   ├── analysis/
+│       │   └── generation/
+│       └── prompt_manager.py        # LangChain PromptTemplate 管理
+│
+├── 智能体层 (Agent Layer)
+│   └── agent/
+│       ├── __init__.py
+│       ├── graph.py                 # LangGraph 工作流定义
+│       ├── nodes.py                 # 图节点实现
+│       └── nl2sql_agent.py          # 主智能体类
+│
+├── 工具函数层 (Utils Layer)
 │   └── utils/
-│       └── llm_clients/
-│           ├── __init__.py
-│           ├── llm_basics.py        # LLM 基础类型
-│           ├── base_client.py       # 客户端基类
-│           └── openai_client.py     # OpenAI 实现
+│       ├── __init__.py
+│       ├── database_connector.py    # 数据库连接管理
+│       ├── llm_client.py           # LLM 客户端（支持 vLLM）
+│       └── output_parser.py         # LangChain 输出解析器
 │
-└── 提示词层
-    └── prompt/
-        └── agent_prompt.py          # 系统提示词
+└── 接口层 (Interface Layer)
+    ├── cli.py                       # 命令行接口
+    └── api.py                       # API 接口（可选）
 ```
 
 ## 3. 核心组件设计
 
-### 3.1 数据库配置（参考 nl2sql_pipeline）
+### 3.1 状态定义（LangGraph）
 
 ```python
-# config/database.py
-class DatabaseConfig:
-    """数据库配置管理器"""
+# models/states.py
+from typing import TypedDict, List, Dict, Any, Optional
+from pydantic import BaseModel
+
+class NL2SQLState(TypedDict):
+    """LangGraph 状态定义"""
+    # 输入
+    query: str
+    database_config: Dict[str, Any]
     
-    def __init__(self, 
-                 host: str = None,
-                 port: int = None,
-                 user: str = None,
-                 password: str = None,
-                 database: str = None):
-        self.host = host
-        self.port = port or 3306
-        self.user = user
-        self.password = password
-        self.database = database
+    # 中间状态
+    schema_info: Optional[Dict[str, Any]]
+    domain_analysis: Optional[Dict[str, Any]]
+    field_classification: Optional[Dict[str, Any]]
+    table_descriptions: Optional[Dict[str, Any]]
+    column_descriptions: Optional[Dict[str, Any]]
+    er_analysis: Optional[Dict[str, Any]]
+    scenario: Optional[Dict[str, Any]]
     
-    def validate(self) -> bool:
-        """验证配置是否完整"""
-        required_fields = ['host', 'user', 'password', 'database']
-        return all(getattr(self, field) is not None for field in required_fields)
+    # 输出
+    generated_sql: Optional[str]
+    confidence_score: Optional[float]
+    execution_steps: List[Dict[str, Any]]
+    error: Optional[str]
+
+# 使用 Pydantic 定义格式化的输入输出
+class QueryInput(BaseModel):
+    """格式化的查询输入"""
+    query: str
+    database: str
+    options: Dict[str, Any] = {}
+
+class SQLOutput(BaseModel):
+    """格式化的SQL输出"""
+    sql: str
+    confidence: float
+    explanation: str
+    tables_used: List[str]
+    execution_plan: List[Dict[str, Any]]
 ```
 
-### 3.2 数据库服务（参考 nl2sql_pipeline）
+### 3.2 LangChain 工具定义
 
 ```python
-# services/database_service.py
-class DatabaseService(ABC):
-    """数据库服务抽象基类"""
+# tools/database_tools.py
+from langchain.tools import BaseTool
+from langchain.sql_database import SQLDatabase
+from pydantic import Field
+
+class SchemaExtractionTool(BaseTool):
+    """数据库结构提取工具"""
+    name = "schema_extraction"
+    description = "提取数据库的表结构信息"
     
-    @abstractmethod
-    def connect(self, config: Dict[str, Any]):
-        """建立数据库连接"""
-        pass
+    db: SQLDatabase = Field(exclude=True)
     
-    @abstractmethod
-    def get_tables(self) -> List[Dict[str, Any]]:
-        """获取所有表信息"""
-        pass
+    def _run(self, database_name: str) -> Dict[str, Any]:
+        """同步执行"""
+        return self.extract_schema()
     
-    @abstractmethod
-    def get_columns(self, table_name: str) -> List[Dict[str, Any]]:
-        """获取表的列信息"""
-        pass
+    def extract_schema(self) -> Dict[str, Any]:
+        """提取并格式化 schema 信息"""
+        # 使用 LangChain SQLDatabase 功能
+        table_info = self.db.get_table_info()
+        tables = self.db.get_usable_table_names()
+        
+        return {
+            "tables": tables,
+            "schema": table_info,
+            "formatted_output": self.format_schema(tables, table_info)
+        }
 ```
 
-### 3.3 智能体实现（简化版）
+### 3.3 提示词模板管理
 
 ```python
-# agent/base_agent.py
-class BaseAgent(ABC):
-    """通用智能体基类 - 同步执行"""
+# prompts/prompt_manager.py
+from langchain.prompts import PromptTemplate, ChatPromptTemplate
+from langchain.prompts.prompt import PromptTemplate
+from jinja2 import Environment, FileSystemLoader
+
+class PromptManager:
+    """统一的提示词模板管理"""
     
-    def __init__(self, config: AgentConfig):
-        self._llm_client = LLMClient(config.model)
-        self._tools: List[Tool] = []
-        self._max_steps = config.max_steps
+    def __init__(self, template_dir: str):
+        self.jinja_env = Environment(loader=FileSystemLoader(template_dir))
+        self.templates = {}
         
-    def execute_task(self) -> AgentExecution:
-        """执行任务 - TAO 循环"""
-        execution = AgentExecution(task=self._task)
-        messages = self._initial_messages
+    def get_prompt(self, name: str, **kwargs) -> ChatPromptTemplate:
+        """获取格式化的提示词模板"""
+        if name not in self.templates:
+            self.templates[name] = self._load_template(name)
         
-        for step_number in range(1, self._max_steps + 1):
-            # Thought
-            llm_response = self._llm_client.chat(messages, self._tools)
-            
-            # Action
-            if llm_response.tool_calls:
-                tool_results = self._execute_tools(llm_response.tool_calls)
-                
-                # Observation
-                messages.extend(self._create_messages(tool_results))
-                
-                # 简单反思
-                reflection = self.reflect_on_result(tool_results)
-                if reflection:
-                    messages.append(LLMMessage(role="assistant", content=reflection))
-            
-            if self._is_task_completed(llm_response):
-                break
-                
-        return execution
+        return self.templates[name].partial(**kwargs)
+    
+    def _load_template(self, name: str) -> ChatPromptTemplate:
+        """加载 Jinja2 模板并转换为 LangChain 模板"""
+        jinja_template = self.jinja_env.get_template(f"{name}.j2")
+        template_str = jinja_template.render()
+        
+        return ChatPromptTemplate.from_template(template_str)
 ```
 
-## 4. 执行流程
-
-### 4.1 典型执行序列
-
-```
-用户查询: "查询每个部门的平均工资"
-
-Step 1: 提取数据库结构
-  - Tool: schema_extraction_tool
-  - Result: 获取 employees, departments 等表结构
-
-Step 2: 初始领域分析
-  - Tool: initial_domain_analysis_tool  
-  - Result: 识别为"人力资源"领域
-
-Step 3: 字段分类
-  - Tool: field_classification_tool
-  - Result: salary -> 度量字段, dept_id -> 外键
-
-Step 4: 生成查询场景
-  - Tool: scenario_generation_tool
-  - Result: "按部门分组统计平均值"
-
-Step 5: 生成SQL
-  - Tool: sql_generation_tool
-  - Result: "SELECT d.dept_name, AVG(e.salary) FROM employees e JOIN departments d ON e.dept_id = d.id GROUP BY d.dept_name"
-
-Step 6: 任务完成
-  - Tool: task_done_tool
-```
-
-## 5. 配置示例
-
-```yaml
-# semanticsql_config.yaml
-model:
-  provider: openai
-  model: gpt-4
-  temperature: 0.1
-
-database:
-  host: localhost
-  port: 3306
-  user: root
-  password: password
-  database: test_db
-
-agent:
-  max_steps: 15
-  tools:
-    - schema_extraction
-    - initial_domain_analysis
-    - field_classification
-    - table_description
-    - column_description
-    - er_analysis
-    - scenario_generation
-    - sql_generation
-    - sequential_thinking
-    - task_done
-```
-
-## 6. 简化特性
-
-1. **无异步编程**：所有操作都是同步的
-2. **无并行执行**：工具按顺序执行
-3. **无复杂监控**：只保留基础日志
-4. **无性能优化**：专注功能实现
-5. **无安全审查**：信任内部使用
-6. **无国际化**：仅支持中英文
-7. **无CI/CD**：手动部署
-
-## 7. 开发指南
-
-### 7.1 添加新工具
+### 3.4 LangGraph 工作流定义
 
 ```python
-# tools/my_tool.py
-class MyTool(Tool):
-    def get_name(self) -> str:
-        return "my_tool"
+# agent/graph.py
+from langgraph.graph import StateGraph, END
+from typing import Dict, Any
+
+def create_nl2sql_graph() -> StateGraph:
+    """创建 NL2SQL 工作流图"""
+    
+    # 创建状态图
+    workflow = StateGraph(NL2SQLState)
+    
+    # 添加节点
+    workflow.add_node("extract_schema", extract_schema_node)
+    workflow.add_node("analyze_domain", analyze_domain_node)
+    workflow.add_node("classify_fields", classify_fields_node)
+    workflow.add_node("describe_tables", describe_tables_node)
+    workflow.add_node("describe_columns", describe_columns_node)
+    workflow.add_node("analyze_er", analyze_er_node)
+    workflow.add_node("generate_scenario", generate_scenario_node)
+    workflow.add_node("generate_sql", generate_sql_node)
+    workflow.add_node("format_output", format_output_node)
+    
+    # 定义边
+    workflow.set_entry_point("extract_schema")
+    workflow.add_edge("extract_schema", "analyze_domain")
+    workflow.add_edge("analyze_domain", "classify_fields")
+    workflow.add_edge("classify_fields", "describe_tables")
+    workflow.add_edge("describe_tables", "describe_columns")
+    workflow.add_edge("describe_columns", "analyze_er")
+    workflow.add_edge("analyze_er", "generate_scenario")
+    workflow.add_edge("generate_scenario", "generate_sql")
+    workflow.add_edge("generate_sql", "format_output")
+    workflow.add_edge("format_output", END)
+    
+    return workflow.compile()
+```
+
+## 4. 配置管理
+
+```python
+# config/settings.py
+from pydantic import BaseSettings
+
+class Settings(BaseSettings):
+    """全局配置"""
+    # LLM 配置
+    model_name: str = "Qwen3-14B"
+    api_key: str = "not-needed"
+    base_url: str = "http://192.168.200.216:9009/v1"
+    
+    # 数据库配置
+    db_host: str = "192.168.200.216"
+    db_port: int = 13306
+    db_user: str = "testuser"
+    db_password: str = "testpass"
+    db_database: str = "testdb"
+    
+    # Agent 配置
+    max_steps: int = 15
+    temperature: float = 0.1
+    
+    class Config:
+        env_file = ".env"
+```
+
+## 5. 数据库连接器
+
+```python
+# utils/database_connector.py
+from langchain.sql_database import SQLDatabase
+from sqlalchemy import create_engine
+
+class DatabaseConnector:
+    """多数据库支持的连接器"""
+    
+    @staticmethod
+    def create_connection(config: Dict[str, Any]) -> SQLDatabase:
+        """创建数据库连接"""
+        # 目前只支持 MySQL
+        connection_string = (
+            f"mysql+pymysql://{config['user']}:{config['password']}@"
+            f"{config['host']}:{config['port']}/{config['database']}"
+        )
         
-    def get_description(self) -> str:
-        return "工具描述"
-        
-    def execute(self, **kwargs) -> ToolResult:
+        engine = create_engine(connection_string)
+        return SQLDatabase(engine)
+```
+
+## 6. 输出解析器
+
+```python
+# utils/output_parser.py
+from langchain.output_parsers import PydanticOutputParser
+from langchain.schema import OutputParserException
+
+class SQLOutputParser(PydanticOutputParser):
+    """SQL 输出解析器"""
+    
+    pydantic_object = SQLOutput
+    
+    def parse(self, text: str) -> SQLOutput:
+        """解析 LLM 输出为结构化数据"""
         try:
-            # 实现逻辑
-            return ToolResult(success=True, data={})
+            # 提取 SQL
+            sql = self.extract_sql(text)
+            # 提取其他信息
+            confidence = self.extract_confidence(text)
+            explanation = self.extract_explanation(text)
+            
+            return SQLOutput(
+                sql=sql,
+                confidence=confidence,
+                explanation=explanation,
+                tables_used=self.extract_tables(sql),
+                execution_plan=[]
+            )
         except Exception as e:
-            return ToolResult(success=False, error=str(e))
+            raise OutputParserException(f"解析失败: {str(e)}")
 ```
 
-### 7.2 使用示例
+## 7. 主智能体实现
 
 ```python
-from semanticsql import NL2SQLAgent, DatabaseConfig
+# agent/nl2sql_agent.py
+from langgraph.graph import StateGraph
+from langchain.memory import ConversationBufferMemory
 
-# 配置数据库
-db_config = DatabaseConfig(
-    host="localhost",
-    user="root", 
-    password="password",
-    database="test_db"
-)
+class NL2SQLAgent:
+    """基于 LangGraph 的 NL2SQL 智能体"""
+    
+    def __init__(self, config: Settings):
+        self.config = config
+        self.graph = create_nl2sql_graph()
+        self.memory = ConversationBufferMemory()
+        self.db = DatabaseConnector.create_connection(config.dict())
+        
+    def run(self, query: str) -> SQLOutput:
+        """执行 NL2SQL 转换"""
+        # 初始化状态
+        initial_state = {
+            "query": query,
+            "database_config": self.config.dict(),
+            "execution_steps": []
+        }
+        
+        # 运行工作流
+        result = self.graph.invoke(initial_state)
+        
+        # 解析输出
+        parser = SQLOutputParser()
+        return parser.parse(result["generated_sql"])
+```
 
+## 8. 使用示例
+
+```python
 # 创建智能体
-agent = NL2SQLAgent(db_config)
+agent = NL2SQLAgent(Settings())
 
 # 执行查询
-result = agent.execute_nl2sql("查询所有订单的总金额")
-print(result.sql)
+result = agent.run("查询每个部门的平均工资")
+
+# 格式化输出
+print(f"SQL: {result.sql}")
+print(f"置信度: {result.confidence}")
+print(f"使用的表: {result.tables_used}")
 ```
 
-## 8. 联系方式
+## 9. 联系方式
 
-作者邮箱：lizhenping18@mails.ucas.ac.cn
+作者：李振平 (lizhenping18@mails.ucas.ac.cn)
