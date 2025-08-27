@@ -1,0 +1,30 @@
+# Core dependencies
+langchain>=0.1.0
+langchain-openai>=0.0.5
+langchain-community>=0.0.10
+
+# Database
+pymysql>=1.0.0
+sqlalchemy>=2.0.0
+
+# Data validation
+pydantic>=2.0.0
+
+# Template engine
+jinja2>=3.0.0
+
+# Configuration
+pyyaml>=6.0
+
+# CLI
+click>=8.0.0
+
+# Optional dependencies for different LLM providers
+# langchain-anthropic>=0.0.1  # For Claude
+# langchain-google-genai>=0.0.1  # For Gemini
+
+# Development dependencies (optional)
+# pytest>=7.0.0
+# black>=22.0.0
+# flake8>=4.0.0
+# mypy>=1.0.0
