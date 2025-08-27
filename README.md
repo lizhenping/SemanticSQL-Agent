@@ -1,246 +1,105 @@
-# Trae Agent
+# SemanticSQL-Agent
 
-[![arXiv:2507.23370](https://img.shields.io/badge/TechReport-arXiv%3A2507.23370-b31a1b)](https://arxiv.org/abs/2507.23370)
-[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Pre-commit](https://github.com/bytedance/trae-agent/actions/workflows/pre-commit.yml/badge.svg)](https://github.com/bytedance/trae-agent/actions/workflows/pre-commit.yml)
-[![Unit Tests](https://github.com/bytedance/trae-agent/actions/workflows/unit-test.yml/badge.svg)](https://github.com/bytedance/trae-agent/actions/workflows/unit-test.yml)
-[![Discord](https://img.shields.io/discord/1320998163615846420?label=Join%20Discord&color=7289DA)](https://discord.gg/VwaQ4ZBHvC)
+基于 LangChain 和 TRAEAgent 设计理念的自然语言到 SQL 转换系统。
 
-**Trae Agent** is an LLM-based agent for general purpose software engineering tasks. It provides a powerful CLI interface that can understand natural language instructions and execute complex software engineering workflows using various tools and LLM providers.
+## 特性
 
-For technical details please refer to [our technical report](https://arxiv.org/abs/2507.23370).
+- 🤖 基于 LangChain 的 ReAct Agent
+- 🔍 完整的数据库结构分析
+- 💡 智能的业务领域理解
+- ✅ SQL 语法验证和执行
+- 📝 Jinja2 提示词模板管理
+- 🎯 专注于 NL2SQL 核心功能
 
-**Project Status:** The project is still being actively developed. Please refer to [docs/roadmap.md](docs/roadmap.md) and [CONTRIBUTING](CONTRIBUTING.md) if you are willing to help us improve Trae Agent.
+## 快速开始
 
-**Difference with Other CLI Agents:** Trae Agent offers a transparent, modular architecture that researchers and developers can easily modify, extend, and analyze, making it an ideal platform for **studying AI agent architectures, conducting ablation studies, and developing novel agent capabilities**. This **_research-friendly design_** enables the academic and open-source communities to contribute to and build upon the foundational agent framework, fostering innovation in the rapidly evolving field of AI agents.
-
-## ✨ Features
-
-- 🌊 **Lakeview**: Provides short and concise summarisation for agent steps
-- 🤖 **Multi-LLM Support**: Works with OpenAI, Anthropic, Doubao, Azure, OpenRouter, Ollama and Google Gemini APIs
-- 🛠️ **Rich Tool Ecosystem**: File editing, bash execution, sequential thinking, and more
-- 🎯 **Interactive Mode**: Conversational interface for iterative development
-- 📊 **Trajectory Recording**: Detailed logging of all agent actions for debugging and analysis
-- ⚙️ **Flexible Configuration**: YAML-based configuration with environment variable support
-- 🚀 **Easy Installation**: Simple pip-based installation
-
-## 🚀 Installation
-
-### Requirements
-- UV (https://docs.astral.sh/uv/)
-- API key for your chosen provider (OpenAI, Anthropic, Google Gemini, OpenRouter, etc.)
-
-### Setup
+### 安装
 
 ```bash
-git clone https://github.com/bytedance/trae-agent.git
-cd trae-agent
-uv sync --all-extras
-source .venv/bin/activate
+pip install langchain>=0.1.0 langchain-openai>=0.0.5 langchain-community>=0.0.10
+pip install pymysql sqlalchemy pydantic>=2.0 jinja2 pyyaml
 ```
 
-## ⚙️ Configuration
+### 配置
 
-### YAML Configuration (Recommended)
-
-1. Copy the example configuration file:
-   ```bash
-   cp trae_config.yaml.example trae_config.yaml
-   ```
-
-2. Edit `trae_config.yaml` with your API credentials and preferences:
+创建 `config.yaml`:
 
 ```yaml
-agents:
-  trae_agent:
-    enable_lakeview: true
-    model: trae_agent_model  # the model configuration name for Trae Agent
-    max_steps: 200  # max number of agent steps
-    tools:  # tools used with Trae Agent
-      - bash
-      - str_replace_based_edit_tool
-      - sequentialthinking
-      - task_done
+model:
+  name: "Qwen3-14B"
+  provider: "openai"
+  base_url: "http://192.168.200.216:9009/v1"
+  api_key: "not-needed"
+  temperature: 0.1
 
-model_providers:  # model providers configuration
-  anthropic:
-    api_key: your_anthropic_api_key
-    provider: anthropic
-  openai:
-    api_key: your_openai_api_key
-    provider: openai
+database:
+  host: "192.168.200.216"
+  port: 13306
+  user: "testuser"
+  password: "testpass"
+  database: "testdb"
 
-models:
-  trae_agent_model:
-    model_provider: anthropic
-    model: claude-sonnet-4-20250514
-    max_tokens: 4096
-    temperature: 0.5
+agent:
+  max_iterations: 15
+  enable_thinking: true
 ```
 
-**Note:** The `trae_config.yaml` file is ignored by git to protect your API keys.
+### 使用
 
-### Environment Variables (Alternative)
+```python
+from agent.sql_agent import SemanticSQLAgent
+import yaml
 
-You can also configure API keys using environment variables and store them in the .env file:
+# 加载配置
+with open('config.yaml', 'r') as f:
+    config = yaml.safe_load(f)
+
+# 创建 agent
+agent = SemanticSQLAgent(config)
+
+# 执行查询
+result = agent.query("查询每个部门的平均工资")
+print(f"SQL: {result['sql']}")
+print(f"结果: {result['answer']}")
+```
+
+### 命令行
 
 ```bash
-export OPENAI_API_KEY="your-openai-api-key"
-export ANTHROPIC_API_KEY="your-anthropic-api-key"
-export GOOGLE_API_KEY="your-google-api-key"
-export OPENROUTER_API_KEY="your-openrouter-api-key"
-export DOUBAO_API_KEY="your-doubao-api-key"
-export DOUBAO_BASE_URL="https://ark.cn-beijing.volces.com/api/v3/"
+# 交互模式
+python cli.py
+
+# 单次查询
+python cli.py -q "查询所有客户信息"
 ```
 
-### MCP Services (Optional)
+## 架构设计
 
-To enable Model Context Protocol (MCP) services, add an `mcp_servers` section to your configuration:
+采用模块化设计，核心组件包括：
 
-```yaml
-mcp_servers:
-  playwright:
-    command: npx
-    args:
-      - "@playwright/mcp@0.0.27"
-```
+- **Agent**: 基于 LangChain 的智能体协调器
+- **Tools**: 独立的功能工具（分析、生成、验证）
+- **Prompts**: Jinja2 模板管理
+- **Models**: Pydantic 数据模型
 
-**Configuration Priority:** Command-line arguments > Configuration file > Environment variables > Default values
+## 工具链
 
-**Legacy JSON Configuration:** If using the older JSON format, see [docs/legacy_config.md](docs/legacy_config.md). We recommend migrating to YAML.
+1. **分析工具**
+   - `extract_database_schema`: 提取数据库结构
+   - `analyze_business_domain`: 分析业务领域
+   - `classify_table_fields`: 字段类型分类
 
-## 📖 Usage
+2. **生成工具**
+   - `generate_sql`: 生成 SQL 查询
 
-### Basic Commands
+3. **验证工具**
+   - `validate_sql`: 验证 SQL 语法
+   - `execute_sql`: 执行 SQL 并返回结果
 
-```bash
-# Simple task execution
-trae-cli run "Create a hello world Python script"
+## 开发者
 
-# Check configuration
-trae-cli show-config
+- 邮箱: lizhenping18@mails.ucas.ac.cn
 
-# Interactive mode
-trae-cli interactive
-```
+## 许可证
 
-### Provider-Specific Examples
-
-```bash
-# OpenAI
-trae-cli run "Fix the bug in main.py" --provider openai --model gpt-4o
-
-# Anthropic
-trae-cli run "Add unit tests" --provider anthropic --model claude-sonnet-4-20250514
-
-# Google Gemini
-trae-cli run "Optimize this algorithm" --provider google --model gemini-2.5-flash
-
-# OpenRouter (access to multiple providers)
-trae-cli run "Review this code" --provider openrouter --model "anthropic/claude-3-5-sonnet"
-trae-cli run "Generate documentation" --provider openrouter --model "openai/gpt-4o"
-
-# Doubao
-trae-cli run "Refactor the database module" --provider doubao --model doubao-seed-1.6
-
-# Ollama (local models)
-trae-cli run "Comment this code" --provider ollama --model qwen3
-```
-
-### Advanced Options
-
-```bash
-# Custom working directory
-trae-cli run "Add tests for utils module" --working-dir /path/to/project
-
-# Save execution trajectory
-trae-cli run "Debug authentication" --trajectory-file debug_session.json
-
-# Force patch generation
-trae-cli run "Update API endpoints" --must-patch
-
-# Interactive mode with custom settings
-trae-cli interactive --provider openai --model gpt-4o --max-steps 30
-```
-
-### Interactive Mode Commands
-
-In interactive mode, you can use:
-- Type any task description to execute it
-- `status` - Show agent information
-- `help` - Show available commands
-- `clear` - Clear the screen
-- `exit` or `quit` - End the session
-
-## 🛠️ Advanced Features
-
-### Available Tools
-
-Trae Agent provides a comprehensive toolkit for software engineering tasks including file editing, bash execution, structured thinking, and task completion. For detailed information about all available tools and their capabilities, see [docs/tools.md](docs/tools.md).
-
-### Trajectory Recording
-
-Trae Agent automatically records detailed execution trajectories for debugging and analysis:
-
-```bash
-# Auto-generated trajectory file
-trae-cli run "Debug the authentication module"
-# Saves to: trajectories/trajectory_YYYYMMDD_HHMMSS.json
-
-# Custom trajectory file
-trae-cli run "Optimize database queries" --trajectory-file optimization_debug.json
-```
-
-Trajectory files contain LLM interactions, agent steps, tool usage, and execution metadata. For more details, see [docs/TRAJECTORY_RECORDING.md](docs/TRAJECTORY_RECORDING.md).
-
-## 🔧 Development
-
-### Contributing
-
-For contribution guidelines, please refer to [CONTRIBUTING.md](CONTRIBUTING.md).
-
-### Troubleshooting
-
-**Import Errors:**
-```bash
-PYTHONPATH=. trae-cli run "your task"
-```
-
-**API Key Issues:**
-```bash
-# Verify API keys
-echo $OPENAI_API_KEY
-trae-cli show-config
-```
-
-**Command Not Found:**
-```bash
-uv run trae-cli run "your task"
-```
-
-**Permission Errors:**
-```bash
-chmod +x /path/to/your/project
-```
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## ✍️ Citation
-
-```bibtex
-@article{traeresearchteam2025traeagent,
-      title={Trae Agent: An LLM-based Agent for Software Engineering with Test-time Scaling},
-      author={Trae Research Team and Pengfei Gao and Zhao Tian and Xiangxin Meng and Xinchen Wang and Ruida Hu and Yuanan Xiao and Yizhou Liu and Zhao Zhang and Junjie Chen and Cuiyun Gao and Yun Lin and Yingfei Xiong and Chao Peng and Xia Liu},
-      year={2025},
-      eprint={2507.23370},
-      archivePrefix={arXiv},
-      primaryClass={cs.SE},
-      url={https://arxiv.org/abs/2507.23370},
-}
-```
-
-## 🙏 Acknowledgments
-
-We thank Anthropic for building the [anthropic-quickstart](https://github.com/anthropics/anthropic-quickstarts) project that served as a valuable reference for the tool ecosystem.
+MIT License
