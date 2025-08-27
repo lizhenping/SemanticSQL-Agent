@@ -134,7 +134,7 @@ class Tool(ABC):
         pass
     
     @abstractmethod
-    async def execute(self, **kwargs) -> ToolResult:
+    def execute(self, **kwargs) -> ToolResult:
         """执行工具逻辑"""
         pass
     
@@ -176,7 +176,7 @@ class BaseLLMClient(ABC):
     """LLM 客户端基类"""
     
     @abstractmethod
-    async def chat(
+    def chat(
         self,
         messages: List[LLMMessage],
         model: str,
@@ -192,50 +192,49 @@ class BaseLLMClient(ABC):
         pass
 ```
 
-### 2.3 数据库连接器接口
+### 2.3 数据库服务接口
 
 ```python
-# utils/database_connector.py
+# services/database_service.py
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from typing import List, Dict, Any
 
-@dataclass
-class TableSchema:
-    """表结构定义"""
-    name: str
-    columns: List[Dict[str, Any]]
-    primary_key: Optional[str]
-    foreign_keys: List[Dict[str, Any]]
-    indexes: List[Dict[str, Any]]
-
-@dataclass
-class DatabaseSchema:
-    """数据库结构"""
-    tables: List[TableSchema]
-    relationships: List[Dict[str, Any]]
-
-class DatabaseConnector(ABC):
-    """数据库连接器接口"""
+class DatabaseService(ABC):
+    """数据库服务抽象基类"""
     
     @abstractmethod
-    async def connect(self, connection_string: str) -> None:
+    def connect(self, config: Dict[str, Any]):
         """建立数据库连接"""
         pass
     
     @abstractmethod
-    async def extract_schema(self) -> DatabaseSchema:
-        """提取数据库结构"""
+    def disconnect(self):
+        """断开数据库连接"""
         pass
     
     @abstractmethod
-    async def execute_query(self, sql: str) -> List[Dict[str, Any]]:
-        """执行查询（用于验证）"""
+    def get_tables(self) -> List[Dict[str, Any]]:
+        """获取所有表的基本信息"""
         pass
     
     @abstractmethod
-    async def close(self) -> None:
-        """关闭连接"""
+    def get_columns(self, table_name: str) -> List[Dict[str, Any]]:
+        """获取指定表的所有列信息"""
+        pass
+    
+    @abstractmethod
+    def get_primary_key(self, table_name: str) -> List[str]:
+        """获取表的主键列"""
+        pass
+    
+    @abstractmethod
+    def get_foreign_keys(self, table_name: str) -> List[Dict[str, Any]]:
+        """获取表的外键信息"""
+        pass
+    
+    @abstractmethod
+    def execute_query(self, query: str) -> List[Dict[str, Any]]:
+        """执行 SQL 查询"""
         pass
 ```
 
@@ -273,32 +272,31 @@ class SchemaExtractionTool(Tool):
             )
         ]
         
-    async def execute(self, **kwargs) -> ToolResult:
+    def execute(self, **kwargs) -> ToolResult:
         try:
-            include_indexes = kwargs.get('include_indexes', False)
+            # 获取所有表信息
+            tables = self.db_service.get_tables()
             
-            # 提取 schema
-            schema = await self.db_connector.extract_schema()
-            
-            # 格式化输出
-            result_data = {
-                "tables": [self._format_table(t) for t in schema.tables],
-                "relationships": schema.relationships,
-                "summary": {
-                    "total_tables": len(schema.tables),
-                    "total_columns": sum(len(t.columns) for t in schema.tables),
-                    "total_relationships": len(schema.relationships)
+            # 获取每个表的详细信息
+            schema_info = []
+            for table in tables:
+                table_info = {
+                    "name": table["name"],
+                    "columns": self.db_service.get_columns(table["name"]),
+                    "primary_key": self.db_service.get_primary_key(table["name"]),
+                    "foreign_keys": self.db_service.get_foreign_keys(table["name"])
                 }
-            }
+                schema_info.append(table_info)
             
-            if not include_indexes:
-                # 移除索引信息以减少输出
-                for table in result_data["tables"]:
-                    table.pop("indexes", None)
-                    
             return ToolResult(
                 success=True,
-                data=result_data,
+                data={
+                    "tables": schema_info,
+                    "summary": {
+                        "total_tables": len(tables),
+                        "total_columns": sum(len(t["columns"]) for t in schema_info)
+                    }
+                },
                 tool_name=self.get_name()
             )
             
@@ -356,7 +354,7 @@ class SQLGenerationTool(Tool):
             )
         ]
         
-    async def execute(self, **kwargs) -> ToolResult:
+    def execute(self, **kwargs) -> ToolResult:
         try:
             user_query = kwargs['user_query']
             schema_context = kwargs['schema_context']
@@ -368,7 +366,7 @@ class SQLGenerationTool(Tool):
             )
             
             # 调用 LLM 生成 SQL
-            sql = await self._generate_sql(prompt)
+            sql = self._generate_sql(prompt)
             
             # 基础验证
             validation = self._validate_sql(sql, schema_context)
@@ -396,24 +394,31 @@ class SQLGenerationTool(Tool):
 ### 4.1 配置类定义
 
 ```python
-# utils/config.py
+# utils/config.py  
+# 参考 nl2sql_pipeline 的配置设计
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 
 @dataclass
 class ModelConfig:
     """模型配置"""
-    provider: str  # openai, anthropic, etc.
-    model: str     # gpt-4, claude-3, etc.
+    provider: str  # openai
+    model: str     # gpt-4
     temperature: float = 0.1
-    max_tokens: Optional[int] = None
     
 @dataclass
 class DatabaseConfig:
-    """数据库配置"""
-    connection_string: str
-    pool_size: int = 5
-    timeout: int = 30
+    """数据库配置 - 参考 nl2sql_pipeline"""
+    host: str
+    port: int = 3306
+    user: str
+    password: str
+    database: str
+    
+    def validate(self) -> bool:
+        """验证配置是否完整"""
+        required_fields = ['host', 'user', 'password', 'database']
+        return all(getattr(self, field) is not None for field in required_fields)
     
 @dataclass
 class AgentConfig:
@@ -422,7 +427,6 @@ class AgentConfig:
     database: DatabaseConfig
     max_steps: int = 15
     tools: List[str] = None
-    enable_trajectory: bool = True
     
     @classmethod
     def from_yaml(cls, path: str) -> 'AgentConfig':
@@ -442,25 +446,27 @@ model:
   model: gpt-4
   temperature: 0.1
   
+# 数据库配置（参考 nl2sql_pipeline）  
 database:
-  connection_string: postgresql://user:pass@localhost/db
-  pool_size: 5
-  timeout: 30
+  host: localhost
+  port: 3306
+  user: root
+  password: password
+  database: test_db
   
 agent:
   max_steps: 15
   tools:
-    - extract_database_schema
-    - analyze_domain
-    - generate_sql_query
+    - schema_extraction
+    - initial_domain_analysis
+    - field_classification
+    - table_description
+    - column_description
+    - er_analysis
+    - scenario_generation
+    - sql_generation
     - sequential_thinking
     - task_done
-  enable_trajectory: true
-  
-logging:
-  level: INFO
-  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  file: logs/semanticsql.log
 ```
 
 ## 5. 错误处理规范

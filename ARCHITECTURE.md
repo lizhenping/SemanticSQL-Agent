@@ -9,12 +9,13 @@ SemanticSQL-Agent 是一个基于智能体架构的自然语言到SQL转换系�
 - 工具驱动的渐进式理解
 - 简单有效的反思机制
 - 完整的执行轨迹记录
+- 基于 Pipeline 的模块化设计
 
 ### 1.2 设计原则
 - **简洁性优先**：避免过度设计，保持代码清晰
 - **工具化思维**：每个功能都是独立的工具
 - **继承复用**：基于 TRAEAgent 的成熟模式
-- **可扩展性**：易于添加新工具和功能
+- **模块化设计**：参考 nl2sql_pipeline 的组件化思想
 
 ## 2. 架构层次设计
 
@@ -32,13 +33,17 @@ semanticsql-agent/
 │   │   │
 │   │   ├── config.py                 # 配置管理
 │   │   ├── constants.py              # 常量定义
-│   │   ├── database_connector.py     # 数据库连接管理
 │   │   └── trajectory_recorder.py    # 轨迹记录
 │   │
-│   └── cli/                          # CLI 支持
+│   ├── config/                       # 配置模块
+│   │   ├── __init__.py
+│   │   ├── database.py              # 数据库配置
+│   │   └── environment.py           # 环境配置
+│   │
+│   └── services/                     # 数据库服务
 │       ├── __init__.py
-│       ├── console_factory.py        # 控制台工厂
-│       └── simple_console.py         # 简单控制台实现
+│       ├── database_service.py      # 数据库服务基类
+│       └── mysql_database_service.py # MySQL服务实现
 │
 ├── 智能体核心层 (Agent Core Layer)
 │   └── agent/
@@ -54,12 +59,15 @@ semanticsql-agent/
 │       │
 │       ├── 分析工具 (Analysis Tools)
 │       │   ├── schema_extraction_tool.py      # 数据库结构提取
-│       │   ├── domain_analysis_tool.py        # 业务领域分析
+│       │   ├── initial_domain_analysis_tool.py # 初始领域分析
+│       │   ├── field_classification_tool.py   # 字段分类
+│       │   ├── table_description_tool.py      # 表描述生成
+│       │   ├── column_description_tool.py     # 列描述生成
 │       │   └── er_analysis_tool.py            # 实体关系分析
 │       │
 │       ├── 生成工具 (Generation Tools)
-│       │   ├── sql_generation_tool.py         # SQL 生成
-│       │   └── sql_validation_tool.py         # SQL 验证
+│       │   ├── scenario_generation_tool.py     # 场景生成
+│       │   └── sql_generation_tool.py         # SQL 生成
 │       │
 │       ├── 思考工具 (Thinking Tools)
 │       │   └── sequential_thinking_tool.py    # 深度思考（可选）
@@ -218,7 +226,7 @@ class Tool(ABC):
         pass
         
     @abstractmethod
-    async def execute(self, **kwargs) -> ToolResult:
+    def execute(self, **kwargs) -> ToolResult:
         """执行工具"""
         pass
 
@@ -226,8 +234,8 @@ class Tool(ABC):
 class SchemaExtractionTool(Tool):
     """数据库结构提取工具"""
     
-    def __init__(self, db_connector: DatabaseConnector):
-        self.db_connector = db_connector
+    def __init__(self, db_service: DatabaseService):
+        self.db_service = db_service
         
     def get_name(self) -> str:
         return "schema_extraction"
@@ -240,15 +248,27 @@ class SchemaExtractionTool(Tool):
         - Indexes
         """
         
-    async def execute(self, **kwargs) -> ToolResult:
+    def execute(self, **kwargs) -> ToolResult:
         try:
-            schema = await self.db_connector.extract_schema()
+            # 获取所有表信息
+            tables = self.db_service.get_tables()
+            
+            # 获取每个表的详细信息
+            schema_info = []
+            for table in tables:
+                table_info = {
+                    "name": table["name"],
+                    "columns": self.db_service.get_columns(table["name"]),
+                    "primary_key": self.db_service.get_primary_key(table["name"]),
+                    "foreign_keys": self.db_service.get_foreign_keys(table["name"])
+                }
+                schema_info.append(table_info)
+            
             return ToolResult(
                 success=True,
                 data={
-                    "tables": schema.tables,
-                    "relationships": schema.relationships,
-                    "summary": f"Found {len(schema.tables)} tables"
+                    "tables": schema_info,
+                    "summary": f"Found {len(tables)} tables"
                 }
             )
         except Exception as e:

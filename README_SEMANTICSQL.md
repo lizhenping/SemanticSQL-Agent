@@ -1,247 +1,126 @@
 # SemanticSQL-Agent
 
-> 🤖 基于智能体架构的自然语言到SQL转换系统
+基于智能体架构的自然语言到SQL转换系统。
 
-## 概述
+## 特性
 
-SemanticSQL-Agent 是一个先进的 NL2SQL（自然语言到SQL）转换系统，采用基于 ReAct（Reasoning and Acting）模式的智能体架构。系统通过工具化的方式实现对数据库的深度理解，生成高质量的SQL查询语句。
-
-### 核心特性
-
-- 🧠 **智能体架构**: 基于 ReAct 的 Thought-Action-Observation 循环
-- 🔧 **工具驱动**: 模块化的工具设计，易于扩展
-- 📊 **深度理解**: 渐进式的数据库结构和语义理解
-- 🔄 **简单反思**: 错误情况下的智能反思和纠正
-- 🚀 **高性能**: 异步执行，支持并行工具调用
-- 📝 **完整追踪**: 详细的执行轨迹记录
+- 基于 ReAct (Thought-Action-Observation) 模式
+- 工具驱动的渐进式数据库理解
+- 参考 TRAEAgent 的成熟架构
+- 借鉴 nl2sql_pipeline 的实现
 
 ## 快速开始
 
 ### 安装
 
 ```bash
-# 使用 pip
-pip install semanticsql-agent
-
-# 或从源码安装
 git clone https://github.com/yourusername/semanticsql-agent.git
 cd semanticsql-agent
-pip install -e .
+pip install -r requirements.txt
 ```
 
 ### 基础使用
 
 ```python
-from semanticsql import NL2SQLAgent, NL2SQLConfig
+from semanticsql import NL2SQLAgent, DatabaseConfig
 
-# 配置
-config = NL2SQLConfig(
-    model_provider="openai",
-    model_name="gpt-4",
-    database_url="postgresql://user:pass@localhost/mydb"
+# 配置数据库
+db_config = DatabaseConfig(
+    host="localhost",
+    user="root",
+    password="password",
+    database="test_db"
 )
 
 # 创建智能体
-agent = NL2SQLAgent(config)
+agent = NL2SQLAgent(db_config)
 
 # 执行查询
-result = await agent.execute_nl2sql(
-    "Show me total sales by region for last month"
-)
-
-print(f"Generated SQL: {result.sql}")
+result = agent.execute_nl2sql("查询每个部门的平均工资")
+print(result["sql"])
 ```
 
-### CLI 使用
+### 命令行使用
 
 ```bash
-# 基础查询
-semanticsql -q "Show all active users" -d "postgresql://localhost/mydb"
-
-# 使用配置文件
-semanticsql -q "Complex analysis query" -c config.yaml
-
-# 详细输出
-semanticsql -q "Sales report" -d "mysql://localhost/sales" --verbose
+python -m semanticsql.cli "查询所有订单" --user root --password pass --database mydb
 ```
-
-## 架构设计
-
-SemanticSQL-Agent 采用分层架构设计：
-
-```
-├── 智能体层 (Agent Layer)
-│   ├── BaseAgent - 通用智能体框架
-│   └── NL2SQLAgent - SQL生成特化实现
-│
-├── 工具层 (Tools Layer)
-│   ├── 分析工具 - Schema提取、领域分析
-│   ├── 生成工具 - SQL生成、验证
-│   └── 思考工具 - 深度推理（可选）
-│
-└── 基础设施层 (Infrastructure Layer)
-    ├── LLM客户端 - 多模型支持
-    ├── 数据库连接 - 多数据库支持
-    └── 配置管理 - 灵活配置
-```
-
-### TAO 循环实现
-
-每个执行步骤都遵循 ReAct 模式：
-
-1. **Thought (思考)**: LLM 分析当前状态，决定下一步行动
-2. **Action (行动)**: 调用相应工具执行具体任务
-3. **Observation (观察)**: 获取工具执行结果，必要时进行反思
-
-## 支持的数据库
-
-- ✅ PostgreSQL
-- ✅ MySQL
-- 🚧 Oracle (计划中)
-- 🚧 SQL Server (计划中)
-- 🚧 SQLite (计划中)
 
 ## 配置
 
-### 配置文件示例
+创建 `semanticsql_config.yaml`:
 
 ```yaml
-# semanticsql_config.yaml
-model:
-  provider: openai
-  name: gpt-4
-  temperature: 0.1
+openai:
+  api_key: "your-api-key"
+  model: "gpt-4"
 
 database:
-  connection_string: postgresql://user:pass@localhost/db
-  pool_size: 5
-  
-agent:
-  max_steps: 15
-  tools:
-    - extract_database_schema
-    - analyze_domain
-    - generate_sql_query
-    - sequential_thinking
-    - task_done
+  host: localhost
+  port: 3306
+  user: root
+  password: password
+  database: test_db
 ```
 
-### 环境变量
+## 支持的数据库
 
-```bash
-export OPENAI_API_KEY="your-api-key"
-export SEMANTICSQL_DATABASE_URL="postgresql://localhost/mydb"
-export SEMANTICSQL_LOG_LEVEL="INFO"
+- MySQL 5.7+
+
+## 工具列表
+
+1. **schema_extraction** - 提取数据库结构
+2. **initial_domain_analysis** - 初始领域分析
+3. **field_classification** - 字段分类
+4. **table_description** - 表描述生成
+5. **column_description** - 列描述生成
+6. **er_analysis** - 实体关系分析
+7. **scenario_generation** - 场景生成
+8. **sql_generation** - SQL生成
+9. **sequential_thinking** - 深度思考（可选）
+10. **task_done** - 任务完成标记
+
+## 项目结构
+
 ```
-
-## 高级功能
-
-### 自定义工具
-
-```python
-from semanticsql.tools import Tool, ToolResult
-
-class CustomAnalysisTool(Tool):
-    def get_name(self) -> str:
-        return "custom_analysis"
-        
-    async def execute(self, **kwargs) -> ToolResult:
-        # 实现自定义逻辑
-        return ToolResult(success=True, data={...})
-
-# 注册工具
-agent.register_tool(CustomAnalysisTool())
+semanticsql-agent/
+├── semanticsql/
+│   ├── agent/          # 智能体核心
+│   ├── tools/          # 工具实现
+│   ├── config/         # 配置管理
+│   ├── services/       # 数据库服务
+│   └── utils/          # 工具函数
+├── examples/           # 使用示例
+└── tests/             # 测试用例
 ```
-
-### 深度思考
-
-对于复杂查询，系统会自动启用 Sequential Thinking Tool：
-
-```python
-# 自动处理复杂查询
-result = await agent.execute_nl2sql(
-    "Find customers who placed orders in the last 3 months but not in the previous 3 months, grouped by region with their average order value"
-)
-```
-
-## 性能优化
-
-- **Schema 缓存**: 自动缓存数据库结构信息
-- **并行执行**: 支持多工具并行调用
-- **连接池**: 数据库连接池管理
-- **Token 优化**: 智能的上下文管理
 
 ## 开发
 
-### 环境设置
+### 添加新工具
 
-```bash
-# 克隆仓库
-git clone https://github.com/yourusername/semanticsql-agent.git
-cd semanticsql-agent
-
-# 创建虚拟环境
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# or
-venv\Scripts\activate  # Windows
-
-# 安装开发依赖
-pip install -e ".[dev]"
-```
+1. 在 `tools/` 目录创建新文件
+2. 继承 `Tool` 基类
+3. 实现 `get_name()`, `get_description()`, `execute()` 方法
+4. 在智能体中注册工具
 
 ### 运行测试
 
 ```bash
-# 单元测试
-pytest tests/unit
-
-# 集成测试
-pytest tests/integration
-
-# 覆盖率报告
-pytest --cov=semanticsql tests/
+pytest tests/
 ```
 
-### 代码质量
+## 依赖
 
-```bash
-# 类型检查
-mypy semanticsql
+- Python 3.11+
+- OpenAI API
+- PyMySQL
+- PyYAML
+- Rich (CLI美化)
 
-# 代码格式化
-black semanticsql
-ruff check semanticsql
-```
+## 作者
 
-## 贡献指南
-
-我们欢迎各种形式的贡献！请查看 [CONTRIBUTING.md](CONTRIBUTING.md) 了解详情。
-
-## 路线图
-
-- [ ] v0.1.0 - MVP 版本
-- [ ] v0.2.0 - 多数据库支持
-- [ ] v0.3.0 - Web UI
-- [ ] v1.0.0 - 企业级特性
+李振平 - lizhenping18@mails.ucas.ac.cn
 
 ## 许可证
 
-本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件。
-
-## 致谢
-
-- 感谢 [TRAEAgent](https://github.com/ByteDance/trae-agent) 项目提供的架构灵感
-- 基于 ReAct 论文的智能体设计模式
-
-## 联系方式
-
-- 问题反馈: [GitHub Issues](https://github.com/yourusername/semanticsql-agent/issues)
-- 讨论: [GitHub Discussions](https://github.com/yourusername/semanticsql-agent/discussions)
-- 邮件: semanticsql@example.com
-
----
-
-<p align="center">
-  Made with ❤️ by the SemanticSQL Team
-</p>
+MIT License
