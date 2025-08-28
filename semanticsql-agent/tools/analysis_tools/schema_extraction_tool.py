@@ -4,8 +4,8 @@
 但使用智能体工具模式而非管道模式。
 """
 
-from tools.base import BaseSemanticSQLTool
-from typing import List, Dict, Any, Optional
+from tools.base import BaseSemanticSQLTool, ToolExecResult, ToolParameter
+from typing import List, Dict, Any, Optional, Union
 from models.analysis_models import (
     SchemaExtractionInput,
     SchemaExtractionOutput,
@@ -33,13 +33,42 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
     )
     args_schema = SchemaExtractionInput
     
+    def get_parameters(self) -> List[ToolParameter]:
+        """获取工具参数定义"""
+        return [
+            ToolParameter(
+                name="tables",
+                type="list",
+                description="要提取的表名列表，如果为空则提取所有表",
+                required=False
+            ),
+            ToolParameter(
+                name="include_row_count",
+                type="boolean",
+                description="是否包含行数统计",
+                required=False
+            ),
+            ToolParameter(
+                name="include_foreign_keys",
+                type="boolean",
+                description="是否包含外键信息",
+                required=False
+            ),
+            ToolParameter(
+                name="include_indexes",
+                type="boolean",
+                description="是否包含索引信息",
+                required=False
+            )
+        ]
+    
     def execute(
         self, 
         tables: Optional[List[str]] = None,
         include_row_count: bool = True,
         include_foreign_keys: bool = True,
         include_indexes: bool = False
-    ) -> SchemaExtractionOutput:
+    ) -> Union[SchemaExtractionOutput, ToolExecResult]:
         """执行 schema 提取"""
         logger.info("开始提取数据库结构信息")
         

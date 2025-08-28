@@ -1,7 +1,7 @@
 """SQL 生成工具"""
 
-from tools.base import BaseSemanticSQLTool
-from typing import Dict, Any, Optional
+from tools.base import BaseSemanticSQLTool, ToolExecResult, ToolParameter
+from typing import Dict, Any, Optional, List, Union
 from models.generation_models import (
     SQLGenerationInput,
     SQLGenerationOutput
@@ -28,6 +28,47 @@ class SQLGenerationTool(BaseSemanticSQLTool):
     )
     args_schema = SQLGenerationInput
     
+    def _init_tool(self) -> None:
+        """初始化工具"""
+        if not self.prompt_manager:
+            from prompts.manager import PromptManager
+            self.prompt_manager = PromptManager()
+    
+    def get_parameters(self) -> List[ToolParameter]:
+        """获取工具参数定义"""
+        return [
+            ToolParameter(
+                name="query",
+                type="string",
+                description="用户的自然语言查询",
+                required=True
+            ),
+            ToolParameter(
+                name="schema_info",
+                type="dict",
+                description="数据库结构信息",
+                required=False
+            ),
+            ToolParameter(
+                name="domain_analysis",
+                type="dict",
+                description="领域分析结果",
+                required=False
+            ),
+            ToolParameter(
+                name="field_classification",
+                type="dict",
+                description="字段分类结果",
+                required=False
+            ),
+            ToolParameter(
+                name="relationships",
+                type="dict",
+                description="实体关系信息",
+                required=False
+            )
+        ]
+    
     def execute(
         self,
         query: str,
@@ -35,11 +76,10 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         domain_analysis: Optional[Dict[str, Any]] = None,
         field_classification: Optional[Dict[str, Any]] = None,
         relationships: Optional[Dict[str, Any]] = None
-    ) -> str:
+    ) -> Union[str, ToolExecResult]:
         """生成 SQL"""
         # 使用 Jinja2 模板构建提示词
-        from prompts.manager import PromptManager
-        pm = PromptManager()
+        pm = self.prompt_manager
         
         # 准备上下文
         context = {
@@ -60,12 +100,23 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         sql = self._extract_sql(response.content)
         
         # 格式化输出
-        return f"""生成的 SQL:
+        output = f"""生成的 SQL:
 ```sql
 {sql}
 ```
 
 说明: {self._generate_explanation(sql, query)}"""
+        
+        # 返回 ToolExecResult
+        return ToolExecResult(
+            output=output,
+            metadata={
+                "sql": sql,
+                "query": query,
+                "has_schema_info": schema_info is not None,
+                "has_domain_analysis": domain_analysis is not None
+            }
+        )
     
     def _format_schema_info(self, schema_info: Optional[Dict[str, Any]]) -> str:
         """格式化 schema 信息"""
