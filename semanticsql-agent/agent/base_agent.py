@@ -1,100 +1,81 @@
-"""基础智能体类
+"""基础智能体类（支持 Tool Calling 的 ReAct 模式）"""
 
-参考 TRAEAgent 的 BaseAgent 设计，保持简洁。
-"""
-
-import asyncio
-import time
 import logging
+import time
 from abc import ABC, abstractmethod
-from typing import List, Optional, Dict, Any
-
-from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage
-
-from config import AgentConfig, ModelConfig
-from tools.base import BaseSemanticSQLTool
-from utils import create_llm_client
+from typing import List, Dict, Any, Optional
 
 from .agent_basics import (
-    AgentState, AgentStepState, AgentStep, AgentExecution,
-    AgentError, LLMUsage, LLMResponse, ToolCall, ToolResult
+    AgentState, 
+    AgentStepState, 
+    AgentStep, 
+    AgentExecution,
+    AgentError
 )
-from utils.trajectory_recorder import TrajectoryRecorder
+from ..utils.llm_clients import LLMClient, LLMMessage, LLMResponse, ToolCall, ToolResult as LLMToolResult
+from ..utils.trajectory_recorder import TrajectoryRecorder
+from ..tools.base import Tool
 
 logger = logging.getLogger(__name__)
 
 
 class BaseAgent(ABC):
-    """基础智能体类"""
+    """基础智能体 - 实现 ReAct 模式的 Tool Calling"""
     
-    def __init__(self, config: AgentConfig):
-        """初始化智能体"""
-        self.config = config
-        self._model_config = config.model
-        self._llm_client = create_llm_client(config.model)
-        self._max_steps = config.max_steps
-        self._tools: List[BaseSemanticSQLTool] = []
-        self._trajectory_recorder = TrajectoryRecorder(config.trajectory_dir)
+    def __init__(
+        self,
+        llm_client: LLMClient,
+        tools: List[Tool],
+        max_steps: int = 10,
+        verbose: bool = True
+    ):
+        self._llm_client = llm_client
+        self._tools = {tool.name: tool for tool in tools}
+        self._max_steps = max_steps
+        self._verbose = verbose
+        self._trajectory_recorder = TrajectoryRecorder()
         
-        # 任务相关
-        self._task: str = ""
-        self._initial_messages: List[BaseMessage] = []
+        # 获取工具 schemas
+        self._tool_schemas = [tool.get_schema() for tool in tools]
     
-    @property
-    def llm_client(self) -> BaseChatModel:
-        return self._llm_client
-    
-    @property
-    def model_config(self) -> ModelConfig:
-        return self._model_config
-    
-    @property
-    def max_steps(self) -> int:
-        return self._max_steps
-    
-    @property
-    def tools(self) -> List[BaseSemanticSQLTool]:
-        return self._tools
-    
-    @abstractmethod
-    def new_task(self, task: str, extra_args: Optional[Dict[str, Any]] = None) -> None:
-        """创建新任务"""
-        pass
-    
-    async def execute_task(self) -> AgentExecution:
-        """执行任务 - ReAct 循环"""
-        if not self._task:
-            raise AgentError("没有创建任务")
+    def execute_task(self, task: str) -> AgentExecution:
+        """执行任务 - ReAct 主循环"""
+        # 初始化执行
+        execution = AgentExecution(
+            task=task,
+            agent_state=AgentState.RUNNING
+        )
+        
+        # 开始记录轨迹
+        self._trajectory_recorder.start_recording(task=task)
+        
+        # 构建初始消息
+        messages = [
+            LLMMessage(role="system", content=self._get_system_prompt()),
+            LLMMessage(role="user", content=task)
+        ]
+        
+        # 重置 LLM 消息历史
+        self._llm_client.set_message_history([])
         
         start_time = time.time()
         
-        # 创建执行记录
-        execution = AgentExecution(task=self._task)
-        execution.agent_state = AgentState.RUNNING
-        
-        # 开始轨迹记录
-        self._trajectory_recorder.start_recording(
-            task=self._task,
-            provider=self._model_config.provider,
-            model=self._model_config.model,
-            max_steps=self._max_steps
-        )
-        
         try:
-            messages = self._initial_messages.copy()
             step_number = 1
             
-            while step_number <= self._max_steps:
-                step = AgentStep(step_number=step_number, state=AgentStepState.THINKING)
+            while step_number <= self._max_steps and execution.agent_state == AgentState.RUNNING:
+                # 创建新步骤
+                step = AgentStep(
+                    step_number=step_number,
+                    state=AgentStepState.THINKING
+                )
+                
+                if self._verbose:
+                    logger.info(f"\n=== Step {step_number} ===")
                 
                 try:
-                    # 执行单个步骤
-                    messages = await self._run_llm_step(step, messages, execution)
-                    
-                    # 记录步骤
-                    execution.steps.append(step)
-                    self._trajectory_recorder.record_agent_step(step, messages[-3:])
+                    # 执行 ReAct 循环的一步
+                    self._run_react_step(step, messages, execution)
                     
                     # 检查是否完成
                     if self._is_task_completed(step, execution):
@@ -108,6 +89,7 @@ class BaseAgent(ABC):
                     step.state = AgentStepState.ERROR
                     step.error = str(error)
                     execution.steps.append(step)
+                    logger.error(f"步骤执行失败: {error}")
                     break
             
             # 超过最大步骤
@@ -118,6 +100,7 @@ class BaseAgent(ABC):
         except Exception as e:
             execution.agent_state = AgentState.ERROR
             execution.final_result = f"执行失败: {str(e)}"
+            logger.error(f"任务执行失败: {e}")
         
         # 完成执行
         execution.execution_time = time.time() - start_time
@@ -135,134 +118,120 @@ class BaseAgent(ABC):
         
         return execution
     
-    async def _run_llm_step(
+    def _run_react_step(
         self,
         step: AgentStep,
-        messages: List[BaseMessage],
+        messages: List[LLMMessage],
         execution: AgentExecution
-    ) -> List[BaseMessage]:
-        """执行单个 LLM 步骤"""
-        # 1. 思考阶段
-        llm_response = await self._llm_client.ainvoke(messages)
+    ):
+        """执行 ReAct 循环的一步"""
         
-        # 解析响应
-        step.llm_response = self._parse_llm_response(llm_response)
-        step.thought = step.llm_response.content
+        # 1. Thought: LLM 思考下一步
+        step.state = AgentStepState.THINKING
+        if self._verbose:
+            logger.info("🤔 Thinking...")
+        
+        # 调用 LLM（可能返回 tool calls）
+        response = self._llm_client.chat(
+            messages=messages,
+            tools=self._tool_schemas,
+            reuse_history=True
+        )
+        
+        step.llm_response = response
+        step.thought = response.content
+        
+        if self._verbose:
+            logger.info(f"💭 Thought: {response.content}")
         
         # 记录 LLM 交互
         self._trajectory_recorder.record_llm_interaction(
             messages=messages,
-            response=step.llm_response,
-            provider=self._model_config.provider,
-            model=self._model_config.model,
-            tools=self._tools
+            response=response,
+            provider="qwen",
+            model=self._llm_client.model,
+            tools=self._tool_schemas
         )
         
-        # 更新消息
-        messages.append(AIMessage(content=step.llm_response.content))
-        
-        # 2. 工具调用阶段
-        if step.llm_response.tool_calls:
+        # 2. Action: 如果 LLM 决定调用工具
+        if response.tool_calls:
             step.state = AgentStepState.CALLING_TOOL
-            step.tool_calls = step.llm_response.tool_calls
+            step.tool_calls = response.tool_calls
             
-            # 执行工具
-            tool_results = await self._execute_tool_calls(step.llm_response.tool_calls)
+            if self._verbose:
+                logger.info(f"🔧 Calling tools: {[tc.name for tc in response.tool_calls]}")
+            
+            # 执行所有工具调用
+            tool_results = []
+            for tool_call in response.tool_calls:
+                tool_result = self._execute_tool_call(tool_call)
+                tool_results.append(tool_result)
+                
+                # 3. Observation: 将工具结果添加到消息
+                result_message = LLMMessage(
+                    role="tool",
+                    tool_result=LLMToolResult(
+                        call_id=tool_call.call_id,
+                        name=tool_call.name,
+                        success=tool_result.error is None,
+                        result=tool_result.output,
+                        error=tool_result.error
+                    )
+                )
+                messages.append(result_message)
+                
+                if self._verbose:
+                    if tool_result.error:
+                        logger.info(f"❌ Tool error: {tool_result.error}")
+                    else:
+                        logger.info(f"✅ Tool result: {tool_result.output[:200]}...")
+            
             step.tool_results = tool_results
             
-            # 更新消息
-            for tool_call, tool_result in zip(step.tool_calls, tool_results):
-                content = str(tool_result.result) if tool_result.success else tool_result.error
-                messages.append(ToolMessage(content=content, tool_call_id=tool_call.call_id))
-            
-            # 3. 反思阶段（可选）
+            # 4. Reflection: 反思工具执行结果（可选）
             reflection = self.reflect_on_results(tool_results)
             if reflection:
                 step.state = AgentStepState.REFLECTING
                 step.reflection = reflection
+                if self._verbose:
+                    logger.info(f"💭 Reflection: {reflection}")
         
-        return messages
+        # 记录步骤
+        self._trajectory_recorder.record_agent_step(step)
+        execution.steps.append(step)
+        
+        # 完成步骤
+        step.state = AgentStepState.COMPLETED
     
-    def _parse_llm_response(self, response: Any) -> LLMResponse:
-        """解析 LLM 响应"""
-        content = response.content if hasattr(response, 'content') else str(response)
-        model = self._model_config.model
-        
-        # 提取工具调用
-        tool_calls = None
-        if hasattr(response, 'tool_calls') and response.tool_calls:
-            tool_calls = []
-            for tc in response.tool_calls:
-                tool_call = ToolCall(
-                    name=tc.get('name', ''),
-                    call_id=tc.get('id', ''),
-                    arguments=tc.get('args', {})
-                )
-                tool_calls.append(tool_call)
-        
-        return LLMResponse(
-            content=content,
-            model=model,
-            finish_reason='stop',
-            tool_calls=tool_calls
-        )
-    
-    async def _execute_tool_calls(self, tool_calls: List[ToolCall]) -> List[ToolResult]:
-        """执行工具调用"""
-        tasks = []
-        for tool_call in tool_calls:
-            task = self._execute_single_tool(tool_call)
-            tasks.append(task)
-        
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        tool_results = []
-        for tool_call, result in zip(tool_calls, results):
-            if isinstance(result, Exception):
-                tool_result = ToolResult(
-                    call_id=tool_call.call_id,
-                    name=tool_call.name,
-                    success=False,
-                    error=str(result)
-                )
-            else:
-                tool_result = result
-            tool_results.append(tool_result)
-        
-        return tool_results
-    
-    async def _execute_single_tool(self, tool_call: ToolCall) -> ToolResult:
-        """执行单个工具"""
-        # 查找工具
-        tool = next((t for t in self._tools if t.name == tool_call.name), None)
+    def _execute_tool_call(self, tool_call: ToolCall):
+        """执行单个工具调用"""
+        tool = self._tools.get(tool_call.name)
         if not tool:
-            return ToolResult(
-                call_id=tool_call.call_id,
-                name=tool_call.name,
-                success=False,
-                error=f"未找到工具: {tool_call.name}"
-            )
+            logger.error(f"工具不存在: {tool_call.name}")
+            return type('ToolResult', (), {
+                'output': '',
+                'error': f"工具不存在: {tool_call.name}",
+                'metadata': None,
+                'execution_time': 0.0
+            })()
         
         try:
-            result = await tool.arun(**tool_call.arguments)
-            return ToolResult(
-                call_id=tool_call.call_id,
-                name=tool_call.name,
-                success=True,
-                result=result
-            )
+            # 执行工具
+            result = tool.run(**tool_call.arguments)
+            return result
         except Exception as e:
-            return ToolResult(
-                call_id=tool_call.call_id,
-                name=tool_call.name,
-                success=False,
-                error=str(e)
-            )
+            logger.error(f"工具执行失败: {e}")
+            return type('ToolResult', (), {
+                'output': '',
+                'error': str(e),
+                'metadata': None,
+                'execution_time': 0.0
+            })()
     
-    def reflect_on_results(self, tool_results: List[ToolResult]) -> Optional[str]:
-        """对结果进行反思（可选）"""
-        # 默认不反思，子类可重写
-        return None
+    @abstractmethod
+    def _get_system_prompt(self) -> str:
+        """获取系统提示词"""
+        pass
     
     @abstractmethod
     def _is_task_completed(self, step: AgentStep, execution: AgentExecution) -> bool:
@@ -270,6 +239,14 @@ class BaseAgent(ABC):
         pass
     
     @abstractmethod
-    def _extract_final_result(self, execution: AgentExecution) -> Any:
+    def _extract_final_result(self, execution: AgentExecution) -> str:
         """提取最终结果"""
         pass
+    
+    def reflect_on_results(self, tool_results: List[Any]) -> Optional[str]:
+        """反思工具执行结果（可被子类重写）"""
+        # 默认实现：如果有错误，返回简单反思
+        errors = [r for r in tool_results if hasattr(r, 'error') and r.error]
+        if errors:
+            return f"工具执行遇到 {len(errors)} 个错误，需要调整策略"
+        return None
