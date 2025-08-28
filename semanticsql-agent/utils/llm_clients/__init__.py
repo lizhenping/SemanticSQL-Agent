@@ -1,11 +1,21 @@
-"""LLM 客户端包（简化版）"""
+"""LLM 客户端包（支持 tool calling）"""
 
-from .llm_basics import LLMMessage, LLMResponse, LLMUsage
+from .llm_basics import (
+    LLMMessage, 
+    LLMResponse, 
+    LLMUsage,
+    ToolCall,
+    ToolResult,
+    ToolCallArguments
+)
 from .llm_client import LLMClient
 
 __all__ = [
     "LLMMessage",
     "LLMResponse", 
     "LLMUsage",
-    "LLMClient"
+    "LLMClient",
+    "ToolCall",
+    "ToolResult",
+    "ToolCallArguments"
 ]

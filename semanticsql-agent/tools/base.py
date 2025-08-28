@@ -1,12 +1,22 @@
-"""工具基类（无 LangChain 依赖）"""
+"""工具基类（支持 tool calling）"""
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 import logging
 import time
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ToolParameter:
+    """工具参数定义"""
+    name: str
+    type: str  # "string", "integer", "number", "boolean", "object", "array"
+    description: str
+    required: bool = True
+    enum: Optional[List[str]] = None
 
 
 @dataclass
@@ -19,11 +29,21 @@ class ToolResult:
 
 
 class Tool(ABC):
-    """简化的工具基类"""
+    """工具基类（支持 tool calling）"""
     
     def __init__(self, name: str, description: str):
         self.name = name
         self.description = description
+    
+    @property
+    @abstractmethod
+    def parameters(self) -> List[ToolParameter]:
+        """定义工具参数
+        
+        Returns:
+            参数列表
+        """
+        pass
     
     @abstractmethod
     def execute(self, **kwargs) -> Dict[str, Any]:
@@ -33,6 +53,34 @@ class Tool(ABC):
             包含结果的字典
         """
         pass
+    
+    def get_schema(self) -> Dict[str, Any]:
+        """获取工具的 OpenAI 格式 schema"""
+        properties = {}
+        required = []
+        
+        for param in self.parameters:
+            param_schema = {
+                "type": param.type,
+                "description": param.description
+            }
+            if param.enum:
+                param_schema["enum"] = param.enum
+                
+            properties[param.name] = param_schema
+            
+            if param.required:
+                required.append(param.name)
+        
+        return {
+            "name": self.name,
+            "description": self.description,
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": required
+            }
+        }
     
     def run(self, **kwargs) -> ToolResult:
         """运行工具并包装结果"""
@@ -48,15 +96,17 @@ class Tool(ABC):
             # 处理结果
             if isinstance(result, dict):
                 output = self._format_dict_output(result)
+                metadata = result
             else:
                 output = str(result)
+                metadata = {"result": result}
             
             execution_time = time.time() - start_time
             logger.info(f"工具 {self.name} 执行成功，耗时: {execution_time:.2f}秒")
             
             return ToolResult(
                 output=output,
-                metadata=result if isinstance(result, dict) else {"result": result},
+                metadata=metadata,
                 execution_time=execution_time
             )
             
@@ -70,7 +120,7 @@ class Tool(ABC):
             )
     
     def _format_dict_output(self, data: Dict[str, Any]) -> str:
-        """简单的字典格式化"""
+        """格式化字典输出"""
         lines = []
         for key, value in data.items():
             if value is None:
