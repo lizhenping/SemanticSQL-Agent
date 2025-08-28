@@ -61,3 +61,7 @@ class SQLAgentConfig(AgentConfig):
         default="prompts/templates",
         description="提示词模板目录"
     )
+    use_langgraph: bool = Field(
+        default=False,
+        description="是否使用 LangGraph ReAct agent"
+    )
