@@ -1,266 +1,249 @@
-"""SQL 智能体
-
-基于 BaseAgent 实现的 SQL 查询智能体。
+"""
+trae_agent风格的SQL智能体实现
 """
 
+import asyncio
 import logging
-from typing import List, Optional, Dict, Any
+from typing import Dict, Any, Optional, List
+from datetime import datetime
 
-from utils.config import Config
-from utils.shared_types import QueryResult
-from tools import (
-    SchemaExtractionTool,
-    DomainAnalysisTool,
-    FieldClassificationTool,
-    ERAnalysisTool,
-    SQLGenerationTool,
-    SequentialThinkingTool
-)
-from .base_agent import BaseAgent
-from .agent_basics import AgentStep, AgentExecution, ToolResult
+from .trae_base_agent import BaseAgent, AgentExecution, AgentStep
+from ..config.trae_config import TraeConfig
+from ..tools import ToolFactory
+from ..utils.llm_clients.llm_client import LLMClient
 
-logger = logging.getLogger(__name__)
+
+class SQLQueryResult:
+    """SQL查询结果"""
+    
+    def __init__(
+        self,
+        success: bool,
+        question: str,
+        sql: Optional[str] = None,
+        answer: Optional[str] = None,
+        data: Optional[List[Dict[str, Any]]] = None,
+        row_count: int = 0,
+        execution_time: float = 0.0,
+        error: Optional[str] = None,
+        steps: int = 0
+    ):
+        self.success = success
+        self.question = question
+        self.sql = sql
+        self.answer = answer
+        self.data = data or []
+        self.row_count = row_count
+        self.execution_time = execution_time
+        self.error = error
+        self.steps = steps
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            "success": self.success,
+            "question": self.question,
+            "sql": self.sql,
+            "answer": self.answer,
+            "data": self.data,
+            "row_count": self.row_count,
+            "execution_time": self.execution_time,
+            "error": self.error,
+            "steps": self.steps
+        }
 
 
 class SQLAgent(BaseAgent):
-    """SQL 查询智能体"""
+    """trae_agent风格的SQL智能体"""
     
-    def __init__(self, config: SQLAgentConfig):
-        """初始化 SQL 智能体"""
-        super().__init__(config)
-        self.sql_config = config
-        
-        # 初始化数据库连接
-        self.db = self._init_database()
-        
-        # 初始化提示管理器
-        self.prompt_manager = PromptManager(template_dir=config.prompt_templates_dir)
+    def __init__(self, config: TraeConfig):
+        """初始化SQL智能体"""
+        self.config = config
+        self.llm_client = LLMClient(
+            model=config.llm.model,
+            base_url=config.llm.base_url,
+            api_key=config.llm.api_key,
+            temperature=config.llm.temperature,
+            max_tokens=config.llm.max_tokens
+        )
         
         # 创建工具
-        self._tools = self._create_tools()
+        tools = ToolFactory.create_tools(config, config.agent.enabled_tools)
         
-        # SQL 上下文（简单字典）
-        self._sql_context = {}
-        
-        # LangGraph ReAct agent（可选）
-        self._react_agent = None
-        if config.use_langgraph:
-            self._react_agent = self._create_react_agent()
-        
-        logger.info(f"SQL 智能体初始化完成")
-    
-    def _init_database(self) -> SQLDatabase:
-        """初始化数据库连接"""
-        try:
-            db = SQLDatabase.from_uri(
-                self.sql_config.database.connection_string,
-                include_tables=self.sql_config.database.include_tables,
-                sample_rows_in_table_info=self.sql_config.database.sample_rows
-            )
-            logger.info(f"数据库连接成功: {self.sql_config.database.dialect}")
-            return db
-        except Exception as e:
-            logger.error(f"数据库连接失败: {e}")
-            raise
-    
-    def _create_tools(self) -> List[Any]:
-        """创建工具集"""
-        tools = []
-        
-        # 工具映射
-        tool_creators = {
-            "extract_database_schema": lambda: SchemaExtractionTool(db=self.db),
-            "analyze_business_domain": lambda: DomainAnalysisTool(db=self.db, llm=self._llm_client),
-            "classify_table_fields": lambda: FieldClassificationTool(db=self.db, llm=self._llm_client),
-            "analyze_entity_relationships": lambda: ERAnalysisTool(db=self.db, llm=self._llm_client),
-            "generate_sql": lambda: SQLGenerationTool(
-                db=self.db, llm=self._llm_client, prompt_manager=self.prompt_manager
-            ),
-            "validate_sql": lambda: SQLValidationTool(db=self.db),
-            "execute_sql": lambda: SQLExecutionTool(db=self.db),
-            "deep_thinking": lambda: SequentialThinkingTool(llm=self._llm_client)
-        }
-        
-        # 根据配置创建工具
-        for tool_name in self.sql_config.tools:
-            if tool_name in tool_creators:
-                try:
-                    tool = tool_creators[tool_name]()
-                    tools.append(tool)
-                    logger.debug(f"创建工具: {tool_name}")
-                except Exception as e:
-                    logger.error(f"创建工具 {tool_name} 失败: {e}")
-        
-        return tools
-    
-    def _create_react_agent(self):
-        """创建 LangGraph ReAct 智能体"""
-        system_prompt = self._get_system_prompt()
-        return create_react_agent(
-            model=self._llm_client,
-            tools=self._tools,
-            state_modifier=system_prompt
+        super().__init__(
+            name="SQLAgent",
+            llm_client=self.llm_client,
+            tools=tools,
+            max_steps=config.agent.max_steps,
+            verbose=config.agent.verbose,
+            enable_trajectory=config.trajectory.enabled
         )
-    
-    def new_task(self, task: str, extra_args: Optional[Dict[str, Any]] = None) -> None:
-        """创建新的查询任务"""
-        self._task = task
-        self._sql_context = {}  # 重置上下文
         
-        # 准备初始消息
-        system_prompt = self._get_system_prompt()
-        self._initial_messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=task)
-        ]
+        self.logger = logging.getLogger("agent.sql")
+        self.context = {}
+    
+    def _build_system_message(self) -> str:
+        """构建系统消息"""
+        tools_info = []
+        for tool in self.tools.values():
+            tools_info.append(f"- {tool.name}: {tool.description}")
         
-        logger.info(f"创建新任务: {task}")
+        return f"""你是专业的SQL查询助手，具备以下工具：
+
+{chr(10).join(tools_info)}
+
+你的任务是将自然语言查询转换为SQL，并执行查询返回结果。
+
+工作流程：
+1. 首先分析数据库结构和业务域
+2. 根据用户需求生成合适的SQL查询
+3. 验证SQL语法和逻辑
+4. 执行查询并返回结果
+5. 提供自然语言解释
+
+要求：
+- 始终使用中文进行思考
+- 确保SQL查询安全且高效
+- 提供清晰的查询结果解释
+- 处理各种数据库类型和结构
+
+数据库信息：
+- 类型: {self.config.database.type.value}
+- 数据库: {self.config.database.database}
+- 主机: {self.config.database.host}:{self.config.database.port}"""
     
-    def _get_system_prompt(self) -> str:
-        """获取系统提示词"""
-        return self.prompt_manager.get_prompt(
-            "system/sql_agent",
-            dialect=self.sql_config.database.dialect,
-            database_name=self.db.get_db_info().split()[0] if self.db else "unknown",
-            tools=[tool.name for tool in self._tools]
-        )
-    
-    def _is_task_completed(self, step: AgentStep, execution: AgentExecution) -> bool:
+    def _is_task_complete(self, step: AgentStep, execution: AgentExecution) -> bool:
         """判断任务是否完成"""
-        # 成功执行了 SQL
-        if "execution_result" in self._sql_context:
-            result = self._sql_context["execution_result"]
-            if isinstance(result, dict) and result.get("success"):
+        # 检查是否生成了SQL并执行成功
+        for tool_result in step.tool_results:
+            if tool_result.name == "execute_sql" and tool_result.success:
                 return True
-        
-        # 生成了 SQL 但用户只要求生成
-        if "generated_sql" in self._sql_context and "生成" in self._task and "执行" not in self._task:
-            return True
+            elif tool_result.name == "generate_sql" and tool_result.success:
+                # 如果只要求生成SQL，不执行
+                if "生成" in execution.task and "执行" not in execution.task:
+                    return True
         
         return False
     
-    def _extract_final_result(self, execution: AgentExecution) -> QueryResult:
+    def _extract_final_result(self, execution: AgentExecution) -> SQLQueryResult:
         """提取最终结果"""
-        return QueryResult(
-            success=execution.success,
-            question=self._task,
-            sql=self._sql_context.get("generated_sql"),
-            answer=self._build_answer(),
-            execution_result=self._sql_context.get("execution_result"),
+        sql = None
+        data = None
+        row_count = 0
+        error = None
+        
+        # 从工具结果中提取信息
+        for step in execution.steps:
+            for tool_result in step.tool_results:
+                if tool_result.name == "generate_sql" and tool_result.success:
+                    sql = tool_result.output.get("sql")
+                elif tool_result.name == "execute_sql" and tool_result.success:
+                    data = tool_result.output.get("data", [])
+                    row_count = tool_result.output.get("row_count", 0)
+                elif not tool_result.success:
+                    error = tool_result.error
+        
+        # 构建答案
+        answer = self._build_answer(sql, data, row_count, error)
+        
+        return SQLQueryResult(
+            success=execution.state.value == "completed",
+            question=execution.task,
+            sql=sql,
+            answer=answer,
+            data=data,
+            row_count=row_count,
+            execution_time=execution.execution_time,
+            error=error,
             steps=len(execution.steps)
         )
     
-    def _build_answer(self) -> Optional[str]:
-        """构建自然语言回答"""
-        exec_result = self._sql_context.get("execution_result")
-        if not exec_result:
-            return None
+    def _build_answer(self, sql: str, data: List[Dict[str, Any]], row_count: int, error: str) -> Optional[str]:
+        """构建自然语言答案"""
+        if error:
+            return f"查询执行失败: {error}"
         
-        if isinstance(exec_result, dict) and exec_result.get("success"):
-            return f"查询执行成功，返回 {exec_result.get('row_count', 0)} 条结果。"
+        if not sql:
+            return "无法生成合适的SQL查询"
+        
+        if not data:
+            return f"查询执行成功，但没有返回数据"
+        
+        # 根据数据构建答案
+        if len(data) == 1:
+            # 单条结果
+            result = data[0]
+            if len(result) == 1:
+                # 单列结果
+                value = list(result.values())[0]
+                return f"查询结果为: {value}"
+            else:
+                # 多列结果
+                return f"查询结果为: {json.dumps(result, ensure_ascii=False)}"
         else:
-            return f"查询执行失败: {exec_result.get('error', '未知错误') if isinstance(exec_result, dict) else '未知错误'}"
+            # 多条结果
+            return f"查询成功，共返回 {row_count} 条结果"
     
-    def reflect_on_results(self, tool_results: List[ToolResult]) -> Optional[str]:
-        """SQL 特定的反思"""
-        if not self.sql_config.enable_reflection:
-            return None
-        
-        for result in tool_results:
-            # SQL 验证或执行失败时反思
-            if not result.success and result.name in ["validate_sql", "execute_sql"]:
-                return f"{result.name} 失败: {result.error}"
-        
-        return None
+    async def query(self, question: str, context: Optional[Dict[str, Any]] = None) -> SQLQueryResult:
+        """执行查询的便捷方法"""
+        execution = await self.execute_task(question, context or {})
+        return self._extract_final_result(execution)
     
-    async def _execute_single_tool(self, tool_call) -> ToolResult:
-        """执行工具并更新上下文"""
-        result = await super()._execute_single_tool(tool_call)
+    async def query_with_sql(self, question: str, sql: str, context: Optional[Dict[str, Any]] = None) -> SQLQueryResult:
+        """执行已知SQL的查询"""
+        # 验证SQL
+        validation_result = await self.tools["validate_sql"].execute(sql=sql)
+        if not validation_result["success"]:
+            return SQLQueryResult(
+                success=False,
+                question=question,
+                sql=sql,
+                error=validation_result["error"]
+            )
         
-        # 更新 SQL 上下文
-        if result.success:
-            context_mapping = {
-                "extract_database_schema": ("schema_info", result.result),
-                "analyze_business_domain": ("domain_analysis", result.result),
-                "classify_table_fields": ("field_classifications", result.result),
-                "analyze_entity_relationships": ("relationships", result.result),
-                "generate_sql": ("generated_sql", result.result),
-                "validate_sql": ("validation_result", result.result),
-                "execute_sql": ("execution_result", result.result)
-            }
-            
-            if tool_call.name in context_mapping:
-                key, value = context_mapping[tool_call.name]
-                self._sql_context[key] = value
+        # 执行SQL
+        execution_result = await self.tools["execute_sql"].execute(sql=sql)
+        if not execution_result["success"]:
+            return SQLQueryResult(
+                success=False,
+                question=question,
+                sql=sql,
+                error=execution_result["error"]
+            )
+        
+        # 构建结果
+        return SQLQueryResult(
+            success=True,
+            question=question,
+            sql=sql,
+            data=execution_result["data"]["data"],
+            row_count=execution_result["data"]["row_count"],
+            execution_time=execution_result["data"]["execution_time"]
+        )
+    
+    async def explain_schema(self, table_name: Optional[str] = None) -> Dict[str, Any]:
+        """解释数据库Schema"""
+        if table_name:
+            result = await self.tools["extract_schema"].execute(table_name=table_name)
+        else:
+            result = await self.tools["extract_schema"].execute()
         
         return result
     
-    async def query(self, question: str, **kwargs) -> QueryResult:
-        """执行查询的便捷方法"""
-        # 使用 LangGraph ReAct agent
-        if self._react_agent and self.sql_config.use_langgraph:
-            return await self._query_with_react_agent(question, **kwargs)
-        
-        # 使用基础 agent
-        self.new_task(question, extra_args=kwargs)
-        execution = await self.execute_task()
-        
-        if execution.final_result and isinstance(execution.final_result, QueryResult):
-            return execution.final_result
-        else:
-            return QueryResult(
-                success=False,
-                question=question,
-                error=getattr(execution, 'error', "执行失败"),
-                steps=len(execution.steps)
-            )
-    
-    async def _query_with_react_agent(self, question: str, **kwargs) -> QueryResult:
-        """使用 LangGraph ReAct agent 执行查询"""
-        try:
-            messages = [HumanMessage(content=question)]
-            config = {"configurable": {"thread_id": kwargs.get("thread_id", "default")}}
-            
-            result = await self._react_agent.ainvoke(
-                {"messages": messages},
-                config=config
-            )
-            
-            # 解析结果
-            return self._parse_react_result(question, result)
-            
-        except Exception as e:
-            logger.error(f"ReAct agent 执行失败: {e}")
-            return QueryResult(
-                success=False,
-                question=question,
-                error=str(e)
-            )
-    
-    def _parse_react_result(self, question: str, result: Dict[str, Any]) -> QueryResult:
-        """解析 ReAct agent 结果"""
-        messages = result.get("messages", [])
-        
-        # 提取 SQL 和答案
-        generated_sql = None
-        final_answer = None
-        
-        for message in messages:
-            content = getattr(message, 'content', '')
-            if "```sql" in content:
-                import re
-                sql_match = re.search(r'```sql\n(.*?)\n```', content, re.DOTALL)
-                if sql_match:
-                    generated_sql = sql_match.group(1).strip()
-            
-            # 最后一条 AI 消息作为答案
-            if hasattr(message, 'type') and message.type == 'ai':
-                final_answer = content
-        
-        return QueryResult(
-            success=True,
-            question=question,
-            sql=generated_sql,
-            answer=final_answer,
-            steps=len(messages)
-        )
+    def get_config(self) -> Dict[str, Any]:
+        """获取当前配置"""
+        return {
+            "database": {
+                "type": self.config.database.type.value,
+                "host": self.config.database.host,
+                "database": self.config.database.database
+            },
+            "llm": {
+                "model": self.config.llm.model,
+                "base_url": self.config.llm.base_url
+            },
+            "agent": {
+                "max_steps": self.config.agent.max_steps,
+                "verbose": self.config.agent.verbose
+            }
+        }
