@@ -1,22 +1,17 @@
 """SQL 验证工具"""
 
 from tools.base import BaseSemanticSQLTool
-from pydantic import BaseModel, Field
 from typing import Dict, Any, List
+from models.generation_models import (
+    SQLValidationInput,
+    SQLValidationOutput,
+    ValidationIssue
+)
 from models.schemas import SQLValidationResult
 import logging
 import re
 
 logger = logging.getLogger(__name__)
-
-
-class SQLValidationInput(BaseModel):
-    """输入模式"""
-    sql: str = Field(description="要验证的 SQL 语句")
-    check_performance: bool = Field(
-        default=False,
-        description="是否检查性能问题"
-    )
 
 
 class SQLValidationTool(BaseSemanticSQLTool):

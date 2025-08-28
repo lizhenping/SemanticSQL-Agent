@@ -1,27 +1,17 @@
 """SQL 执行工具"""
 
 from tools.base import BaseSemanticSQLTool
-from pydantic import BaseModel, Field
 from typing import Dict, Any, List
+from models.generation_models import (
+    SQLExecutionInput,
+    SQLExecutionOutput
+)
 from models.schemas import QueryExecutionResult
 import logging
 import time
 import re
 
 logger = logging.getLogger(__name__)
-
-
-class SQLExecutionInput(BaseModel):
-    """输入模式"""
-    sql: str = Field(description="要执行的 SQL 语句")
-    limit: int = Field(
-        default=10,
-        description="返回结果的最大行数"
-    )
-    format_output: bool = Field(
-        default=True,
-        description="是否格式化输出结果"
-    )
 
 
 class SQLExecutionTool(BaseSemanticSQLTool):

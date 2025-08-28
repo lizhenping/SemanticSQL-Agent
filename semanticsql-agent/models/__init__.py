@@ -47,6 +47,25 @@ from .analysis_models import (
     ERAnalysisReport
 )
 
+# 从 generation_models.py 导出生成相关模型
+from .generation_models import (
+    # SQL 生成
+    SQLGenerationInput,
+    SQLGenerationOutput,
+    # SQL 验证
+    SQLValidationType,
+    SQLValidationInput,
+    SQLValidationOutput,
+    ValidationIssue,
+    # SQL 执行
+    SQLExecutionInput,
+    SQLExecutionOutput,
+    # 思考工具
+    ThinkingInput,
+    ThinkingOutput,
+    ThinkingStep
+)
+
 __all__ = [
     # 基础模型
     "FieldType",

@@ -5,34 +5,27 @@
 """
 
 from tools.base import BaseSemanticSQLTool
-from pydantic import BaseModel, Field
 from typing import Dict, Any, List, Optional
-from models.schemas import FieldType
+from models.analysis_models import (
+    FieldClassificationInput,
+    FieldClassificationOutput,
+    FieldClassification,
+    FieldStatistics,
+    TableFieldReport,
+    FieldCategory,
+    SchemaExtractionOutput,
+    DomainAnalysisOutput
+)
+from utils.output_parsers import (
+    create_structured_output_parser,
+    get_pydantic_format_instruction
+)
 from collections import Counter
 import math
 import logging
 import json
 
 logger = logging.getLogger(__name__)
-
-
-class FieldClassificationInput(BaseModel):
-    """输入模式"""
-    schema_info: Dict[str, Any] = Field(
-        description="数据库结构信息"
-    )
-    domain_knowledge: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="领域知识，来自 analyze_business_domain"
-    )
-    sample_size: int = Field(
-        default=100,
-        description="每个字段的采样数量"
-    )
-    focus_tables: Optional[List[str]] = Field(
-        default=None,
-        description="需要重点分析的表"
-    )
 
 
 class FieldClassificationTool(BaseSemanticSQLTool):

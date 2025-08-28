@@ -5,31 +5,29 @@
 """
 
 from tools.base import BaseSemanticSQLTool
-from pydantic import BaseModel, Field
 from typing import Dict, Any, List, Optional, Set, Tuple
+from models.analysis_models import (
+    ERAnalysisInput,
+    ERAnalysisOutput,
+    Relationship,
+    RelationshipGraph,
+    RelationshipPattern,
+    ERAnalysisReport,
+    RelationshipType,
+    RelationSource,
+    SchemaExtractionOutput,
+    DomainAnalysisOutput,
+    FieldClassificationOutput,
+    TableDetail
+)
+from utils.output_parsers import (
+    create_structured_output_parser,
+    get_pydantic_format_instruction
+)
 import logging
 import json
 
 logger = logging.getLogger(__name__)
-
-
-class ERAnalysisInput(BaseModel):
-    """输入模式"""
-    schema_info: Dict[str, Any] = Field(
-        description="数据库结构信息"
-    )
-    domain_knowledge: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="领域知识，来自 analyze_business_domain"
-    )
-    field_classifications: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="字段分类结果，来自 classify_table_fields"
-    )
-    analyze_implicit: bool = Field(
-        default=True,
-        description="是否分析隐式关系（基于命名和数据）"
-    )
 
 
 class ERAnalysisTool(BaseSemanticSQLTool):

@@ -1,33 +1,21 @@
 """SQL 生成工具"""
 
 from tools.base import BaseSemanticSQLTool
-from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional
+from models.generation_models import (
+    SQLGenerationInput,
+    SQLGenerationOutput
+)
+from models.analysis_models import (
+    SchemaExtractionOutput,
+    DomainAnalysisOutput,
+    FieldClassificationOutput,
+    ERAnalysisOutput
+)
 import logging
 import re
 
 logger = logging.getLogger(__name__)
-
-
-class SQLGenerationInput(BaseModel):
-    """输入模式"""
-    query: str = Field(description="用户的自然语言查询")
-    schema_info: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="数据库结构信息"
-    )
-    domain_analysis: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="领域分析结果"
-    )
-    field_classification: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="字段分类结果"
-    )
-    relationships: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="实体关系信息"
-    )
 
 
 class SQLGenerationTool(BaseSemanticSQLTool):

@@ -1,24 +1,15 @@
 """深度思考工具（可选）"""
 
 from tools.base import BaseSemanticSQLTool
-from pydantic import BaseModel, Field
 from typing import Dict, Any, List, Optional
+from models.generation_models import (
+    ThinkingInput,
+    ThinkingOutput,
+    ThinkingStep
+)
 import logging
 
 logger = logging.getLogger(__name__)
-
-
-class ThinkingInput(BaseModel):
-    """输入模式"""
-    problem: str = Field(description="需要深度思考的问题")
-    context: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="相关上下文信息"
-    )
-    max_steps: int = Field(
-        default=3,
-        description="最大思考步骤数"
-    )
 
 
 class SequentialThinkingTool(BaseSemanticSQLTool):
