@@ -6,7 +6,7 @@
 __version__ = "0.3.0"
 __author__ = "lizhenping18@mails.ucas.ac.cn"
 
-from .config import Config
+from .utils.config import Config
 from .utils.llm_clients import LLMClient, LLMMessage, LLMResponse, LLMUsage
 from .utils.shared_types import QueryResult
 from .utils.cli import ConsoleFactory, ConsoleMode, ConsoleType

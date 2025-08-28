@@ -9,11 +9,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage
-
-from .agent_basics import (
-    AgentStep, AgentExecution, LLMResponse, ToolCall, ToolResult, LLMUsage
+from agent.agent_basics import (
+    AgentStep, AgentExecution, ToolCall, ToolResult
 )
+from .llm_clients.llm_basics import LLMMessage, LLMResponse, LLMUsage
 
 logger = logging.getLogger(__name__)
 

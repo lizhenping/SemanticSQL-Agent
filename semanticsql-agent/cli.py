@@ -9,7 +9,7 @@ import click
 import yaml
 
 from agent import SQLAgent
-from config import Config
+from utils.config import Config
 from utils.cli import ConsoleFactory, ConsoleMode, ConsoleType
 from utils.llm_clients import LLMClient
 

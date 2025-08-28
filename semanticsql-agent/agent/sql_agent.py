@@ -6,11 +6,7 @@
 import logging
 from typing import List, Optional, Dict, Any
 
-from langchain_community.utilities import SQLDatabase
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from langgraph.prebuilt import create_react_agent
-
-from config import SQLAgentConfig
+from utils.config import Config
 from utils.shared_types import QueryResult
 from tools import (
     SchemaExtractionTool,
@@ -18,11 +14,8 @@ from tools import (
     FieldClassificationTool,
     ERAnalysisTool,
     SQLGenerationTool,
-    SQLValidationTool,
-    SQLExecutionTool,
     SequentialThinkingTool
 )
-from prompts.manager import PromptManager
 from .base_agent import BaseAgent
 from .agent_basics import AgentStep, AgentExecution, ToolResult
 
