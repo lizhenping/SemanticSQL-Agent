@@ -1,66 +1,88 @@
-"""LLM 客户端工厂（参考 TRAEAgent）"""
+"""简化的 LLM 客户端 - 仅支持本地 Qwen (OpenAI 兼容接口)"""
 
-from enum import Enum
-from typing import Optional
-from ..config import ModelConfig
-from .base_client import BaseLLMClient
-from .openai_client import OpenAIClient
-from .local_client import LocalModelClient
-from .llm_basics import LLMMessage, LLMResponse
+import json
+import logging
+from typing import List, Optional
+import requests
 
+from .llm_basics import LLMMessage, LLMResponse, LLMUsage
 
-class LLMProvider(Enum):
-    """支持的 LLM 提供商"""
-    OPENAI = "openai"
-    ANTHROPIC = "anthropic"
-    LOCAL = "local"
-    AZURE = "azure"
+logger = logging.getLogger(__name__)
 
 
 class LLMClient:
-    """主 LLM 客户端，支持多种提供商"""
+    """本地 Qwen 模型客户端（OpenAI 兼容接口）"""
     
-    def __init__(self, config: ModelConfig):
-        self.config = config
-        self.provider = LLMProvider(config.provider.lower())
-        self.client = self._create_client()
+    def __init__(
+        self,
+        model: str = "Qwen3-14B",
+        base_url: str = "http://192.168.200.216:9009/v1",
+        api_key: str = "not-needed",
+        temperature: float = 0.1,
+        max_tokens: int = 2000
+    ):
+        self.model = model
+        self.base_url = base_url.rstrip('/')
+        self.api_key = api_key
+        self.temperature = temperature
+        self.max_tokens = max_tokens
     
-    def _create_client(self) -> BaseLLMClient:
-        """根据配置创建具体的客户端"""
-        if self.provider == LLMProvider.OPENAI:
-            return OpenAIClient(
-                api_key=self.config.api_key,
-                model=self.config.model,
-                temperature=self.config.temperature,
-                max_tokens=self.config.max_tokens
+    def chat(self, messages: List[LLMMessage]) -> LLMResponse:
+        """发送聊天请求到本地 Qwen 模型"""
+        # 转换消息格式
+        formatted_messages = [
+            {"role": msg.role, "content": msg.content}
+            for msg in messages
+        ]
+        
+        # 构建请求
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}"
+        }
+        
+        data = {
+            "model": self.model,
+            "messages": formatted_messages,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+        }
+        
+        url = f"{self.base_url}/chat/completions"
+        
+        try:
+            logger.debug(f"发送请求到: {url}")
+            response = requests.post(url, headers=headers, json=data, timeout=60)
+            response.raise_for_status()
+            
+            result = response.json()
+            
+            # 解析响应
+            choice = result["choices"][0]
+            content = choice["message"]["content"]
+            
+            # 解析 token 使用情况
+            usage = None
+            if "usage" in result:
+                usage = LLMUsage(
+                    input_tokens=result["usage"].get("prompt_tokens", 0),
+                    output_tokens=result["usage"].get("completion_tokens", 0),
+                    total_tokens=result["usage"].get("total_tokens", 0)
+                )
+            
+            return LLMResponse(
+                content=content,
+                usage=usage,
+                model=result.get("model", self.model),
+                finish_reason=choice.get("finish_reason")
             )
-        elif self.provider == LLMProvider.LOCAL:
-            return LocalModelClient(
-                model=self.config.model,
-                base_url=self.config.base_url,
-                api_key=self.config.api_key or "dummy",
-                temperature=self.config.temperature,
-                max_tokens=self.config.max_tokens
-            )
-        elif self.provider == LLMProvider.ANTHROPIC:
-            # 可以添加 Anthropic 客户端
-            raise NotImplementedError("Anthropic 客户端暂未实现")
-        elif self.provider == LLMProvider.AZURE:
-            # Azure 使用 OpenAI 兼容接口
-            from .openai_compatible_base import OpenAICompatibleClient
-            return OpenAICompatibleClient(
-                api_key=self.config.api_key,
-                model=self.config.model,
-                base_url=self.config.base_url,
-                temperature=self.config.temperature,
-                max_tokens=self.config.max_tokens
-            )
-        else:
-            raise ValueError(f"不支持的 LLM 提供商: {self.provider}")
-    
-    def chat(self, messages: list[LLMMessage]) -> LLMResponse:
-        """发送聊天消息"""
-        return self.client.chat(messages)
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"LLM 请求失败: {e}")
+            raise RuntimeError(f"LLM 请求失败: {e}")
+        except (KeyError, json.JSONDecodeError) as e:
+            logger.error(f"响应解析失败: {e}")
+            raise RuntimeError(f"响应解析失败: {e}")
     
     def complete(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """简单的文本补全接口"""

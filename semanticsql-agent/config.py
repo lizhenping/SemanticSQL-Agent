@@ -1,4 +1,4 @@
-"""统一配置管理（参考 TRAEAgent 的简洁设计）"""
+"""统一配置管理（简化版）"""
 
 import os
 from dataclasses import dataclass, field
@@ -28,26 +28,20 @@ class DatabaseConfig:
 
 
 @dataclass
-class ModelConfig:
-    """模型配置"""
-    provider: str = "openai"
-    model: str = "gpt-4"
-    api_key: Optional[str] = None
-    base_url: Optional[str] = None
-    temperature: float = 0.0
+class LLMConfig:
+    """LLM 配置（简化版，仅支持本地 Qwen）"""
+    model: str = "Qwen3-14B"
+    base_url: str = "http://192.168.200.216:9009/v1"
+    api_key: str = "not-needed"
+    temperature: float = 0.1
     max_tokens: int = 2000
-    
-    def __post_init__(self):
-        # 从环境变量读取 API 密钥
-        if not self.api_key:
-            self.api_key = os.getenv(f"{self.provider.upper()}_API_KEY", "")
 
 
 @dataclass
 class Config:
     """统一配置类"""
-    # 模型配置
-    model: ModelConfig = field(default_factory=ModelConfig)
+    # LLM 配置
+    llm: LLMConfig = field(default_factory=LLMConfig)
     
     # 数据库配置
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
@@ -66,9 +60,9 @@ class Config:
         """从字典创建配置"""
         config = cls()
         
-        # 解析模型配置
-        if "model" in data:
-            config.model = ModelConfig(**data["model"])
+        # 解析 LLM 配置
+        if "llm" in data:
+            config.llm = LLMConfig(**data["llm"])
         
         # 解析数据库配置
         if "database" in data:
@@ -94,50 +88,32 @@ class Config:
         """从环境变量加载配置"""
         config = cls()
         
-        # 覆盖环境变量中的配置
-        env_mappings = {
-            "MODEL_PROVIDER": ("model", "provider"),
-            "MODEL_NAME": ("model", "model"),
-            "MODEL_API_KEY": ("model", "api_key"),
-            "MODEL_BASE_URL": ("model", "base_url"),
-            "DB_TYPE": ("database", "type"),
-            "DB_HOST": ("database", "host"),
-            "DB_PORT": ("database", "port", int),
-            "DB_NAME": ("database", "database"),
-            "DB_USER": ("database", "username"),
-            "DB_PASSWORD": ("database", "password"),
-            "MAX_STEPS": ("max_steps", int),
-            "VERBOSE": ("verbose", lambda x: x.lower() == "true"),
-        }
+        # LLM 环境变量
+        if model := os.getenv("LLM_MODEL"):
+            config.llm.model = model
+        if base_url := os.getenv("LLM_BASE_URL"):
+            config.llm.base_url = base_url
+        if api_key := os.getenv("LLM_API_KEY"):
+            config.llm.api_key = api_key
         
-        for env_key, mapping in env_mappings.items():
-            value = os.getenv(env_key)
-            if value is not None:
-                if len(mapping) == 2:
-                    setattr(config, mapping[0], value)
-                elif len(mapping) == 3:
-                    # 嵌套属性
-                    obj = getattr(config, mapping[0])
-                    setattr(obj, mapping[1], value)
-                elif len(mapping) == 4:
-                    # 带类型转换
-                    obj = getattr(config, mapping[0])
-                    setattr(obj, mapping[1], mapping[2](value))
+        # 数据库环境变量
+        if db_type := os.getenv("DB_TYPE"):
+            config.database.type = db_type
+        if db_host := os.getenv("DB_HOST"):
+            config.database.host = db_host
+        if db_port := os.getenv("DB_PORT"):
+            config.database.port = int(db_port)
+        if db_name := os.getenv("DB_NAME"):
+            config.database.database = db_name
+        if db_user := os.getenv("DB_USER"):
+            config.database.username = db_user
+        if db_password := os.getenv("DB_PASSWORD"):
+            config.database.password = db_password
+        
+        # 其他环境变量
+        if max_steps := os.getenv("MAX_STEPS"):
+            config.max_steps = int(max_steps)
+        if verbose := os.getenv("VERBOSE"):
+            config.verbose = verbose.lower() == "true"
         
         return config
-    
-    def resolve(self, **overrides) -> "Config":
-        """解析配置，支持覆盖"""
-        # 应用覆盖
-        for key, value in overrides.items():
-            if hasattr(self, key):
-                setattr(self, key, value)
-            elif "." in key:
-                # 支持嵌套属性，如 "model.temperature"
-                parts = key.split(".")
-                obj = self
-                for part in parts[:-1]:
-                    obj = getattr(obj, part)
-                setattr(obj, parts[-1], value)
-        
-        return self

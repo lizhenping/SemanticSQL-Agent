@@ -98,9 +98,10 @@ def run(
     
     # 命令行参数覆盖配置文件
     if model:
-        config_data.setdefault('model', {})['model'] = model
+        config_data.setdefault('llm', {})['model'] = model
     if provider:
-        config_data.setdefault('model', {})['provider'] = provider
+        # provider 参数已不再需要，因为只支持本地 Qwen
+        pass
     if database:
         config_data.setdefault('database', {})['connection_string'] = database
     if max_steps:
@@ -121,7 +122,13 @@ def run(
         console.print_status("thinking", "初始化智能体...")
         
         # 创建 LLM 客户端
-        llm_client = LLMClient(config.model)
+        llm_client = LLMClient(
+            model=config.llm.model,
+            base_url=config.llm.base_url,
+            api_key=config.llm.api_key,
+            temperature=config.llm.temperature,
+            max_tokens=config.llm.max_tokens
+        )
         
         # 创建智能体
         agent = SQLAgent(config, llm_client)
@@ -196,7 +203,13 @@ def interactive(config_file: str, console_type: Optional[str]):
     
     try:
         config = Config.from_dict(config_data)
-        llm_client = LLMClient(config.model)
+        llm_client = LLMClient(
+            model=config.llm.model,
+            base_url=config.llm.base_url,
+            api_key=config.llm.api_key,
+            temperature=config.llm.temperature,
+            max_tokens=config.llm.max_tokens
+        )
         agent = SQLAgent(config, llm_client)
     except Exception as e:
         console.print(f"错误: 初始化失败: {e}", style="error")
@@ -247,11 +260,11 @@ def init(output: str):
     console = ConsoleFactory.create_console(ConsoleType.SIMPLE)
     
     template = {
-        "model": {
-            "provider": "openai",
-            "model": "gpt-4",
-            "temperature": 0,
-            "api_key": "${OPENAI_API_KEY}",
+        "llm": {
+            "model": "Qwen3-14B",
+            "base_url": "http://192.168.200.216:9009/v1",
+            "api_key": "not-needed",
+            "temperature": 0.1,
             "max_tokens": 2000
         },
         "database": {
