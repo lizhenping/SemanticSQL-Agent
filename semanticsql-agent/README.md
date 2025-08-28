@@ -21,10 +21,10 @@ pip install -r requirements.txt
 
 ### 配置
 
-1. 复制配置文件模板：
+1. 生成配置文件模板：
 
 ```bash
-cp config.yaml.example config.yaml
+python cli.py init --output config.yaml
 ```
 
 2. 修改配置文件中的数据库和模型设置。
@@ -34,17 +34,23 @@ cp config.yaml.example config.yaml
 #### 命令行模式
 
 ```bash
-# 交互模式
-python cli.py query
-
 # 单次查询
-python cli.py query -q "查询所有客户信息"
+python cli.py run "查询所有客户信息"
+
+# 从文件读取查询
+python cli.py run --file query.txt
 
 # 使用自定义配置
-python cli.py query -c custom_config.yaml
+python cli.py run "查询本月销售额" --config custom_config.yaml
 
 # 保存执行轨迹
-python cli.py query -q "统计每个部门的平均工资" -s trajectory.json
+python cli.py run "统计每个部门的平均工资" --save-trajectory trajectory.json
+
+# 交互式模式
+python cli.py interactive
+
+# 生成配置文件模板
+python cli.py init --output my_config.yaml
 ```
 
 #### Python API

@@ -2,17 +2,19 @@
 
 ## ✅ 清理完成
 
-### 1. 删除的冗余文件（7个）
+### 1. 删除的冗余文件（6个）
 - ❌ `utils/types.py` - 与 `shared_types.py` 重复
 - ❌ `utils/database.py` - 未使用
 - ❌ `utils/trajectory.py` - 与 `trajectory_recorder.py` 功能重复
-- ❌ `cli.py` - 非核心功能，专注于智能体本身
 - ❌ `MODELS_SIMPLIFICATION_SUMMARY.md` - 临时文档
 - ❌ `SIMPLIFICATION_PLAN.md` - 已完成的计划
 - ❌ `STRUCTURE_ANALYSIS.md` - 临时分析文档
 - ❌ `FINAL_STRUCTURE.md` - 过时的结构文档
 
-### 2. 保留的核心文件（26个）
+### 2. 保留的核心文件（27个）
+
+#### CLI 接口（1个）
+- `cli.py` - 命令行接口（参考 TRAEAgent 设计）
 
 #### Agent 核心（4个）
 - `agent/agent_basics.py` - 基础类型定义
@@ -56,10 +58,10 @@
 
 | 指标 | 清理前 | 清理后 | 改进 |
 |------|--------|--------|------|
-| Python 文件数 | 30个 | 26个 | -13% |
-| 冗余文件 | 4个 | 0个 | -100% |
+| Python 文件数 | 30个 | 27个 | -10% |
+| 冗余文件 | 3个 | 0个 | -100% |
 | 临时文档 | 4个 | 0个 | -100% |
-| 代码行数 | ~5000行 | ~4000行 | -20% |
+| 代码行数 | ~5000行 | ~4300行 | -14% |
 
 ## 🎯 达成的目标
 
@@ -85,7 +87,8 @@
 ## 🏗️ 最终项目结构
 
 ```
-semanticsql-agent/（26个 Python 文件）
+semanticsql-agent/（27个 Python 文件）
+├── cli.py              # 命令行接口 ✨
 ├── agent/（4个文件）
 │   ├── agent_basics.py
 │   ├── base_agent.py
