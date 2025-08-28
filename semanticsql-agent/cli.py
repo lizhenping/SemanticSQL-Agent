@@ -12,7 +12,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from agent import SQLAgent
-from config import Config
+from .config import Config
 
 console = Console()
 
