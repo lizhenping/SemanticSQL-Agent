@@ -1,15 +1,21 @@
 """深度思考工具（可选）"""
 
-from tools.base import BaseSemanticSQLTool
+from dataclasses import dataclass
 from typing import Dict, Any, List, Optional
-from models.generation_models import (
-    ThinkingInput,
-    ThinkingOutput,
-    ThinkingStep
-)
 import logging
 
+from .base import BaseSemanticSQLTool
+
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ThinkingStep:
+    """思考步骤"""
+    step_number: int
+    thought: str
+    insights: List[str]
+    next_action: Optional[str] = None
 
 
 class SequentialThinkingTool(BaseSemanticSQLTool):
@@ -21,7 +27,6 @@ class SequentialThinkingTool(BaseSemanticSQLTool):
         "适用于需要多步推理、复杂逻辑分析或不确定如何处理的查询。"
         "会逐步分解问题并给出详细的思考过程。"
     )
-    args_schema = ThinkingInput
     
     def execute(
         self,
@@ -48,191 +53,185 @@ class SequentialThinkingTool(BaseSemanticSQLTool):
                 step + 1
             )
             
-            # 获取思考结果
+            # 调用 LLM
             response = self.llm.invoke(prompt)
-            thought_content = response.content
             
-            # 记录思考步骤
-            thought_step = {
-                "step": step + 1,
-                "thought": thought_content,
-                "focus": self._extract_focus(thought_content)
-            }
-            thoughts.append(thought_step)
+            # 解析思考结果
+            step_result = self._parse_thinking_step(response.content, step + 1)
+            thoughts.append(step_result)
             
-            # 更新理解
-            current_understanding = self._update_understanding(
-                current_understanding,
-                thought_content
-            )
+            # 更新当前理解
+            self._update_understanding(current_understanding, step_result)
             
-            # 检查是否得出结论
-            if self._has_conclusion(thought_content):
-                logger.info(f"在第 {step + 1} 步得出结论")
+            # 如果找到了清晰的解决方案，提前结束
+            if self._has_clear_solution(step_result):
                 break
         
-        # 生成最终分析
-        final_analysis = self._generate_final_analysis(
-            problem,
-            thoughts,
-            current_understanding
-        )
-        
-        return {
+        # 生成最终输出
+        output = {
             "problem": problem,
-            "thinking_steps": thoughts,
-            "understanding": current_understanding,
-            "conclusion": final_analysis,
-            "total_steps": len(thoughts)
+            "thinking_steps": [
+                {
+                    "step": t.step_number,
+                    "thought": t.thought,
+                    "insights": t.insights,
+                    "next_action": t.next_action
+                }
+                for t in thoughts
+            ],
+            "final_understanding": current_understanding,
+            "recommendation": self._generate_recommendation(thoughts, current_understanding)
         }
+        
+        return output
     
     def _build_thinking_prompt(
         self,
         problem: str,
-        current_understanding: Dict[str, Any],
-        previous_thoughts: List[Dict[str, Any]],
+        understanding: Dict[str, Any],
+        previous_thoughts: List[ThinkingStep],
         context: Optional[Dict[str, Any]],
         step_number: int
     ) -> str:
         """构建思考提示词"""
         prompt_parts = [
-            f"问题：{problem}",
-            f"\n当前是第 {step_number} 步思考。"
+            f"请对以下问题进行第 {step_number} 步深度思考：\n",
+            f"问题：{problem}\n"
         ]
+        
+        # 添加上下文
+        if context:
+            prompt_parts.append("\n相关上下文：")
+            if context.get("schema_info"):
+                prompt_parts.append("- 已获取数据库结构信息")
+            if context.get("domain_analysis"):
+                prompt_parts.append("- 已完成业务领域分析")
+            if context.get("previous_queries"):
+                prompt_parts.append(f"- 有 {len(context['previous_queries'])} 个相关历史查询")
         
         # 添加之前的思考
         if previous_thoughts:
             prompt_parts.append("\n之前的思考：")
             for thought in previous_thoughts:
-                prompt_parts.append(f"步骤 {thought['step']}: {thought['focus']}")
+                prompt_parts.append(f"- 步骤 {thought.step_number}: {thought.thought[:100]}...")
         
         # 添加当前理解
-        if current_understanding["key_points"]:
-            prompt_parts.append(f"\n已识别的关键点：")
-            for point in current_understanding["key_points"]:
+        if understanding["key_points"]:
+            prompt_parts.append("\n当前理解的关键点：")
+            for point in understanding["key_points"]:
                 prompt_parts.append(f"- {point}")
         
-        if current_understanding["challenges"]:
-            prompt_parts.append(f"\n识别的挑战：")
-            for challenge in current_understanding["challenges"]:
-                prompt_parts.append(f"- {challenge}")
-        
-        # 添加上下文
-        if context:
-            prompt_parts.append(f"\n相关上下文：")
-            for key, value in context.items():
-                if isinstance(value, (str, int, float)):
-                    prompt_parts.append(f"- {key}: {value}")
-        
-        # 添加思考指导
+        # 思考指导
         prompt_parts.extend([
-            "\n请进行深入分析，考虑：",
-            "1. 问题的核心需求是什么？",
-            "2. 解决这个问题需要哪些步骤？",
-            "3. 可能遇到的困难和解决方案？",
-            "4. 是否有更好的方法？",
-            "\n如果已经有明确的解决方案，请说明'结论：'并给出具体方案。"
+            "\n请进行思考并提供：",
+            "1. 对问题的深入分析",
+            "2. 识别出的关键洞察",
+            "3. 建议的下一步行动（如果有）",
+            "\n注意：保持思考的连贯性，每一步都要有新的进展。"
         ])
         
         return "\n".join(prompt_parts)
     
-    def _extract_focus(self, thought: str) -> str:
-        """提取思考的焦点"""
-        # 简单提取：取第一句或前100个字符
-        lines = thought.split('\n')
+    def _parse_thinking_step(self, content: str, step_number: int) -> ThinkingStep:
+        """解析思考步骤"""
+        # 简单的文本解析
+        lines = content.strip().split('\n')
+        
+        # 提取主要思考
+        thought = ""
+        insights = []
+        next_action = None
+        
+        current_section = None
         for line in lines:
             line = line.strip()
-            if line and not line.startswith('步骤'):
-                return line[:100] + "..." if len(line) > 100 else line
+            if not line:
+                continue
+                
+            # 识别段落标题
+            if "分析" in line or "思考" in line:
+                current_section = "thought"
+            elif "洞察" in line or "发现" in line or "关键" in line:
+                current_section = "insights"
+            elif "建议" in line or "下一步" in line or "行动" in line:
+                current_section = "next_action"
+            elif line.startswith("-") or line.startswith("•") or line.startswith("*"):
+                # 列表项
+                clean_line = line.lstrip("-•* ").strip()
+                if current_section == "insights":
+                    insights.append(clean_line)
+                elif current_section == "next_action" and not next_action:
+                    next_action = clean_line
+            else:
+                # 普通文本
+                if current_section == "thought" or not thought:
+                    thought += line + " "
         
-        return thought[:100] + "..." if len(thought) > 100 else thought
+        # 如果没有解析出内容，使用整个响应作为思考
+        if not thought:
+            thought = content.strip()
+        
+        return ThinkingStep(
+            step_number=step_number,
+            thought=thought.strip(),
+            insights=insights,
+            next_action=next_action
+        )
     
     def _update_understanding(
         self,
-        current: Dict[str, Any],
-        new_thought: str
-    ) -> Dict[str, Any]:
-        """更新理解"""
-        updated = current.copy()
+        understanding: Dict[str, Any],
+        step_result: ThinkingStep
+    ) -> None:
+        """更新当前理解"""
+        # 添加新的关键点
+        for insight in step_result.insights:
+            if insight not in understanding["key_points"]:
+                understanding["key_points"].append(insight)
         
-        # 提取关键点
-        if "关键" in new_thought or "重要" in new_thought:
-            lines = new_thought.split('\n')
-            for line in lines:
-                if any(keyword in line for keyword in ["关键", "重要", "核心"]):
-                    point = line.strip().lstrip('-•*').strip()
-                    if point and point not in updated["key_points"]:
-                        updated["key_points"].append(point)
+        # 更新方法
+        if step_result.next_action and not understanding["approach"]:
+            understanding["approach"] = step_result.next_action
         
-        # 提取挑战
-        if "困难" in new_thought or "挑战" in new_thought or "问题" in new_thought:
-            lines = new_thought.split('\n')
-            for line in lines:
-                if any(keyword in line for keyword in ["困难", "挑战", "问题"]):
-                    challenge = line.strip().lstrip('-•*').strip()
-                    if challenge and len(challenge) > 10 and challenge not in updated["challenges"]:
-                        updated["challenges"].append(challenge)
-        
-        # 提取方法
-        if "方法" in new_thought or "方案" in new_thought or "步骤" in new_thought:
-            if not updated["approach"]:
-                # 简单提取包含这些关键词的段落
-                for line in new_thought.split('\n'):
-                    if any(keyword in line for keyword in ["方法", "方案", "步骤"]):
-                        updated["approach"] = line.strip()
-                        break
-        
-        return updated
+        # 识别挑战
+        if "困难" in step_result.thought or "挑战" in step_result.thought:
+            challenge = f"步骤 {step_result.step_number} 识别的挑战"
+            understanding["challenges"].append(challenge)
     
-    def _has_conclusion(self, thought: str) -> bool:
-        """检查是否得出结论"""
-        conclusion_indicators = [
-            "结论：", "结论是", "最终方案", "综上所述",
-            "因此，", "所以，", "建议：", "解决方案："
-        ]
+    def _has_clear_solution(self, step_result: ThinkingStep) -> bool:
+        """判断是否已经有清晰的解决方案"""
+        # 简单判断：如果有明确的下一步行动，且思考中包含解决方案相关词汇
+        if not step_result.next_action:
+            return False
+            
+        solution_keywords = ["解决", "方案", "可以", "应该", "建议执行", "明确"]
+        thought_lower = step_result.thought.lower()
         
-        return any(indicator in thought for indicator in conclusion_indicators)
+        return any(keyword in thought_lower for keyword in solution_keywords)
     
-    def _generate_final_analysis(
+    def _generate_recommendation(
         self,
-        problem: str,
-        thoughts: List[Dict[str, Any]],
+        thoughts: List[ThinkingStep],
         understanding: Dict[str, Any]
     ) -> str:
-        """生成最终分析"""
-        # 查找结论
-        conclusion = None
-        for thought in reversed(thoughts):
-            if self._has_conclusion(thought["thought"]):
-                # 提取结论部分
-                content = thought["thought"]
-                for indicator in ["结论：", "结论是", "最终方案", "解决方案："]:
-                    if indicator in content:
-                        idx = content.find(indicator)
-                        conclusion = content[idx:].strip()
-                        break
-                if conclusion:
-                    break
+        """生成最终建议"""
+        if not thoughts:
+            return "需要更多信息来分析这个问题。"
         
-        if conclusion:
-            return conclusion
+        # 基于最后的思考步骤生成建议
+        last_thought = thoughts[-1]
         
-        # 如果没有明确结论，生成总结
-        summary_parts = [f"对于问题：{problem}"]
+        if last_thought.next_action:
+            recommendation = f"建议：{last_thought.next_action}"
+        elif understanding["approach"]:
+            recommendation = f"建议采用以下方法：{understanding['approach']}"
+        else:
+            # 基于洞察生成建议
+            if understanding["key_points"]:
+                recommendation = "基于分析，建议关注以下要点：\n"
+                for i, point in enumerate(understanding["key_points"][:3], 1):
+                    recommendation += f"{i}. {point}\n"
+            else:
+                recommendation = "这个问题需要进一步分析，建议先明确具体需求。"
         
-        if understanding["key_points"]:
-            summary_parts.append(f"\n关键点：")
-            for point in understanding["key_points"][:3]:
-                summary_parts.append(f"- {point}")
-        
-        if understanding["approach"]:
-            summary_parts.append(f"\n建议方法：{understanding['approach']}")
-        
-        if understanding["challenges"]:
-            summary_parts.append(f"\n需要注意：")
-            for challenge in understanding["challenges"][:2]:
-                summary_parts.append(f"- {challenge}")
-        
-        summary_parts.append(f"\n经过 {len(thoughts)} 步思考，建议进一步分析具体需求后制定详细方案。")
-        
-        return "\n".join(summary_parts)
+        return recommendation.strip()
