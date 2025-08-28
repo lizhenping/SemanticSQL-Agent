@@ -1,4 +1,4 @@
-"""工具基类（简化版，参考 TRAEAgent）"""
+"""工具基类（无 LangChain 依赖）"""
 
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
@@ -15,6 +15,7 @@ class ToolResult:
     output: str
     error: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
+    execution_time: float = 0.0
 
 
 class Tool(ABC):
@@ -39,6 +40,7 @@ class Tool(ABC):
         
         try:
             logger.info(f"执行工具: {self.name}")
+            logger.debug(f"参数: {kwargs}")
             
             # 执行工具
             result = self.execute(**kwargs)
@@ -54,14 +56,17 @@ class Tool(ABC):
             
             return ToolResult(
                 output=output,
-                metadata={"execution_time": execution_time}
+                metadata=result if isinstance(result, dict) else {"result": result},
+                execution_time=execution_time
             )
             
         except Exception as e:
-            logger.error(f"工具 {self.name} 执行失败: {str(e)}")
+            execution_time = time.time() - start_time
+            logger.error(f"工具 {self.name} 执行失败: {str(e)}", exc_info=True)
             return ToolResult(
                 output="",
-                error=str(e)
+                error=str(e),
+                execution_time=execution_time
             )
     
     def _format_dict_output(self, data: Dict[str, Any]) -> str:
@@ -75,12 +80,3 @@ class Tool(ABC):
             else:
                 lines.append(f"{key}: {value}")
         return "\n".join(lines)
-
-
-class SemanticSQLTool(Tool):
-    """SQL 工具基类，添加数据库和 LLM 支持"""
-    
-    def __init__(self, name: str, description: str, db=None, llm=None):
-        super().__init__(name, description)
-        self.db = db
-        self.llm = llm
