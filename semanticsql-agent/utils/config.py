@@ -1,8 +1,8 @@
-"""统一配置管理（简化版）"""
+"""统一配置管理（基于 trae_agent 的设计优化）"""
 
 import os
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import yaml
 
 
@@ -38,8 +38,46 @@ class LLMConfig:
 
 
 @dataclass
+class AgentConfig:
+    """智能体配置（参考 trae_agent 设计）"""
+    # 模型配置
+    model: LLMConfig = field(default_factory=LLMConfig)
+    
+    # 执行配置
+    max_steps: int = 10
+    verbose: bool = True
+    save_trajectory: bool = True
+    
+    # 工具配置
+    tools: List[str] = field(default_factory=lambda: [
+        "schema_extraction",
+        "domain_analysis",
+        "field_classification",
+        "er_analysis",
+        "sql_generation",
+        "sql_execution",
+        "sql_validation",
+        "sequential_thinking"
+    ])
+    enable_thinking_tool: bool = True
+    enable_reflection: bool = True
+
+
+@dataclass
+class SQLAgentConfig(AgentConfig):
+    """SQL 智能体配置（扩展 AgentConfig）"""
+    # 数据库配置
+    database: DatabaseConfig = field(default_factory=DatabaseConfig)
+    
+    # SQL 特定配置
+    max_query_results: int = 100
+    enable_query_cache: bool = True
+    cache_ttl: int = 3600  # 缓存生存时间（秒）
+
+
+@dataclass
 class Config:
-    """统一配置类"""
+    """统一配置类（向后兼容）"""
     # LLM 配置
     llm: LLMConfig = field(default_factory=LLMConfig)
     
@@ -54,6 +92,18 @@ class Config:
     # 工具配置
     enable_thinking_tool: bool = True
     enable_reflection: bool = True
+    
+    def to_sql_agent_config(self) -> SQLAgentConfig:
+        """转换为 SQL 智能体配置"""
+        return SQLAgentConfig(
+            model=self.llm,
+            database=self.database,
+            max_steps=self.max_steps,
+            verbose=self.verbose,
+            save_trajectory=self.save_trajectory,
+            enable_thinking_tool=self.enable_thinking_tool,
+            enable_reflection=self.enable_reflection
+        )
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Config":
@@ -71,6 +121,34 @@ class Config:
         # 解析其他配置
         for key in ["max_steps", "verbose", "save_trajectory", 
                     "enable_thinking_tool", "enable_reflection"]:
+            if key in data:
+                setattr(config, key, data[key])
+        
+        return config
+    
+    @classmethod
+    def from_sql_agent_dict(cls, data: Dict[str, Any]) -> SQLAgentConfig:
+        """从字典创建 SQL 智能体配置"""
+        config = SQLAgentConfig()
+        
+        # 解析模型配置
+        if "model" in data:
+            config.model = LLMConfig(**data["model"])
+        elif "llm" in data:  # 向后兼容
+            config.model = LLMConfig(**data["llm"])
+        
+        # 解析数据库配置
+        if "database" in data:
+            config.database = DatabaseConfig(**data["database"])
+        
+        # 解析工具配置
+        if "tools" in data:
+            config.tools = data["tools"]
+        
+        # 解析其他配置
+        for key in ["max_steps", "verbose", "save_trajectory", 
+                    "enable_thinking_tool", "enable_reflection",
+                    "max_query_results", "enable_query_cache", "cache_ttl"]:
             if key in data:
                 setattr(config, key, data[key])
         

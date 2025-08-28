@@ -1,0 +1,23 @@
+# 最小化配置示例
+
+agent:
+  # 只配置必要的模型信息
+  model:
+    model: "Qwen/Qwen2.5-32B-Instruct"
+    base_url: "http://localhost:8000/v1"
+    api_key: "sk-xxx"
+  
+  # 数据库配置
+  database:
+    type: "mysql"
+    host: "localhost"
+    port: 3306
+    database: "mydb"
+    username: "user"
+    password: "pass"
+  
+  # 使用精简的工具集
+  tools:
+    - "schema_extraction"
+    - "sql_generation"
+    - "sql_validation"
