@@ -20,7 +20,7 @@ from .agent_basics import (
     AgentState, AgentStepState, AgentStep, AgentExecution,
     AgentError, LLMUsage, LLMResponse, ToolCall, ToolResult
 )
-from .trajectory_recorder import TrajectoryRecorder
+from utils.trajectory_recorder import TrajectoryRecorder
 
 logger = logging.getLogger(__name__)
 

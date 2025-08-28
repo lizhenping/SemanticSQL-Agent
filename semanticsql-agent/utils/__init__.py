@@ -15,6 +15,7 @@ from .output_parsers import (
 )
 
 from .llm_client import create_llm_client
+from .trajectory_recorder import TrajectoryRecorder
 
 __all__ = [
     "SmartJsonOutputParser",
@@ -28,5 +29,6 @@ __all__ = [
     "create_domain_analysis_parser",
     "create_field_classification_parser",
     "create_relationship_parser",
-    "create_llm_client"
+    "create_llm_client",
+    "TrajectoryRecorder"
 ]

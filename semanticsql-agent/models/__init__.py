@@ -1,103 +1,26 @@
-"""数据模型包
+"""模型模块
 
-包含所有 Pydantic 数据模型定义。
+逐步迁移到 utils/types.py 和各工具内部定义。
+保留向后兼容性。
 """
 
-# 从 schemas.py 导出基础模型
-from .schemas import (
-    FieldType,
-    ColumnInfo,
-    TableInfo,
-    DomainAnalysis,
-    SQLValidationResult,
-    QueryExecutionResult,
-    QueryResult
-)
+# 从新位置导入基础类型
+from utils.types import QueryResult, QueryExecutionResult
 
-# 从 analysis_models.py 导出分析相关模型
-from .analysis_models import (
-    # 枚举
-    FieldCategory,
-    RelationshipType,
-    RelationSource,
-    # Schema 提取
-    SchemaExtractionInput,
-    SchemaExtractionOutput,
-    ColumnDetail,
-    TableDetail,
-    ForeignKeyInfo,
-    IndexInfo,
-    # 领域分析
-    DomainAnalysisInput,
-    DomainAnalysisOutput,
-    DomainKnowledge,
-    DomainCharacteristics,
-    # 字段分类
-    FieldClassificationInput,
-    FieldClassificationOutput,
-    FieldClassification,
-    FieldStatistics,
-    TableFieldReport,
-    # ER 分析
-    ERAnalysisInput,
-    ERAnalysisOutput,
-    Relationship,
-    RelationshipGraph,
-    RelationshipPattern,
-    ERAnalysisReport
-)
+# 暂时保留其他模型的导入（将逐步移除）
+from .schemas import *
+from .analysis_models import *
+from .generation_models import *
 
-# 从 generation_models.py 导出生成相关模型
-from .generation_models import (
-    # SQL 生成
-    SQLGenerationInput,
-    SQLGenerationOutput,
-    # SQL 验证
-    SQLValidationType,
-    SQLValidationInput,
-    SQLValidationOutput,
-    ValidationIssue,
-    # SQL 执行
-    SQLExecutionInput,
-    SQLExecutionOutput,
-    # 思考工具
-    ThinkingInput,
-    ThinkingOutput,
-    ThinkingStep
-)
+# 标记为即将废弃
+import warnings
 
-__all__ = [
-    # 基础模型
-    "FieldType",
-    "ColumnInfo",
-    "TableInfo",
-    "DomainAnalysis",
-    "SQLValidationResult",
-    "QueryExecutionResult",
-    "QueryResult",
-    # 分析模型
-    "FieldCategory",
-    "RelationshipType",
-    "RelationSource",
-    "SchemaExtractionInput",
-    "SchemaExtractionOutput",
-    "ColumnDetail",
-    "TableDetail",
-    "ForeignKeyInfo",
-    "IndexInfo",
-    "DomainAnalysisInput",
-    "DomainAnalysisOutput",
-    "DomainKnowledge",
-    "DomainCharacteristics",
-    "FieldClassificationInput",
-    "FieldClassificationOutput",
-    "FieldClassification",
-    "FieldStatistics",
-    "TableFieldReport",
-    "ERAnalysisInput",
-    "ERAnalysisOutput",
-    "Relationship",
-    "RelationshipGraph",
-    "RelationshipPattern",
-    "ERAnalysisReport"
-]
+def _deprecated_models_warning():
+    warnings.warn(
+        "models 目录即将废弃，请使用 utils.types 或在工具内部定义模型",
+        DeprecationWarning,
+        stacklevel=2
+    )
+
+# 在导入时显示警告（开发阶段）
+# _deprecated_models_warning()
