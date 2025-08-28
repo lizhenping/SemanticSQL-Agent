@@ -1,10 +1,8 @@
-"""LLM 客户端 - 支持本地 Qwen 和 tool calling"""
+"""LLM 客户端 - 直接使用 OpenAI SDK"""
 
-import json
 import logging
-import uuid
 from typing import List, Optional, Dict, Any
-import requests
+from openai import OpenAI
 
 from .llm_basics import LLMMessage, LLMResponse, LLMUsage, ToolCall, ToolResult
 
@@ -12,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class LLMClient:
-    """本地 Qwen 模型客户端（支持 tool calling）"""
+    """使用 OpenAI SDK 调用本地 Qwen 模型"""
     
     def __init__(
         self,
@@ -23,10 +21,15 @@ class LLMClient:
         max_tokens: int = 2000
     ):
         self.model = model
-        self.base_url = base_url.rstrip('/')
-        self.api_key = api_key
         self.temperature = temperature
         self.max_tokens = max_tokens
+        
+        # 创建 OpenAI 客户端
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url=base_url
+        )
+        
         self.message_history: List[Dict[str, Any]] = []
     
     def set_message_history(self, messages: List[LLMMessage]):
@@ -39,12 +42,10 @@ class LLMClient:
         tools: Optional[List[Dict[str, Any]]] = None,
         reuse_history: bool = True
     ) -> LLMResponse:
-        """发送聊天请求（支持 tool calling）"""
-        # 转换消息格式
+        """发送聊天请求（使用 OpenAI SDK）"""
+        # 准备消息
         if reuse_history:
-            # 使用历史消息
             formatted_messages = self.message_history.copy()
-            # 添加新消息
             formatted_messages.extend(self._convert_messages(messages))
         else:
             formatted_messages = self._convert_messages(messages)
@@ -52,52 +53,37 @@ class LLMClient:
         # 更新历史
         self.message_history = formatted_messages
         
-        # 构建请求
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}"
-        }
-        
-        data = {
-            "model": self.model,
-            "messages": formatted_messages,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-        }
-        
-        # 如果提供了工具，添加到请求中
-        if tools:
-            data["tools"] = self._format_tools(tools)
-            data["tool_choice"] = "auto"  # 让模型自动决定是否调用工具
-        
-        url = f"{self.base_url}/chat/completions"
-        
         try:
-            logger.debug(f"发送请求到: {url}")
-            logger.debug(f"消息数: {len(formatted_messages)}")
+            # 准备参数
+            kwargs = {
+                "model": self.model,
+                "messages": formatted_messages,
+                "temperature": self.temperature,
+                "max_tokens": self.max_tokens,
+            }
+            
+            # 如果有工具，添加工具定义
             if tools:
-                logger.debug(f"工具数: {len(tools)}")
+                kwargs["tools"] = tools
+                kwargs["tool_choice"] = "auto"
             
-            response = requests.post(url, headers=headers, json=data, timeout=60)
-            response.raise_for_status()
+            # 调用 OpenAI API
+            response = self.client.chat.completions.create(**kwargs)
             
-            result = response.json()
-            return self._parse_response(result)
+            # 解析响应
+            return self._parse_response(response)
             
-        except requests.exceptions.RequestException as e:
+        except Exception as e:
             logger.error(f"LLM 请求失败: {e}")
             raise RuntimeError(f"LLM 请求失败: {e}")
-        except Exception as e:
-            logger.error(f"处理响应失败: {e}")
-            raise RuntimeError(f"处理响应失败: {e}")
     
     def _convert_messages(self, messages: List[LLMMessage]) -> List[Dict[str, Any]]:
-        """转换消息格式为 OpenAI 格式"""
+        """转换消息格式"""
         formatted = []
         
         for msg in messages:
             if msg.tool_call:
-                # 工具调用消息（assistant 发起的）
+                # 工具调用消息
                 formatted.append({
                     "role": "assistant",
                     "content": None,
@@ -106,7 +92,7 @@ class LLMClient:
                         "type": "function",
                         "function": {
                             "name": msg.tool_call.name,
-                            "arguments": json.dumps(msg.tool_call.arguments)
+                            "arguments": str(msg.tool_call.arguments)
                         }
                     }]
                 })
@@ -116,7 +102,7 @@ class LLMClient:
                     "role": "tool",
                     "tool_call_id": msg.tool_result.call_id,
                     "name": msg.tool_result.name,
-                    "content": msg.tool_result.result or msg.tool_result.error or "No result"
+                    "content": msg.tool_result.result or msg.tool_result.error or ""
                 })
             else:
                 # 普通消息
@@ -127,86 +113,56 @@ class LLMClient:
         
         return formatted
     
-    def _format_tools(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """格式化工具定义为 OpenAI 格式"""
-        formatted_tools = []
-        
-        for tool in tools:
-            formatted_tool = {
-                "type": "function",
-                "function": {
-                    "name": tool.get("name"),
-                    "description": tool.get("description"),
-                    "parameters": tool.get("parameters", {
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                    })
-                }
-            }
-            formatted_tools.append(formatted_tool)
-        
-        return formatted_tools
-    
-    def _parse_response(self, result: Dict[str, Any]) -> LLMResponse:
-        """解析 API 响应"""
-        choice = result["choices"][0]
-        message = choice["message"]
+    def _parse_response(self, response) -> LLMResponse:
+        """解析 OpenAI SDK 响应"""
+        choice = response.choices[0]
+        message = choice.message
         
         # 解析内容
-        content = message.get("content", "")
+        content = message.content or ""
         
         # 解析 tool calls
         tool_calls = None
-        if "tool_calls" in message and message["tool_calls"]:
+        if message.tool_calls:
             tool_calls = []
-            for tc in message["tool_calls"]:
-                # 解析参数
-                try:
-                    arguments = json.loads(tc["function"]["arguments"])
-                except json.JSONDecodeError:
-                    arguments = {}
-                
+            for tc in message.tool_calls:
                 tool_call = ToolCall(
-                    name=tc["function"]["name"],
-                    call_id=tc.get("id", str(uuid.uuid4())),
-                    arguments=arguments
+                    name=tc.function.name,
+                    call_id=tc.id,
+                    arguments=eval(tc.function.arguments)  # 解析 JSON 字符串
                 )
                 tool_calls.append(tool_call)
                 
-                # 如果有工具调用，content 可能为空
                 if not content:
                     content = f"[调用工具: {tool_call.name}]"
         
-        # 解析 token 使用
+        # 解析 usage
         usage = None
-        if "usage" in result:
+        if response.usage:
             usage = LLMUsage(
-                input_tokens=result["usage"].get("prompt_tokens", 0),
-                output_tokens=result["usage"].get("completion_tokens", 0),
-                total_tokens=result["usage"].get("total_tokens", 0)
+                input_tokens=response.usage.prompt_tokens,
+                output_tokens=response.usage.completion_tokens,
+                total_tokens=response.usage.total_tokens
             )
         
-        # 更新消息历史（添加 assistant 的回复）
+        # 更新消息历史
         if tool_calls:
-            # 有工具调用
             self.message_history.append({
                 "role": "assistant",
                 "content": None,
                 "tool_calls": [
                     {
-                        "id": tc.call_id,
-                        "type": "function", 
+                        "id": tc.id,
+                        "type": "function",
                         "function": {
-                            "name": tc.name,
-                            "arguments": json.dumps(tc.arguments)
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments
                         }
                     }
-                    for tc in tool_calls
+                    for tc in message.tool_calls
                 ]
             })
         else:
-            # 普通回复
             self.message_history.append({
                 "role": "assistant",
                 "content": content
@@ -215,13 +171,13 @@ class LLMClient:
         return LLMResponse(
             content=content,
             usage=usage,
-            model=result.get("model", self.model),
-            finish_reason=choice.get("finish_reason"),
+            model=response.model,
+            finish_reason=choice.finish_reason,
             tool_calls=tool_calls
         )
     
     def complete(self, prompt: str, system_prompt: Optional[str] = None) -> str:
-        """简单的文本补全接口（不支持 tool calling）"""
+        """简单的文本补全接口"""
         messages = []
         if system_prompt:
             messages.append(LLMMessage(role="system", content=system_prompt))

@@ -1,0 +1,15 @@
+# SemanticSQL-Agent 依赖
+
+# 核心依赖
+openai>=1.0.0          # OpenAI SDK（用于调用 vLLM）
+requests>=2.31.0       # HTTP 请求
+pyyaml>=6.0           # YAML 配置文件
+click>=8.1.0          # 命令行接口
+rich>=13.0.0          # Rich 文本显示（可选）
+
+# 数据库驱动（根据需要选择）
+pymysql>=1.1.0        # MySQL 驱动
+# psycopg2>=2.9.0     # PostgreSQL 驱动
+
+# 日志
+python-logging>=0.4.9.6
