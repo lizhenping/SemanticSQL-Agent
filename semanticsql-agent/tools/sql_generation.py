@@ -1,19 +1,11 @@
 """SQL 生成工具"""
 
-from tools.base import BaseSemanticSQLTool, ToolExecResult, ToolParameter
+from dataclasses import dataclass
 from typing import Dict, Any, Optional, List, Union
-from models.generation_models import (
-    SQLGenerationInput,
-    SQLGenerationOutput
-)
-from models.analysis_models import (
-    SchemaExtractionOutput,
-    DomainAnalysisOutput,
-    FieldClassificationOutput,
-    ERAnalysisOutput
-)
 import logging
 import re
+
+from .base import BaseSemanticSQLTool, ToolExecResult, ToolParameter
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +18,6 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         "基于用户查询和数据库分析结果生成 SQL 语句。"
         "会考虑表结构、字段类型、实体关系等信息生成准确的查询。"
     )
-    args_schema = SQLGenerationInput
     
     def _init_tool(self) -> None:
         """初始化工具"""
@@ -124,9 +115,10 @@ class SQLGenerationTool(BaseSemanticSQLTool):
             return "无数据库结构信息"
         
         lines = []
-        tables = schema_info.get("tables", {})
+        tables = schema_info.get("tables", [])
         
-        for table_name, table_info in tables.items():
+        for table_info in tables:
+            table_name = table_info.get("name", "unknown")
             lines.append(f"\n表: {table_name}")
             
             # 添加行数信息
@@ -138,7 +130,7 @@ class SQLGenerationTool(BaseSemanticSQLTool):
             if columns:
                 lines.append("  列:")
                 for col in columns[:10]:  # 限制显示数量
-                    col_line = f"    - {col['name']}: {col['type']}"
+                    col_line = f"    - {col['name']}: {col['data_type']}"
                     if col.get("comment"):
                         col_line += f" -- {col['comment']}"
                     lines.append(col_line)
@@ -199,18 +191,16 @@ class SQLGenerationTool(BaseSemanticSQLTool):
             return ""
         
         lines = []
-        relationship_map = relationships.get("relationship_map", {})
+        relationship_list = relationships.get("relationships", [])
         
-        for relation_key, relations in relationship_map.items():
-            if relations:
-                rel = relations[0]  # 取第一个关系
-                if rel.get("type") == "foreign_key":
-                    lines.append(
-                        f"- {rel['from_table']}.{rel['from_column']} -> "
-                        f"{rel['to_table']}.{rel['to_column']}"
-                    )
+        for rel in relationship_list[:5]:  # 限制显示数量
+            if rel.get("type") == "foreign_key":
+                lines.append(
+                    f"- {rel['from_table']}.{rel['from_column']} -> "
+                    f"{rel['to_table']}.{rel['to_column']}"
+                )
         
-        return "\n".join(lines[:5])  # 限制显示数量
+        return "\n".join(lines)
     
     def _extract_sql(self, content: str) -> str:
         """从响应中提取 SQL"""

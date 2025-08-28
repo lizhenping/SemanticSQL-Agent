@@ -1,17 +1,28 @@
 """SQL 执行工具"""
 
-from tools.base import BaseSemanticSQLTool
-from typing import Dict, Any, List
-from models.generation_models import (
-    SQLExecutionInput,
-    SQLExecutionOutput
-)
-from models.schemas import QueryExecutionResult
+from dataclasses import dataclass
+from typing import Dict, Any, List, Optional
 import logging
 import time
-import re
+
+from .base import BaseSemanticSQLTool, ToolExecResult
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class QueryExecutionResult:
+    """查询执行结果"""
+    success: bool
+    sql: str
+    row_count: int = 0
+    rows: List[Dict[str, Any]] = None
+    execution_time: float = 0.0
+    error: Optional[str] = None
+    
+    def __post_init__(self):
+        if self.rows is None:
+            self.rows = []
 
 
 class SQLExecutionTool(BaseSemanticSQLTool):
@@ -20,198 +31,167 @@ class SQLExecutionTool(BaseSemanticSQLTool):
     name = "execute_sql"
     description = (
         "执行 SQL 查询并返回结果。"
-        "会自动限制返回行数，并格式化输出结果。"
+        "只支持 SELECT 查询，会限制返回的行数。"
     )
-    args_schema = SQLExecutionInput
     
     def execute(
         self,
         sql: str,
-        limit: int = 10,
-        format_output: bool = True
+        max_rows: int = 100,
+        timeout: int = 30
     ) -> Dict[str, Any]:
         """执行 SQL"""
+        start_time = time.time()
+        
         # 清理 SQL
         sql = self._clean_sql(sql)
         
-        # 添加 LIMIT 限制
-        sql_with_limit = self._add_limit(sql, limit)
-        
-        # 记录开始时间
-        start_time = time.time()
+        # 验证是否是查询语句
+        if not self._is_select_query(sql):
+            return {
+                "success": False,
+                "error": "只允许执行 SELECT 查询",
+                "sql": sql
+            }
         
         try:
-            # 执行查询
-            result_str = self.db.run(sql_with_limit)
+            # 添加行数限制
+            limited_sql = self._add_limit(sql, max_rows)
             
-            # 计算执行时间
+            # 执行查询
+            logger.info(f"执行 SQL: {limited_sql[:100]}...")
+            result = self.db.run(limited_sql)
+            
+            # 处理结果
+            rows = self._process_result(result)
             execution_time = time.time() - start_time
             
-            # 解析结果
-            rows = self._parse_result(result_str)
+            # 构建返回结果
+            exec_result = {
+                "success": True,
+                "sql": sql,
+                "row_count": len(rows),
+                "rows": rows[:max_rows],  # 确保不超过限制
+                "execution_time": execution_time
+            }
             
-            # 创建执行结果对象
-            execution_result = QueryExecutionResult(
-                success=True,
-                sql=sql_with_limit,
-                rows=rows,
-                row_count=len(rows),
-                execution_time=execution_time
-            )
+            # 如果结果被截断，添加提示
+            if len(rows) >= max_rows:
+                exec_result["note"] = f"结果已限制为前 {max_rows} 行"
             
-            # 格式化输出
-            if format_output:
-                return self._format_execution_result(execution_result)
-            else:
-                return execution_result.dict()
+            logger.info(f"查询成功，返回 {len(rows)} 行，耗时 {execution_time:.2f}秒")
+            
+            return exec_result
             
         except Exception as e:
-            logger.error(f"SQL 执行失败: {str(e)}")
+            execution_time = time.time() - start_time
+            error_msg = str(e)
+            logger.error(f"SQL 执行失败: {error_msg}")
             
-            execution_result = QueryExecutionResult(
-                success=False,
-                sql=sql_with_limit,
-                error=str(e),
-                execution_time=time.time() - start_time
-            )
-            
-            return self._format_execution_error(execution_result)
+            return {
+                "success": False,
+                "sql": sql,
+                "error": error_msg,
+                "execution_time": execution_time
+            }
     
     def _clean_sql(self, sql: str) -> str:
         """清理 SQL 语句"""
-        # 移除 markdown 代码块标记
-        sql = re.sub(r'```sql\s*\n?', '', sql)
-        sql = re.sub(r'```\s*\n?', '', sql)
+        import re
         
-        # 清理空白字符
+        # 移除前后空白
         sql = sql.strip()
         
-        # 移除末尾的分号（如果有）
+        # 移除可能的 markdown 代码块标记
+        sql = re.sub(r'^```sql\s*', '', sql)
+        sql = re.sub(r'\s*```$', '', sql)
+        
+        # 移除末尾的分号（某些数据库驱动不支持）
         sql = sql.rstrip(';')
         
         return sql
     
-    def _add_limit(self, sql: str, limit: int) -> str:
-        """添加 LIMIT 限制"""
+    def _is_select_query(self, sql: str) -> bool:
+        """检查是否是 SELECT 查询"""
+        sql_upper = sql.upper().strip()
+        
+        # 允许的查询类型
+        allowed_starts = ['SELECT', 'WITH', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN']
+        
+        return any(sql_upper.startswith(start) for start in allowed_starts)
+    
+    def _add_limit(self, sql: str, max_rows: int) -> str:
+        """为 SQL 添加 LIMIT 子句"""
+        import re
+        
         sql_upper = sql.upper()
         
-        # 检查是否已有 LIMIT
+        # 如果已经有 LIMIT，不再添加
         if 'LIMIT' in sql_upper:
-            # 检查现有 LIMIT 值
-            limit_match = re.search(r'LIMIT\s+(\d+)', sql_upper)
-            if limit_match:
-                existing_limit = int(limit_match.group(1))
-                if existing_limit > limit:
-                    # 替换为更小的限制
-                    sql = re.sub(r'LIMIT\s+\d+', f'LIMIT {limit}', sql, flags=re.IGNORECASE)
+            return sql
+        
+        # 对于某些特殊查询，不添加 LIMIT
+        if any(keyword in sql_upper for keyword in ['SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN']):
             return sql
         
         # 添加 LIMIT
-        # 检查是否有 ORDER BY，如果有，加在其后
-        if 'ORDER BY' in sql_upper:
-            # 找到 ORDER BY 子句的结束位置
-            # 简单处理：假设 ORDER BY 是最后的子句
-            sql = f"{sql} LIMIT {limit}"
-        else:
-            sql = f"{sql} LIMIT {limit}"
+        # 注意：不同数据库的语法可能不同
+        # MySQL, PostgreSQL, SQLite: LIMIT n
+        # SQL Server: TOP n
+        # Oracle: ROWNUM <= n
         
-        return sql
+        # 这里假设使用标准的 LIMIT 语法
+        return f"{sql} LIMIT {max_rows}"
     
-    def _parse_result(self, result_str: str) -> List[Dict[str, Any]]:
-        """解析查询结果"""
-        if not result_str:
-            return []
-        
-        try:
-            # 尝试使用 ast.literal_eval 解析
-            import ast
-            result = ast.literal_eval(result_str)
-            
-            if isinstance(result, list):
-                # 如果是元组列表，需要转换为字典列表
-                if result and isinstance(result[0], tuple):
-                    # 需要获取列名
-                    # 这是一个简化处理，实际应该从查询中提取列名
-                    return [
-                        {f"col_{i}": value for i, value in enumerate(row)}
-                        for row in result
-                    ]
-                return result
-            else:
-                return [result]
-                
-        except (ValueError, SyntaxError):
-            # 如果解析失败，尝试其他方法
-            logger.warning("无法使用 literal_eval 解析结果，尝试其他方法")
-            
-            # 尝试简单的文本解析
-            lines = result_str.strip().split('\n')
-            if lines:
-                # 假设第一行是列名
-                if len(lines) > 1 and '|' in lines[0]:
-                    # 表格格式
-                    return self._parse_table_format(lines)
-                else:
-                    # 简单的行格式
-                    return [{"result": line} for line in lines if line]
-            
-            return []
-    
-    def _parse_table_format(self, lines: List[str]) -> List[Dict[str, Any]]:
-        """解析表格格式的结果"""
+    def _process_result(self, result: Any) -> List[Dict[str, Any]]:
+        """处理查询结果，转换为统一格式"""
         rows = []
         
-        # 查找列名行
-        header_line = None
-        for i, line in enumerate(lines):
-            if '|' in line and not line.strip().startswith('-'):
-                header_line = i
-                break
+        if result is None:
+            return rows
         
-        if header_line is None:
-            return []
+        # 处理不同类型的返回值
+        if isinstance(result, str):
+            # 字符串结果，尝试解析
+            try:
+                import ast
+                parsed = ast.literal_eval(result)
+                if isinstance(parsed, list):
+                    result = parsed
+                else:
+                    # 单个值，包装为列表
+                    result = [parsed]
+            except:
+                # 无法解析，作为单行结果
+                result = [{"result": result}]
         
-        # 解析列名
-        columns = [col.strip() for col in lines[header_line].split('|') if col.strip()]
+        # 确保结果是列表
+        if not isinstance(result, list):
+            result = [result]
         
-        # 解析数据行
-        for line in lines[header_line + 1:]:
-            if line.strip() and not line.strip().startswith('-'):
-                values = [val.strip() for val in line.split('|') if val.strip()]
-                if len(values) == len(columns):
-                    row = dict(zip(columns, values))
-                    rows.append(row)
+        # 转换每一行为字典
+        for row in result:
+            if isinstance(row, dict):
+                rows.append(row)
+            elif isinstance(row, (list, tuple)):
+                # 如果是列表或元组，需要列名
+                # 这里使用通用列名
+                row_dict = {f"column_{i}": val for i, val in enumerate(row)}
+                rows.append(row_dict)
+            else:
+                # 其他类型，作为单列
+                rows.append({"value": row})
         
         return rows
     
-    def _format_execution_result(self, result: QueryExecutionResult) -> Dict[str, Any]:
-        """格式化执行结果"""
-        output = {
-            "success": True,
-            "sql": result.sql,
-            "execution_time": f"{result.execution_time:.3f} 秒",
-            "row_count": result.row_count,
-            "message": f"查询成功，返回 {result.row_count} 行数据"
-        }
+    def format_result_table(self, exec_result: Dict[str, Any]) -> str:
+        """格式化结果为表格形式（辅助方法）"""
+        if not exec_result.get("success") or not exec_result.get("rows"):
+            return ""
         
-        # 格式化数据预览
-        if result.rows:
-            if result.row_count <= 5:
-                # 显示所有行
-                output["data"] = self._format_rows(result.rows)
-            else:
-                # 显示前几行
-                output["data_preview"] = self._format_rows(result.rows[:3])
-                output["message"] += f"（显示前 3 行）"
-        else:
-            output["data"] = "查询无结果"
-        
-        return output
-    
-    def _format_rows(self, rows: List[Dict[str, Any]]) -> str:
-        """格式化行数据为表格"""
+        rows = exec_result["rows"]
         if not rows:
-            return "无数据"
+            return "查询返回空结果"
         
         # 获取列名
         columns = list(rows[0].keys())
@@ -219,68 +199,41 @@ class SQLExecutionTool(BaseSemanticSQLTool):
         # 计算列宽
         col_widths = {}
         for col in columns:
-            # 列名长度
+            # 列名的宽度
             col_widths[col] = len(str(col))
-            # 数据最大长度
-            for row in rows:
-                val_len = len(str(row.get(col, '')))
+            # 数据的最大宽度
+            for row in rows[:10]:  # 只检查前10行
+                val_len = len(str(row.get(col, "")))
                 col_widths[col] = max(col_widths[col], val_len)
-        
-        # 限制列宽
-        max_width = 30
-        for col in col_widths:
-            col_widths[col] = min(col_widths[col], max_width)
+            # 限制最大宽度
+            col_widths[col] = min(col_widths[col], 50)
         
         # 构建表格
         lines = []
         
         # 表头
-        header = " | ".join(
-            str(col).ljust(col_widths[col])[:col_widths[col]]
-            for col in columns
-        )
-        lines.append(header)
+        header_parts = []
+        for col in columns:
+            header_parts.append(str(col).ljust(col_widths[col]))
+        lines.append(" | ".join(header_parts))
         
         # 分隔线
-        separator = "-+-".join("-" * col_widths[col] for col in columns)
-        lines.append(separator)
+        sep_parts = []
+        for col in columns:
+            sep_parts.append("-" * col_widths[col])
+        lines.append("-|-".join(sep_parts))
         
         # 数据行
-        for row in rows:
-            row_str = " | ".join(
-                str(row.get(col, '')).ljust(col_widths[col])[:col_widths[col]]
-                for col in columns
-            )
-            lines.append(row_str)
+        for row in rows[:10]:  # 最多显示10行
+            row_parts = []
+            for col in columns:
+                val = str(row.get(col, ""))
+                if len(val) > col_widths[col]:
+                    val = val[:col_widths[col]-3] + "..."
+                row_parts.append(val.ljust(col_widths[col]))
+            lines.append(" | ".join(row_parts))
+        
+        if len(rows) > 10:
+            lines.append(f"... 还有 {len(rows) - 10} 行")
         
         return "\n".join(lines)
-    
-    def _format_execution_error(self, result: QueryExecutionResult) -> Dict[str, Any]:
-        """格式化执行错误"""
-        error_msg = result.error or "未知错误"
-        
-        # 提供错误分析
-        suggestions = []
-        error_lower = error_msg.lower()
-        
-        if "syntax" in error_lower:
-            suggestions.append("SQL 语法错误，请使用 validate_sql 工具检查")
-        elif "table" in error_lower and "exist" in error_lower:
-            suggestions.append("表不存在，请使用 sql_db_list_tables 查看可用表")
-        elif "column" in error_lower:
-            suggestions.append("列名错误，请使用 extract_database_schema 查看表结构")
-        elif "permission" in error_lower or "denied" in error_lower:
-            suggestions.append("权限不足，请确认数据库用户权限")
-        
-        output = {
-            "success": False,
-            "sql": result.sql,
-            "error": error_msg,
-            "execution_time": f"{result.execution_time:.3f} 秒",
-            "message": f"查询执行失败: {error_msg}"
-        }
-        
-        if suggestions:
-            output["suggestions"] = suggestions
-        
-        return output

@@ -11,7 +11,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.prebuilt import create_react_agent
 
 from config import SQLAgentConfig
-from models import QueryResult, QueryExecutionResult
+from utils.shared_types import QueryResult
 from tools import (
     SchemaExtractionTool,
     DomainAnalysisTool,
@@ -137,7 +137,7 @@ class SQLAgent(BaseAgent):
         # 成功执行了 SQL
         if "execution_result" in self._sql_context:
             result = self._sql_context["execution_result"]
-            if isinstance(result, QueryExecutionResult) and result.success:
+            if isinstance(result, dict) and result.get("success"):
                 return True
         
         # 生成了 SQL 但用户只要求生成
@@ -163,10 +163,10 @@ class SQLAgent(BaseAgent):
         if not exec_result:
             return None
         
-        if isinstance(exec_result, QueryExecutionResult) and exec_result.success:
-            return f"查询执行成功，返回 {exec_result.row_count} 条结果。"
+        if isinstance(exec_result, dict) and exec_result.get("success"):
+            return f"查询执行成功，返回 {exec_result.get('row_count', 0)} 条结果。"
         else:
-            return f"查询执行失败: {getattr(exec_result, 'error', '未知错误')}"
+            return f"查询执行失败: {exec_result.get('error', '未知错误') if isinstance(exec_result, dict) else '未知错误'}"
     
     def reflect_on_results(self, tool_results: List[ToolResult]) -> Optional[str]:
         """SQL 特定的反思"""
