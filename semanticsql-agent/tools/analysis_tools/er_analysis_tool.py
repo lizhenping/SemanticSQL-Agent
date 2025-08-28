@@ -50,20 +50,34 @@ class ERAnalysisTool(BaseSemanticSQLTool):
     
     def execute(
         self,
-        schema_info: Dict[str, Any],
-        domain_knowledge: Optional[Dict[str, Any]] = None,
-        field_classifications: Optional[Dict[str, Any]] = None,
+        schema_info: SchemaExtractionOutput,
+        domain_knowledge: Optional[DomainAnalysisOutput] = None,
+        field_classifications: Optional[FieldClassificationOutput] = None,
         analyze_implicit: bool = True
-    ) -> Dict[str, Any]:
+    ) -> ERAnalysisOutput:
         """执行实体关系分析"""
         logger.info("开始实体关系分析")
         
-        tables = schema_info.get("tables", [])
+        tables = schema_info.tables
         if not tables:
-            return {
-                "success": False,
-                "error": "未提供表信息"
-            }
+            return ERAnalysisOutput(
+                success=False,
+                relationships={},
+                relationship_graph=RelationshipGraph(
+                    nodes=[],
+                    edges=[],
+                    node_degrees={},
+                    core_nodes=[]
+                ),
+                patterns=RelationshipPattern(),
+                report=ERAnalysisReport(
+                    summary={},
+                    key_findings=[],
+                    recommendations=[]
+                ),
+                statistics={},
+                error="未提供表信息"
+            )
         
         # 分析各种类型的关系
         relationships = {
@@ -114,36 +128,36 @@ class ERAnalysisTool(BaseSemanticSQLTool):
             tables
         )
         
-        return {
-            "success": True,
-            "relationships": relationships,
-            "relationship_graph": relationship_graph,
-            "patterns": patterns,
-            "report": analysis_report,
-            "statistics": self._generate_statistics(relationships)
-        }
+        return ERAnalysisOutput(
+            success=True,
+            relationships=relationships,
+            relationship_graph=relationship_graph,
+            patterns=patterns,
+            report=analysis_report,
+            statistics=self._generate_statistics(relationships)
+        )
     
-    def _extract_explicit_relations(self, tables: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _extract_explicit_relations(self, tables: List[TableDetail]) -> List[Relationship]:
         """提取显式外键关系"""
         relations = []
         
         for table in tables:
-            for fk in table.get("foreign_keys", []):
-                relation = {
-                    "from_table": table["name"],
-                    "from_column": fk["column"],
-                    "to_table": fk["referenced_table"],
-                    "to_column": fk["referenced_column"],
-                    "constraint_name": fk.get("constraint_name"),
-                    "type": "foreign_key",
-                    "relationship_type": self._infer_relationship_type(
-                        table["name"],
-                        fk["column"],
-                        fk["referenced_table"],
-                        fk["referenced_column"],
+            for fk in table.foreign_keys:
+                relation = Relationship(
+                    from_table=table.name,
+                    from_column=fk.column,
+                    to_table=fk.referenced_table,
+                    to_column=fk.referenced_column,
+                    type=RelationSource.FOREIGN_KEY,
+                    relationship_type=self._infer_relationship_type(
+                        table.name,
+                        fk.column,
+                        fk.referenced_table,
+                        fk.referenced_column,
                         tables
-                    )
-                }
+                    ),
+                    constraint_name=fk.constraint_name
+                )
                 relations.append(relation)
         
         return relations
@@ -154,59 +168,56 @@ class ERAnalysisTool(BaseSemanticSQLTool):
         from_column: str,
         to_table: str,
         to_column: str,
-        tables: List[Dict[str, Any]]
-    ) -> str:
+        tables: List[TableDetail]
+    ) -> RelationshipType:
         """推断关系类型（一对一、一对多、多对多）"""
         # 获取 from_table 的信息
-        from_table_info = next((t for t in tables if t["name"] == from_table), None)
+        from_table_info = next((t for t in tables if t.name == from_table), None)
         if not from_table_info:
-            return "unknown"
+            return RelationshipType.UNKNOWN
         
         # 检查 from_column 是否是主键
-        is_from_pk = from_column in from_table_info.get("primary_keys", [])
+        is_from_pk = from_column in from_table_info.primary_keys
         
         # 检查是否是连接表（多对多）
         if self._is_junction_table(from_table_info):
-            return "many-to-many"
+            return RelationshipType.MANY_TO_MANY
         
         # 如果外键同时是主键，通常是一对一
         if is_from_pk:
-            return "one-to-one"
+            return RelationshipType.ONE_TO_ONE
         
         # 默认是一对多
-        return "one-to-many"
+        return RelationshipType.ONE_TO_MANY
     
-    def _is_junction_table(self, table_info: Dict[str, Any]) -> bool:
+    def _is_junction_table(self, table_info: TableDetail) -> bool:
         """判断是否是连接表（用于多对多关系）"""
         # 连接表的特征：
         # 1. 表名包含下划线（如 user_role）
         # 2. 主键由多个外键组成
         # 3. 除了外键和少量元数据字段外，没有其他业务字段
         
-        table_name = table_info["name"]
+        table_name = table_info.name
         
         # 检查表名
         if "_" not in table_name or table_name.count("_") != 1:
             return False
         
         # 检查外键数量
-        foreign_keys = table_info.get("foreign_keys", [])
-        if len(foreign_keys) < 2:
+        if len(table_info.foreign_keys) < 2:
             return False
         
         # 检查主键
-        primary_keys = table_info.get("primary_keys", [])
-        if len(primary_keys) < 2:
+        if len(table_info.primary_keys) < 2:
             return False
         
         # 检查列数（连接表通常列数较少）
-        columns = table_info.get("columns", [])
         non_meta_columns = [
-            col for col in columns
-            if not any(kw in col["name"].lower() for kw in ["created", "updated", "id"])
+            col for col in table_info.columns
+            if not any(kw in col.name.lower() for kw in ["created", "updated", "id"])
         ]
         
-        if len(non_meta_columns) > len(foreign_keys) + 2:
+        if len(non_meta_columns) > len(table_info.foreign_keys) + 2:
             return False
         
         return True
@@ -577,8 +588,8 @@ class ERAnalysisTool(BaseSemanticSQLTool):
     
     def _build_relationship_graph(
         self,
-        relationships: Dict[str, List[Dict[str, Any]]]
-    ) -> Dict[str, Any]:
+        relationships: Dict[str, List[Relationship]]
+    ) -> RelationshipGraph:
         """构建关系图谱"""
         # 节点（表）
         nodes = set()
@@ -587,8 +598,8 @@ class ERAnalysisTool(BaseSemanticSQLTool):
         # 处理所有关系
         for rel_type, relations in relationships.items():
             for rel in relations:
-                from_table = rel["from_table"]
-                to_table = rel.get("to_table")
+                from_table = rel.from_table
+                to_table = rel.to_table
                 
                 nodes.add(from_table)
                 if to_table:
@@ -598,9 +609,9 @@ class ERAnalysisTool(BaseSemanticSQLTool):
                         "from": from_table,
                         "to": to_table,
                         "type": rel_type,
-                        "relationship_type": rel.get("relationship_type", "unknown"),
+                        "relationship_type": rel.relationship_type.value,
                         "label": self._create_edge_label(rel),
-                        "confidence": rel.get("confidence", 1.0)
+                        "confidence": rel.confidence
                     }
                     edges.append(edge)
         
@@ -616,27 +627,27 @@ class ERAnalysisTool(BaseSemanticSQLTool):
             if degree >= 3
         ]
         
-        return {
-            "nodes": list(nodes),
-            "edges": edges,
-            "node_degrees": node_degrees,
-            "core_nodes": core_nodes
-        }
+        return RelationshipGraph(
+            nodes=list(nodes),
+            edges=edges,
+            node_degrees=node_degrees,
+            core_nodes=core_nodes
+        )
     
-    def _create_edge_label(self, relation: Dict[str, Any]) -> str:
+    def _create_edge_label(self, relation: Relationship) -> str:
         """创建边的标签"""
-        if relation.get("from_column") and relation.get("to_column"):
-            return f"{relation['from_column']} -> {relation['to_column']}"
-        elif relation.get("pattern"):
-            return relation["pattern"]
+        if relation.from_column and relation.to_column:
+            return f"{relation.from_column} -> {relation.to_column}"
+        elif hasattr(relation, "description") and relation.description:
+            return relation.description
         else:
-            return relation.get("relationship_type", "related")
+            return relation.relationship_type.value
     
     def _identify_relationship_patterns(
         self,
-        graph: Dict[str, Any],
-        tables: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+        graph: RelationshipGraph,
+        tables: List[TableDetail]
+    ) -> RelationshipPattern:
         """识别关系模式"""
         patterns = {
             "star_schema": None,
@@ -647,9 +658,9 @@ class ERAnalysisTool(BaseSemanticSQLTool):
         }
         
         # 识别星型模式（一个中心表被多个维度表引用）
-        for node in graph["core_nodes"]:
+        for node in graph.core_nodes:
             incoming_edges = [
-                e for e in graph["edges"]
+                e for e in graph.edges
                 if e["to"] == node and e["relationship_type"] == "many-to-one"
             ]
             if len(incoming_edges) >= 3:
@@ -660,42 +671,41 @@ class ERAnalysisTool(BaseSemanticSQLTool):
                 break
         
         # 识别连接表
-        table_map = {t["name"]: t for t in tables}
         for table in tables:
             if self._is_junction_table(table):
-                patterns["junction_tables"].append(table["name"])
+                patterns["junction_tables"].append(table.name)
         
         # 识别孤立表
         connected_tables = set()
-        for edge in graph["edges"]:
+        for edge in graph.edges:
             connected_tables.add(edge["from"])
             connected_tables.add(edge["to"])
         
         patterns["isolated_tables"] = [
-            t["name"] for t in tables
-            if t["name"] not in connected_tables
+            t.name for t in tables
+            if t.name not in connected_tables
         ]
         
         # 识别表簇（强连接的表组）
         patterns["table_clusters"] = self._find_table_clusters(graph)
         
-        return patterns
+        return RelationshipPattern(**patterns)
     
-    def _find_table_clusters(self, graph: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _find_table_clusters(self, graph: RelationshipGraph) -> List[Dict[str, Any]]:
         """查找表簇（强连接的表组）"""
         # 简单的连通分量算法
         adjacency = {}
-        for node in graph["nodes"]:
+        for node in graph.nodes:
             adjacency[node] = set()
         
-        for edge in graph["edges"]:
+        for edge in graph.edges:
             adjacency[edge["from"]].add(edge["to"])
             adjacency[edge["to"]].add(edge["from"])
         
         visited = set()
         clusters = []
         
-        for node in graph["nodes"]:
+        for node in graph.nodes:
             if node not in visited:
                 cluster = []
                 stack = [node]
@@ -717,11 +727,11 @@ class ERAnalysisTool(BaseSemanticSQLTool):
     
     def _generate_analysis_report(
         self,
-        relationships: Dict[str, List[Dict[str, Any]]],
-        graph: Dict[str, Any],
-        patterns: Dict[str, Any],
-        tables: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+        relationships: Dict[str, List[Relationship]],
+        graph: RelationshipGraph,
+        patterns: RelationshipPattern,
+        tables: List[TableDetail]
+    ) -> ERAnalysisReport:
         """生成分析报告"""
         report = {
             "summary": {
@@ -738,24 +748,24 @@ class ERAnalysisTool(BaseSemanticSQLTool):
         }
         
         # 关键发现
-        if patterns["star_schema"]:
+        if patterns.star_schema:
             report["key_findings"].append(
-                f"发现星型模式：{patterns['star_schema']['fact_table']} 作为事实表"
+                f"发现星型模式：{patterns.star_schema['fact_table']} 作为事实表"
             )
         
-        if patterns["junction_tables"]:
+        if patterns.junction_tables:
             report["key_findings"].append(
-                f"发现 {len(patterns['junction_tables'])} 个多对多关系连接表"
+                f"发现 {len(patterns.junction_tables)} 个多对多关系连接表"
             )
         
-        if graph["core_nodes"]:
+        if graph.core_nodes:
             report["key_findings"].append(
-                f"核心实体表：{', '.join(graph['core_nodes'][:5])}"
+                f"核心实体表：{', '.join(graph.core_nodes[:5])}"
             )
         
-        if patterns["isolated_tables"]:
+        if patterns.isolated_tables:
             report["key_findings"].append(
-                f"发现 {len(patterns['isolated_tables'])} 个孤立表（无关联）"
+                f"发现 {len(patterns.isolated_tables)} 个孤立表（无关联）"
             )
         
         # 建议
@@ -764,19 +774,19 @@ class ERAnalysisTool(BaseSemanticSQLTool):
                 "建议检查隐式关系，考虑添加外键约束以确保数据完整性"
             )
         
-        if patterns["isolated_tables"]:
+        if patterns.isolated_tables:
             report["recommendations"].append(
-                f"建议检查孤立表 {patterns['isolated_tables'][:3]} 的用途"
+                f"建议检查孤立表 {patterns.isolated_tables[:3]} 的用途"
             )
         
-        if len(tables) > 50 and not patterns["table_clusters"]:
+        if len(tables) > 50 and not patterns.table_clusters:
             report["recommendations"].append(
                 "数据库表较多但缺乏明显的模块化，建议考虑模式重构"
             )
         
-        return report
+        return ERAnalysisReport(**report)
     
-    def _generate_statistics(self, relationships: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
+    def _generate_statistics(self, relationships: Dict[str, List[Relationship]]) -> Dict[str, Any]:
         """生成统计信息"""
         stats = {
             "by_type": {},
@@ -794,13 +804,13 @@ class ERAnalysisTool(BaseSemanticSQLTool):
             
             # 按关系类型统计
             for rel in relations:
-                rel_type = rel.get("relationship_type", "unknown")
-                if rel_type not in stats["by_relationship_type"]:
-                    stats["by_relationship_type"][rel_type] = 0
-                stats["by_relationship_type"][rel_type] += 1
+                rel_type_str = rel.relationship_type.value
+                if rel_type_str not in stats["by_relationship_type"]:
+                    stats["by_relationship_type"][rel_type_str] = 0
+                stats["by_relationship_type"][rel_type_str] += 1
                 
                 # 置信度分布
-                confidence = rel.get("confidence", 1.0)
+                confidence = rel.confidence
                 if confidence >= 0.8:
                     stats["confidence_distribution"]["high"] += 1
                 elif confidence >= 0.5:
