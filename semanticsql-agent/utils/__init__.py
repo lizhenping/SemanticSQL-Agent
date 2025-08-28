@@ -14,6 +14,8 @@ from .output_parsers import (
     create_relationship_parser
 )
 
+from .llm_client import create_llm_client
+
 __all__ = [
     "SmartJsonOutputParser",
     "SmartPydanticOutputParser",
@@ -25,5 +27,6 @@ __all__ = [
     "get_pydantic_format_instruction",
     "create_domain_analysis_parser",
     "create_field_classification_parser",
-    "create_relationship_parser"
+    "create_relationship_parser",
+    "create_llm_client"
 ]

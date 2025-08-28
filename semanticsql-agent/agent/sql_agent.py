@@ -1,296 +1,286 @@
-"""基于 LangChain 的 SQL Agent"""
+"""SQL 智能体
 
-from langchain.agents import create_react_agent, AgentExecutor
-from langchain_community.utilities import SQLDatabase
-from langchain_community.agent_toolkits import SQLDatabaseToolkit
-from langchain.chat_models import init_chat_model
-from langchain_core.prompts import PromptTemplate
-from typing import Dict, Any, List, Optional
+基于 BaseAgent 实现的 SQL 查询智能体。
+"""
+
 import logging
-import re
-from pathlib import Path
+from typing import List, Optional, Dict, Any
 
-from config import Settings, DatabaseConfig
-from tools import create_all_tools
+from langchain_community.utilities import SQLDatabase
+
+from config import SQLAgentConfig
+from models import QueryResult
+from tools import (
+    SchemaExtractionTool,
+    DomainAnalysisTool,
+    FieldClassificationTool,
+    ERAnalysisTool,
+    SQLGenerationTool,
+    SQLValidationTool,
+    SQLExecutionTool,
+    SequentialThinkingTool
+)
 from prompts.manager import PromptManager
-from models.schemas import QueryResult
-from .callbacks import TrajectoryCallback
+
+from .base_agent import BaseAgent
+from .agent_state import AgentStep, AgentExecution
 
 logger = logging.getLogger(__name__)
 
 
-class SemanticSQLAgent:
-    """SQL 智能体"""
+class SQLAgent(BaseAgent):
+    """SQL 查询智能体
     
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
-        """初始化智能体
+    专门用于处理自然语言到 SQL 的转换和执行。
+    """
+    
+    def __init__(self, config: SQLAgentConfig):
+        """初始化 SQL 智能体
         
         Args:
-            config: 配置字典，如果为 None 则使用默认配置
+            config: SQL 智能体配置
         """
-        # 加载配置
-        if config is None:
-            self.settings = Settings()
-            self.db_config = DatabaseConfig()
-        else:
-            self.settings = Settings(**config.get("settings", {}))
-            self.db_config = DatabaseConfig(**config.get("database", {}))
+        super().__init__(config)
+        self.sql_config = config
         
-        logger.info("初始化 SemanticSQL Agent...")
-        
-        # 初始化组件
+        # 初始化数据库连接
         self.db = self._init_database()
-        self.llm = self._init_llm()
-        self.tools = self._create_tools()
-        self.trajectory_callback = TrajectoryCallback()
-        self.agent_executor = self._create_agent_executor()
         
-        logger.info("SemanticSQL Agent 初始化完成")
+        # 初始化提示管理器
+        self.prompt_manager = PromptManager(template_dir=config.prompt_templates_dir)
+        
+        # 创建工具
+        self.tools = self._create_tools()
+        
+        logger.info("SQL 智能体初始化完成")
     
     def _init_database(self) -> SQLDatabase:
         """初始化数据库连接"""
-        logger.info(f"连接数据库: {self.db_config.host}:{self.db_config.port}/{self.db_config.database}")
-        
-        # 创建 SQLDatabase 实例
-        db = SQLDatabase.from_uri(
-            self.db_config.connection_uri,
-            engine_kwargs=self.db_config.get_engine_kwargs()
-        )
-        
-        # 测试连接
         try:
-            tables = db.get_usable_table_names()
-            logger.info(f"数据库连接成功，找到 {len(tables)} 个表")
+            db = SQLDatabase.from_uri(
+                self.sql_config.database.connection_string,
+                include_tables=self.sql_config.database.include_tables,
+                sample_rows_in_table_info=self.sql_config.database.sample_rows
+            )
+            logger.info(f"数据库连接成功: {self.sql_config.database.dialect}")
+            return db
         except Exception as e:
             logger.error(f"数据库连接失败: {e}")
             raise
-        
-        return db
     
-    def _init_llm(self):
-        """初始化 LLM"""
-        model_config = self.settings.model
-        logger.info(f"初始化 LLM: {model_config.name}")
+    def _create_tools(self) -> List[Any]:
+        """创建工具集
         
-        # 对于 vLLM 或 OpenAI 兼容的服务
-        if model_config.provider == "openai" or "vllm" in str(model_config.base_url):
-            from langchain_openai import ChatOpenAI
-            
-            return ChatOpenAI(
-                model=model_config.name,
-                openai_api_key=model_config.api_key or "not-needed",
-                openai_api_base=model_config.base_url,
-                temperature=model_config.temperature,
-                max_tokens=model_config.max_tokens
-            )
-        else:
-            # 使用通用的 init_chat_model
-            return init_chat_model(
-                model_config.name,
-                model_provider=model_config.provider,
-                api_key=model_config.api_key,
-                base_url=model_config.base_url,
-                temperature=model_config.temperature,
-                max_tokens=model_config.max_tokens
-            )
-    
-    def _create_tools(self) -> List:
-        """创建工具集"""
-        logger.info("创建工具集...")
-        
+        Returns:
+            工具列表
+        """
         tools = []
-        
-        # 1. SQL 基础工具包
-        toolkit = SQLDatabaseToolkit(db=self.db, llm=self.llm)
-        sql_tools = toolkit.get_tools()
-        tools.extend(sql_tools)
-        logger.info(f"添加了 {len(sql_tools)} 个 SQL 基础工具")
-        
-        # 2. 自定义工具
-        config_dict = {
-            "agent": {
-                "enable_thinking": self.settings.agent.enable_thinking
-            }
+        tool_mapping = {
+            "extract_database_schema": lambda: SchemaExtractionTool(db=self.db),
+            "analyze_business_domain": lambda: DomainAnalysisTool(db=self.db, llm=self.llm),
+            "classify_table_fields": lambda: FieldClassificationTool(db=self.db, llm=self.llm),
+            "analyze_entity_relationships": lambda: ERAnalysisTool(db=self.db, llm=self.llm),
+            "generate_sql": lambda: SQLGenerationTool(db=self.db, llm=self.llm, prompt_manager=self.prompt_manager),
+            "validate_sql": lambda: SQLValidationTool(db=self.db),
+            "execute_sql": lambda: SQLExecutionTool(db=self.db),
+            "deep_thinking": lambda: SequentialThinkingTool(llm=self.llm)
         }
-        custom_tools = create_all_tools(self.db, self.llm, config_dict)
-        tools.extend(custom_tools)
-        logger.info(f"添加了 {len(custom_tools)} 个自定义工具")
         
-        # 记录所有工具
-        logger.info(f"工具集创建完成，共 {len(tools)} 个工具:")
-        for tool in tools:
-            logger.info(f"  - {tool.name}: {tool.description[:60]}...")
+        # 根据配置创建工具
+        for tool_name in self.sql_config.tools:
+            if tool_name in tool_mapping:
+                try:
+                    tool = tool_mapping[tool_name]()
+                    tools.append(tool)
+                    logger.debug(f"创建工具: {tool_name}")
+                except Exception as e:
+                    logger.error(f"创建工具 {tool_name} 失败: {e}")
         
+        logger.info(f"创建了 {len(tools)} 个工具")
         return tools
     
-    def _create_agent_executor(self) -> AgentExecutor:
-        """创建智能体执行器"""
-        logger.info("创建智能体执行器...")
-        
-        # 获取系统提示词
-        pm = PromptManager()
-        system_prompt_text = pm.get_system_prompt(
-            "sql_agent",
-            tables=self.db.get_usable_table_names()
-        )
-        
-        # 创建提示词模板
-        system_prompt = PromptTemplate.from_template(system_prompt_text)
-        
-        # 创建 ReAct agent
-        agent = create_react_agent(
-            self.llm,
-            self.tools,
-            system_prompt
-        )
-        
-        # 创建执行器
-        executor = AgentExecutor(
-            agent=agent,
-            tools=self.tools,
-            verbose=self.settings.agent.verbose,
-            max_iterations=self.settings.agent.max_iterations,
-            handle_parsing_errors=True,
-            callbacks=[self.trajectory_callback]
-        )
-        
-        return executor
-    
-    def query(self, question: str) -> QueryResult:
-        """执行查询
+    def create_task(self, query: str, context: Optional[Dict[str, Any]] = None) -> None:
+        """创建新的查询任务
         
         Args:
-            question: 用户的自然语言查询
+            query: 用户的自然语言查询
+            context: 额外的上下文信息
+        """
+        self._task = query
+        self._context.update(**(context or {}))
+        self._messages = []
+        
+        logger.info(f"创建新任务: {query}")
+        
+        # 如果启用了自动分析，检查是否需要进行数据库分析
+        if self.sql_config.auto_analyze:
+            self._check_need_analysis(query)
+    
+    def _check_need_analysis(self, query: str) -> None:
+        """检查是否需要进行数据库分析
+        
+        对于简单查询可以跳过分析阶段，直接生成 SQL。
+        
+        Args:
+            query: 用户查询
+        """
+        # 简单的启发式规则
+        simple_keywords = ["count", "sum", "average", "max", "min", "list", "show", "display"]
+        complex_keywords = ["trend", "compare", "analyze", "relationship", "pattern", "correlation"]
+        
+        query_lower = query.lower()
+        
+        # 检查是否是简单查询
+        is_simple = any(keyword in query_lower for keyword in simple_keywords)
+        is_complex = any(keyword in query_lower for keyword in complex_keywords)
+        
+        # 更新上下文
+        self._context.extra_info["need_analysis"] = is_complex or not is_simple
+        self._context.extra_info["query_complexity"] = "complex" if is_complex else "simple"
+    
+    def _get_system_prompt(self) -> str:
+        """获取系统提示词
+        
+        Returns:
+            系统提示词
+        """
+        # 从模板管理器获取系统提示词
+        return self.prompt_manager.get_prompt(
+            "system/sql_agent",
+            dialect=self.sql_config.database.dialect,
+            database_name=self.db.get_db_info().split()[0] if self.db else "unknown",
+            tools=[tool.name for tool in self.tools]
+        )
+    
+    def _is_task_completed(self, step: AgentStep, execution: AgentExecution) -> bool:
+        """判断任务是否完成
+        
+        Args:
+            step: 当前步骤
+            execution: 执行记录
             
         Returns:
-            QueryResult: 查询结果
+            是否完成
         """
-        logger.info(f"处理查询: {question}")
+        # 如果执行了 SQL 并获得结果，则任务完成
+        if self._context.execution_result and self._context.execution_result.success:
+            return True
         
-        # 重置轨迹记录
-        self.trajectory_callback.reset()
+        # 如果工具明确表示任务完成
+        if step.action and step.action.tool == "task_done":
+            return True
         
-        try:
-            # 执行智能体
-            result = self.agent_executor.invoke({
-                "input": question
-            })
+        # 如果生成了 SQL 但用户只要求生成不要求执行
+        if self._context.generated_sql and "生成" in self._task and "执行" not in self._task:
+            return True
+        
+        return False
+    
+    def _extract_final_result(self, execution: AgentExecution) -> QueryResult:
+        """提取最终结果
+        
+        Args:
+            execution: 执行记录
             
-            # 提取信息
-            sql = self._extract_sql(result)
-            execution_result = self._extract_execution_result()
-            trajectory = self.trajectory_callback.get_trajectory()
+        Returns:
+            查询结果
+        """
+        # 构建查询结果
+        result = QueryResult(
+            success=execution.state == AgentState.COMPLETED,
+            question=self._task,
+            sql=self._context.generated_sql,
+            answer=self._build_answer(),
+            execution_result=self._context.execution_result,
+            error=execution.error,
+            steps=execution.total_steps
+        )
+        
+        return result
+    
+    def _build_answer(self) -> Optional[str]:
+        """构建自然语言回答
+        
+        Returns:
+            回答文本
+        """
+        if not self._context.execution_result:
+            return None
+        
+        # 简单的回答生成
+        exec_result = self._context.execution_result
+        if exec_result.success:
+            answer_parts = []
             
-            # 创建结果对象
-            query_result = QueryResult(
-                success=True,
-                question=question,
-                sql=sql,
-                answer=result.get("output", ""),
-                execution_result=execution_result,
-                steps=len(trajectory.get("tool_calls", []))
-            )
+            # 添加查询描述
+            answer_parts.append(f"查询执行成功，返回 {exec_result.row_count} 条结果。")
             
-            logger.info(f"查询成功，执行了 {query_result.steps} 个步骤")
-            return query_result
+            # 如果结果较少，可以展示
+            if exec_result.row_count > 0 and exec_result.row_count <= 10:
+                answer_parts.append("\n结果如下：")
+                # 格式化结果表格
+                if exec_result.rows:
+                    # 简单的表格格式化
+                    headers = list(exec_result.rows[0].keys())
+                    answer_parts.append(" | ".join(headers))
+                    answer_parts.append("-" * (len(" | ".join(headers))))
+                    for row in exec_result.rows[:10]:
+                        answer_parts.append(" | ".join(str(row.get(h, "")) for h in headers))
             
-        except Exception as e:
-            logger.error(f"查询执行失败: {str(e)}", exc_info=True)
+            return "\n".join(answer_parts)
+        else:
+            return f"查询执行失败: {exec_result.error}"
+    
+    def reflect_on_result(self, result: Any) -> Optional[str]:
+        """对结果进行反思
+        
+        如果启用了反思机制，在 SQL 生成或执行后进行反思。
+        
+        Args:
+            result: 工具执行结果
             
-            # 创建错误结果
+        Returns:
+            反思内容
+        """
+        if not self.sql_config.enable_reflection:
+            return None
+        
+        # 对 SQL 验证失败的结果进行反思
+        if hasattr(result, 'tool') and result.tool == "validate_sql":
+            if not result.success:
+                return f"SQL 验证失败，需要修正: {result.error}"
+        
+        # 对 SQL 执行错误进行反思
+        if hasattr(result, 'tool') and result.tool == "execute_sql":
+            if not result.success:
+                return f"SQL 执行失败，可能需要调整查询: {result.error}"
+        
+        return None
+    
+    async def query(self, question: str, **kwargs) -> QueryResult:
+        """执行查询的便捷方法
+        
+        Args:
+            question: 用户问题
+            **kwargs: 额外参数
+            
+        Returns:
+            查询结果
+        """
+        # 创建任务
+        self.create_task(question, kwargs)
+        
+        # 执行任务
+        execution = await self.execute_task()
+        
+        # 返回结果
+        if execution.final_result and isinstance(execution.final_result, QueryResult):
+            return execution.final_result
+        else:
+            # 构建错误结果
             return QueryResult(
                 success=False,
                 question=question,
-                error=str(e)
+                error=execution.error or "执行失败",
+                steps=execution.total_steps
             )
-    
-    def _extract_sql(self, result: Dict[str, Any]) -> Optional[str]:
-        """从结果中提取 SQL"""
-        output = result.get("output", "")
-        
-        # 1. 从输出中查找 SQL 代码块
-        sql_match = re.search(r'```sql\n(.*?)\n```', output, re.DOTALL)
-        if sql_match:
-            return sql_match.group(1).strip()
-        
-        # 2. 从工具调用历史中查找
-        for call in self.trajectory_callback.trajectory.get("tool_calls", []):
-            if "generate_sql" in call.get("tool", ""):
-                # 从生成工具的输出中提取
-                tool_output = call.get("output", "")
-                sql_match = re.search(r'```sql\n(.*?)\n```', tool_output, re.DOTALL)
-                if sql_match:
-                    return sql_match.group(1).strip()
-            
-            elif "execute_sql" in call.get("tool", ""):
-                # 从执行工具的输入中提取
-                tool_input = call.get("input", "")
-                # 尝试解析输入
-                if "sql" in tool_input:
-                    import json
-                    try:
-                        input_data = json.loads(tool_input)
-                        if isinstance(input_data, dict) and "sql" in input_data:
-                            return input_data["sql"]
-                    except:
-                        pass
-        
-        # 3. 尝试从输出中直接匹配 SQL 语句
-        sql_keywords = ['SELECT', 'WITH']
-        for keyword in sql_keywords:
-            pattern = rf'({keyword}\s+.*?)(?:;|$)'
-            match = re.search(pattern, output, re.IGNORECASE | re.DOTALL)
-            if match:
-                return match.group(1).strip()
-        
-        return None
-    
-    def _extract_execution_result(self) -> Optional[Dict[str, Any]]:
-        """从轨迹中提取执行结果"""
-        # 查找最后一次 SQL 执行的结果
-        for call in reversed(self.trajectory_callback.trajectory.get("tool_calls", [])):
-            if "execute_sql" in call.get("tool", ""):
-                output = call.get("output", "")
-                
-                # 尝试解析结构化结果
-                if "row_count:" in output or "rows:" in output:
-                    result = {}
-                    
-                    # 提取行数
-                    row_count_match = re.search(r'row_count:\s*(\d+)', output)
-                    if row_count_match:
-                        result["row_count"] = int(row_count_match.group(1))
-                    
-                    # 提取执行时间
-                    time_match = re.search(r'execution_time:\s*([\d.]+)', output)
-                    if time_match:
-                        result["execution_time"] = float(time_match.group(1))
-                    
-                    # 提取数据预览
-                    if "data" in output or "preview" in output:
-                        # 简单提取表格部分
-                        lines = output.split('\n')
-                        table_lines = []
-                        in_table = False
-                        
-                        for line in lines:
-                            if '|' in line and not line.strip().startswith('-'):
-                                in_table = True
-                                table_lines.append(line)
-                            elif in_table and line.strip() == '':
-                                break
-                        
-                        if table_lines:
-                            result["preview"] = '\n'.join(table_lines[:5])
-                    
-                    return result if result else None
-        
-        return None
-    
-    def get_tables(self) -> List[str]:
-        """获取所有表名"""
-        return self.db.get_usable_table_names()
-    
-    def get_table_info(self, table_name: str) -> str:
-        """获取表结构信息"""
-        return self.db.get_table_info([table_name])
