@@ -2,20 +2,21 @@
 
 ## 1. 项目概述
 
-### 1.1 项目简介
-SemanticSQL Agent 是一个自然语言转SQL工具，用户输入中文问题，系统自动生成并执行SQL查询。
+### 1.1 项目背景
+SemanticSQL Agent 是一个基于大语言模型（LLM）的自然语言转 SQL 查询智能体。该项目专注于将中文自然语言查询转换为准确的 SQL 语句并执行，为非技术用户提供便捷的数据库查询能力。
 
-### 1.2 核心功能
-- **自然语言理解**：理解中文查询需求
-- **SQL生成**：自动生成正确的SQL语句
-- **查询执行**：连接数据库执行查询并返回结果
-- **多数据库支持**：支持 MySQL、PostgreSQL、SQLite
+### 1.2 设计理念
+- **简单易用**：用户只需输入中文问题，无需了解 SQL 语法
+- **工具化思维**：将 NL2SQL 任务分解为多个专业工具的协同工作
+- **模型兼容**：基于 OpenAI API 标准，完美支持 Qwen 等兼容模型
+- **实用优先**：专注核心功能，避免过度设计
 
-### 1.3 使用场景
-- 非技术人员查询数据库
-- 快速数据统计和分析
-- 数据库结构探索
-- SQL学习辅助工具
+### 1.3 核心特性
+- 支持 Qwen 模型的 OpenAI 兼容 API（包括 Function Calling）
+- 支持多种数据库（MySQL、PostgreSQL、SQLite）
+- 基于 ReAct 模式的智能推理
+- 灵活的 YAML 配置系统
+- 完整的命令行界面
 
 ## 2. 系统架构设计
 
@@ -23,27 +24,25 @@ SemanticSQL Agent 是一个自然语言转SQL工具，用户输入中文问题�
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                      用户接口层                           │
-│                    (CLI Interface)                        │
+│                   (CLI Interface)                        │
 └────────────────────────┬────────────────────────────────┘
                         │
 ┌────────────────────────┴────────────────────────────────┐
 │                     智能体层                              │
 │                  (Agent Layer)                           │
-│  ┌─────────────┐  ┌──────────────┐  ┌───────────────┐  │
-│  │  BaseAgent  │  │  SQLAgent    │  │ SmartSQLAgent │  │
-│  │  (ReAct)    │  │  (SQL专用)    │  │  (智能增强)   │  │
-│  └─────────────┘  └──────────────┘  └───────────────┘  │
+│  ┌─────────────┐  ┌──────────────┐                     │
+│  │  BaseAgent  │  │SmartSQLAgent │                     │
+│  │  (ReAct基类)│  │ (SQL专用实现) │                     │
+│  └─────────────┘  └──────────────┘                     │
 └────────────────────────┬────────────────────────────────┘
                         │
 ┌────────────────────────┴────────────────────────────────┐
 │                     工具层                                │
 │                  (Tools Layer)                           │
 │  ┌────────────┐  ┌──────────────┐  ┌───────────────┐  │
-│  │ 模式提取   │  │  SQL生成      │  │  SQL验证      │  │
+│  │数据库连接   │  │  模式分析     │  │  SQL生成      │  │
 │  ├────────────┤  ├──────────────┤  ├───────────────┤  │
-│  │ 领域分析   │  │  SQL执行      │  │  结果分析     │  │
-│  ├────────────┤  ├──────────────┤  ├───────────────┤  │
-│  │ ER分析     │  │  字段分类     │  │  序列思考     │  │
+│  │SQL执行     │  │  领域分析     │  │  数据分析     │  │
 │  └────────────┘  └──────────────┘  └───────────────┘  │
 └────────────────────────┬────────────────────────────────┘
                         │
@@ -51,8 +50,8 @@ SemanticSQL Agent 是一个自然语言转SQL工具，用户输入中文问题�
 │                    基础设施层                             │
 │               (Infrastructure Layer)                     │
 │  ┌────────────┐  ┌──────────────┐  ┌───────────────┐  │
-│  │ 配置管理   │  │  数据库连接   │  │  LLM客户端    │  │
-│  │ TraeConfig │  │  连接池管理   │  │  API管理      │  │
+│  │ 配置管理   │  │  LLM客户端    │  │  数据库管理   │  │
+│  │TraeConfig  │  │  Qwen支持     │  │  连接池       │  │
 │  └────────────┘  └──────────────┘  └───────────────┘  │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -60,175 +59,264 @@ SemanticSQL Agent 是一个自然语言转SQL工具，用户输入中文问题�
 ### 2.2 核心组件设计
 
 #### 2.2.1 智能体设计 (Agent Design)
-- **BaseAgent**: 实现ReAct模式的基础类
-  - 观察(Observe) → 思考(Think) → 行动(Act) → 反思(Reflect)
-  - 支持工具注册和动态调用
-  - 完整的执行跟踪和日志记录
-  
-- **SQLAgent**: SQL专用智能体
-  - 继承BaseAgent的ReAct能力
-  - 集成SQL相关工具链
-  - 返回结构化的SQLQueryResult
-  
-- **SmartSQLAgent**: 智能增强版本
-  - 多轮推理能力
-  - 自动错误修正
-  - 查询优化建议
+- **BaseAgent**: ReAct 模式基础实现
+  - 观察-思考-行动循环
+  - 工具调用管理
+  - 执行状态跟踪
+  - LLM 交互接口
+
+- **SmartSQLAgent**: SQL 查询专用智能体
+  - 继承 BaseAgent 的 ReAct 能力
+  - 集成 SQL 相关工具链
+  - 返回结构化的查询结果
+  - 智能错误处理
 
 #### 2.2.2 工具系统设计 (Tool System)
-- **统一接口**: 所有工具继承自TraeBaseTool
-  - 标准化的参数定义（ToolParameter）
-  - 一致的输入输出格式
-  - 同步/异步双模式支持
+- **工具基类** (TraeBaseTool)
+  - 标准化的工具接口
+  - 参数定义（ToolParameter）
+  - 统一的执行方法
   
-- **工具分类**:
-  1. **分析工具**: 理解数据库结构和业务逻辑
-  2. **生成工具**: 将自然语言转换为SQL
-  3. **验证工具**: 确保SQL的正确性和安全性
-  4. **执行工具**: 安全执行SQL并处理结果
+- **SQL 工具集**:
+  1. **连接管理**: `connect_database` - 建立数据库连接
+  2. **模式分析**: `analyze_schema` - 分析表结构和关系
+  3. **SQL生成**: `generate_sql` - 将自然语言转换为 SQL
+  4. **查询执行**: `execute_sql` - 执行 SQL 并返回结果
+  5. **领域分析**: `analyze_domain` - 理解业务领域
 
-#### 2.2.3 配置系统设计 (Configuration System)
-- **分层配置**: 支持多级配置覆盖
-  1. 默认配置
-  2. 配置文件（YAML/JSON）
-  3. 环境变量
-  4. 命令行参数
-  
-- **配置模块**:
-  - DatabaseConfig: 数据库连接配置
-  - LLMConfig: 大模型配置
-  - AgentConfig: 智能体行为配置
-  - AppConfig: 应用级配置
+#### 2.2.3 LLM 集成设计
+- **Qwen 模型支持**:
+  - 完全兼容 OpenAI API 格式
+  - 支持 Function Calling（工具调用）
+  - 流式响应支持（可选）
+  - 自定义 base_url 配置
+
+- **Function Calling 实现**:
+  ```python
+  # 工具定义格式
+  {
+      "type": "function",
+      "function": {
+          "name": "execute_sql",
+          "description": "执行SQL查询",
+          "parameters": {
+              "type": "object",
+              "properties": {
+                  "sql": {"type": "string", "description": "要执行的SQL语句"}
+              },
+              "required": ["sql"]
+          }
+      }
+  }
+  ```
 
 ### 2.3 数据流设计
 
 #### 2.3.1 查询处理流程
 ```
-用户输入 → CLI解析 → Agent初始化 → 工具链执行 → 结果返回
-         ↓
-    配置加载 → 数据库连接 → 模式分析 → SQL生成 → 验证执行
+用户输入中文查询
+    ↓
+CLI 接收并解析 → 加载配置 → 初始化 Agent
+    ↓
+连接数据库 → 分析表结构 → 缓存模式信息
+    ↓
+ReAct 执行循环:
+    ├─ Thought: 理解查询需求
+    ├─ Action: 调用合适的工具
+    ├─ Observation: 观察执行结果
+    └─ 继续或完成
+    ↓
+格式化结果 → 返回给用户
 ```
 
-#### 2.3.2 工具调用流程
-1. **模式提取**: 获取数据库结构信息
-2. **领域分析**: 理解业务领域和术语
-3. **ER分析**: 分析实体关系
-4. **SQL生成**: 基于分析结果生成SQL
-5. **SQL验证**: 语法和逻辑验证
-6. **SQL执行**: 安全执行并返回结果
+#### 2.3.2 Function Calling 流程
+```
+Agent 发送消息给 LLM
+    ↓
+LLM 返回 function_call
+    ↓
+解析函数名和参数 → 验证参数合法性
+    ↓
+调用对应工具执行 → 获取执行结果
+    ↓
+将结果作为 function response 发送给 LLM
+    ↓
+LLM 生成最终回复
+```
 
 ## 3. 关键设计决策
 
-### 3.1 同步优先策略
-- 优先实现同步版本，降低系统复杂度
-- 异步支持作为可选特性
-- 工具命名约定：Sync*Tool
+### 3.1 模型选择
+- 使用 Qwen 系列模型（如 Qwen3-14B）
+- 通过 OpenAI 兼容 API 调用
+- 支持本地部署和云端 API
 
-### 3.2 错误处理机制
-- 多级错误捕获和恢复
-- 智能重试策略
-- 详细的错误上下文保留
+### 3.2 工具设计原则
+- 每个工具专注单一职责
+- 工具之间松耦合
+- 参数和返回值标准化
+- 错误信息友好明确
 
-### 3.3 安全性设计
-- SQL注入防护
-- 权限验证
-- 查询限制和超时控制
-
-### 3.4 扩展性设计
-- 插件式工具系统
-- 可配置的Agent行为
-- 支持自定义提示词模板
+### 3.3 配置管理
+- 使用 YAML 格式，易读易写
+- 支持环境变量覆盖
+- 敏感信息（如密码）支持加密存储
 
 ## 4. 接口设计
 
-### 4.1 CLI接口
+### 4.1 CLI 接口
 ```bash
 # 初始化配置
-python main.py init --database-type mysql --host localhost
+python main.py init --model Qwen3-14B --base-url http://localhost:9009/v1
 
 # 执行查询
-python main.py run "查询用户数量" --config config.yaml
+python main.py run "查询所有用户的数量"
 
 # 交互模式
 python main.py interactive
 
 # 测试连接
 python main.py test
+
+# 查看数据库结构
+python main.py schema
 ```
 
-### 4.2 Agent接口
+### 4.2 核心 API
 ```python
-class SQLAgent(BaseAgent):
-    async def execute(self, task: str) -> SQLQueryResult:
-        """执行NL2SQL任务"""
+# Agent 接口
+class SmartSQLAgent:
+    def query(self, question: str) -> SQLQueryResult:
+        """执行自然语言查询"""
         pass
-    
-    def execute_sync(self, task: str) -> SQLQueryResult:
-        """同步执行NL2SQL任务"""
-        pass
-```
 
-### 4.3 工具接口
-```python
-class TraeBaseTool(ABC):
-    @abstractmethod
+# 工具接口
+class TraeBaseTool:
     def get_parameters(self) -> List[ToolParameter]:
         """获取工具参数定义"""
         pass
     
-    @abstractmethod
-    def run(self, **kwargs) -> Any:
+    def run(self, **kwargs) -> Dict[str, Any]:
         """执行工具"""
         pass
 ```
 
-## 5. 性能设计
+### 4.3 配置格式
+```yaml
+# 应用配置
+app:
+  name: "SemanticSQL Agent"
+  version: "2.0.0"
+  environment: "production"
 
-### 5.1 缓存策略
-- 数据库模式缓存
-- LLM响应缓存（可选）
-- 连接池复用
+# 数据库配置
+database:
+  type: "mysql"
+  host: "192.168.200.216"
+  port: 13306
+  database: "testdb"
+  username: "testuser"
+  password: "testpass"
 
-### 5.2 并发设计
-- 连接池管理
-- 工具并发执行
-- 请求限流
+# LLM 配置
+llm:
+  model: "Qwen3-14B"
+  base_url: "http://192.168.200.216:9009/v1"
+  api_key: "not-needed"  # Qwen 本地部署可能不需要
+  temperature: 0.1
+  max_tokens: 2000
+```
 
-### 5.3 优化措施
-- 延迟加载
-- 按需分析
-- 结果流式处理
+## 5. 扩展性设计
 
-## 6. 部署设计
+### 5.1 添加新工具
+```python
+# 1. 继承 TraeBaseTool
+class MyCustomTool(TraeBaseTool):
+    def __init__(self):
+        super().__init__(
+            name="my_tool",
+            description="自定义工具描述"
+        )
+    
+    def get_parameters(self) -> List[ToolParameter]:
+        return [
+            ToolParameter(name="param1", type="string", required=True)
+        ]
+    
+    def run(self, **kwargs) -> Dict[str, Any]:
+        # 实现工具逻辑
+        return {"success": True, "result": "..."}
 
-### 6.1 环境要求
-- Python 3.8+
-- 支持的数据库驱动
-- LLM API访问
+# 2. 注册到工具列表
+AVAILABLE_TOOLS.append(MyCustomTool)
+```
 
-### 6.2 配置管理
-- 环境隔离（开发/测试/生产）
-- 敏感信息加密
-- 配置热更新
+### 5.2 支持新数据库
+- 实现数据库方言适配器
+- 添加对应的连接驱动
+- 更新配置验证逻辑
 
-### 6.3 监控和日志
-- 结构化日志
-- 性能指标收集
-- 错误追踪
+## 6. 部署方案
 
-## 7. 未来扩展
+### 6.1 本地部署
+```bash
+# 1. 安装依赖
+pip install -r requirements.txt
 
-### 7.1 功能扩展
-- 支持更多数据库类型
-- 多表联合查询优化
+# 2. 配置数据库和 LLM
+python main.py init
+
+# 3. 运行服务
+python main.py interactive
+```
+
+### 6.2 Docker 部署
+```dockerfile
+FROM python:3.8-slim
+WORKDIR /app
+COPY . .
+RUN pip install -r requirements.txt
+CMD ["python", "main.py", "interactive"]
+```
+
+## 7. 性能考虑
+
+### 7.1 优化策略
+- 数据库模式缓存，避免重复查询
+- 连接池管理，复用数据库连接
+- 合理的 LLM 参数设置（temperature、max_tokens）
+
+### 7.2 资源限制
+- 单次查询超时控制
+- 结果集大小限制
+- 并发请求限制
+
+## 8. 安全设计
+
+### 8.1 查询安全
+- SQL 注入防护
+- 只允许 SELECT 查询（可配置）
+- 敏感表/字段访问控制
+
+### 8.2 配置安全
+- 密码加密存储
+- API Key 环境变量管理
+- 访问日志记录
+
+## 9. 未来规划
+
+### 9.1 功能增强
+- 支持更复杂的多表查询
 - 查询结果可视化
+- 查询历史和收藏
 
-### 7.2 性能优化
-- 查询计划优化
-- 并行执行优化
-- 缓存策略优化
+### 9.2 模型优化
+- 针对特定领域的 Prompt 优化
+- Few-shot 示例管理
+- 查询意图分类
 
-### 7.3 集成扩展
-- API服务化
-- 与BI工具集成
-- 支持更多LLM模型
+### 9.3 生态集成
+- REST API 服务化
+- Jupyter Notebook 插件
+- 数据分析平台集成
