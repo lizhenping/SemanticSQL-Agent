@@ -438,27 +438,33 @@ def smart_analyze(ctx, request: str, config: str, save_result: Optional[str],
                     bar.update(1)
         
         # 显示结果
-        if result.success:
+        if result.get("success"):
             click.echo("✅ 智能分析完成!")
-            click.echo(f"⏱️  总执行时间: {result.execution_time:.2f}秒")
-            click.echo(f"📈 完成阶段: {len(result.stages_completed)}/6")
+            click.echo(f"⏱️  总执行时间: {result.get('execution_time', 0):.2f}秒")
+            click.echo(f"📈 完成步骤: {result.get('steps_taken', 0)}")
             click.echo()
             
-            # 显示各阶段结果摘要
-            _display_analysis_summary(result)
+            # 显示分析结果摘要
+            if result.get("final_result"):
+                _display_analysis_summary(result.get("final_result"))
             
-            # 显示生成的场景问题
-            if result.generated_scenarios:
+            # 显示生成的场景问题（如果有）
+            final_result = result.get("final_result", {})
+            generated_scenarios = final_result.get("generated_scenarios", [])
+            if generated_scenarios:
                 click.echo("🎯 生成的查询场景:")
-                for i, scenario in enumerate(result.generated_scenarios[:5], 1):
-                    click.echo(f"  {i}. {scenario.get('name', '未命名场景')}")
-                    if scenario.get('question'):
-                        click.echo(f"     问题: {scenario['question']}")
+                for i, scenario in enumerate(generated_scenarios[:5], 1):
+                    if isinstance(scenario, dict):
+                        click.echo(f"  {i}. {scenario.get('name', '未命名场景')}")
+                        if scenario.get('question'):
+                            click.echo(f"     问题: {scenario['question']}")
+                    else:
+                        click.echo(f"  {i}. {scenario}")
                     click.echo()
             
         else:
             click.echo("❌ 智能分析失败")
-            click.echo(f"错误: {result.error}")
+            click.echo(f"错误: {result.get('error', '未知错误')}")
         
         # 保存结果
         if save_result:
@@ -466,7 +472,7 @@ def smart_analyze(ctx, request: str, config: str, save_result: Optional[str],
             save_path.parent.mkdir(parents=True, exist_ok=True)
             
             with open(save_path, 'w', encoding='utf-8') as f:
-                json.dump(result.to_dict(), f, ensure_ascii=False, indent=2)
+                json.dump(result, f, ensure_ascii=False, indent=2)
             
             click.echo(f"💾 结果已保存到: {save_result}")
         
@@ -484,32 +490,33 @@ def _display_analysis_summary(result):
     click.echo("-" * 40)
     
     # 数据库信息
-    if result.database_info:
-        db_info = result.database_info
-        click.echo(f"📊 数据库: {db_info.get('database', 'N/A')} ({db_info.get('type', 'N/A')})")
-        click.echo(f"📁 表数量: {db_info.get('tables_count', 0)}")
+    db_connection = result.get("database_connection")
+    if db_connection:
+        click.echo(f"📊 数据库: {db_connection.get('database', 'N/A')} ({db_connection.get('type', 'N/A')})")
+        click.echo(f"📁 表数量: {db_connection.get('total_tables', 0)}")
     
     # 领域分析
-    if result.domain_analysis:
+    if result.get("domain_analysis"):
         click.echo(f"🏢 业务领域: 已识别")
     
-    # 字段分类
-    if result.field_classification:
-        click.echo(f"🏷️  字段分类: 已完成")
+    # 架构分析
+    if result.get("schema_analysis"):
+        click.echo(f"🏗️  架构分析: 已完成")
     
-    # 表结构
-    if result.table_analysis:
-        table_count = result.table_analysis.get('total_tables', 0)
-        click.echo(f"📋 表结构: 分析了{table_count}个表")
+    # 查询结果
+    query_results = result.get("query_results", [])
+    if query_results:
+        click.echo(f"📊 执行查询: {len(query_results)}个")
     
-    # ER关系
-    if result.er_analysis:
-        click.echo(f"🔗 ER关系: 已分析")
+    # 数据洞察
+    data_insights = result.get("data_insights", [])
+    if data_insights:
+        click.echo(f"💡 数据洞察: {len(data_insights)}个")
     
-    # 场景生成
-    if result.generated_scenarios:
-        scenario_count = len(result.generated_scenarios)
-        click.echo(f"💡 场景问题: 生成了{scenario_count}个场景")
+    # 分析摘要
+    analysis_summary = result.get("analysis_summary", {})
+    if analysis_summary.get("analysis_completed"):
+        click.echo(f"✅ 分析状态: 已完成")
     
     click.echo()
 

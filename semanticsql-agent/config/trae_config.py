@@ -70,7 +70,7 @@ class LLMConfig:
     base_url: str = "http://localhost:9009/v1"
     api_key: str = "not-needed"
     temperature: float = 0.1
-    max_tokens: int = 2000
+    max_tokens: int = 6000
     timeout: int = 30
     max_retries: int = 3
     
