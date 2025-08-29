@@ -171,202 +171,122 @@ class SmartSQLAgent:
         self.logger.info("阶段2: 分析数据库领域")
         self.current_result.current_stage = AnalysisStage.DOMAIN_ANALYSIS
         
-        # 使用LLM和工具分析业务领域
+        # 使用LLM进行领域分析（不使用工具调用）
         domain_prompt = self._build_domain_analysis_prompt()
         
-        try:
-            # 调用领域分析工具
-            domain_tool = self.tools['analyze_domain']
-            tool_schema = domain_tool.get_schema()
-            
-            response = self.llm_client.chat(
-                messages=[{"role": "user", "content": domain_prompt}],
-                tools=[tool_schema],
-                reuse_history=False
-            )
-            
-            # 执行工具调用
-            if response.tool_calls:
-                self.logger.debug(f"收到工具调用: {type(response.tool_calls)}, 内容: {response.tool_calls}")
-                for i, tool_call in enumerate(response.tool_calls):
-                    self.logger.debug(f"工具调用 {i}: 类型={type(tool_call)}, 内容={tool_call}")
-                    if hasattr(tool_call, 'name') and tool_call.name == 'analyze_domain':
-                        result = domain_tool.execute(**tool_call.arguments)
-                        self.current_result.domain_analysis = result
-                        break
-                    elif isinstance(tool_call, dict) and tool_call.get('name') == 'analyze_domain':
-                        result = domain_tool.execute(**tool_call.get('arguments', {}))
-                        self.current_result.domain_analysis = result
-                        break
-            else:
-                # 如果没有工具调用，使用文本分析
-                self.current_result.domain_analysis = {
-                    "analysis_method": "text_based",
-                    "content": response.content,
-                    "database_type": self.current_result.database_info.get('type', 'unknown')
-                }
-            
-            self.current_result.stages_completed.append(AnalysisStage.DOMAIN_ANALYSIS)
-            self.logger.info("领域分析完成")
-            
-        except Exception as e:
-            self.logger.error(f"领域分析失败: {e}")
-            # 使用简单的回退方案
-            self.current_result.domain_analysis = {
-                "analysis_method": "fallback", 
-                "error": str(e),
-                "basic_info": self.current_result.database_info
-            }
-            self.current_result.stages_completed.append(AnalysisStage.DOMAIN_ANALYSIS)
+        response = self.llm_client.chat(
+            messages=[{"role": "user", "content": domain_prompt}],
+            tools=None,  # 不使用工具调用
+            reuse_history=False
+        )
+        
+        # 直接使用文本响应
+        self.current_result.domain_analysis = {
+            "analysis_method": "text_based",
+            "content": response.content,
+            "database_type": self.current_result.database_info.get('type', 'unknown'),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        self.current_result.stages_completed.append(AnalysisStage.DOMAIN_ANALYSIS)
+        self.logger.info("领域分析完成")
     
     def _execute_field_classification_stage(self):
         """阶段3: 字段分类分析"""
         self.logger.info("阶段3: 字段分类分析")
         self.current_result.current_stage = AnalysisStage.FIELD_CLASSIFICATION
         
-        try:
-            # 首先获取schema信息
-            schema_tool = self.tools['schema_extraction']
-            schema_result = schema_tool.execute()
+        # 首先获取schema信息
+        schema_tool = self.tools['schema_extraction']
+        schema_result = schema_tool.execute()
+        
+        if schema_result.get('success'):
+            # 基于schema进行字段分类（不使用工具调用）
+            field_prompt = self._build_field_classification_prompt(schema_result)
             
-            if schema_result.get('success'):
-                # 基于schema进行字段分类
-                field_prompt = self._build_field_classification_prompt(schema_result)
-                
-                field_tool = self.tools['classify_fields']
-                tool_schema = field_tool.get_schema()
-                
-                response = self.llm_client.chat(
-                    messages=[{"role": "user", "content": field_prompt}],
-                    tools=[tool_schema],
-                    reuse_history=False
-                )
-                
-                # 执行工具调用
-                if response.tool_calls:
-                    for tool_call in response.tool_calls:
-                        if hasattr(tool_call, 'name') and tool_call.name == 'classify_fields':
-                            result = field_tool.execute(**tool_call.arguments)
-                            self.current_result.field_classification = result
-                            break
-                        elif isinstance(tool_call, dict) and tool_call.get('name') == 'classify_fields':
-                            result = field_tool.execute(**tool_call.get('arguments', {}))
-                            self.current_result.field_classification = result
-                            break
-                else:
-                    # 文本回退
-                    self.current_result.field_classification = {
-                        "analysis_method": "text_based",
-                        "content": response.content,
-                        "schema_info": schema_result
-                    }
+            response = self.llm_client.chat(
+                messages=[{"role": "user", "content": field_prompt}],
+                tools=None,  # 不使用工具调用
+                reuse_history=False
+            )
             
-            self.current_result.stages_completed.append(AnalysisStage.FIELD_CLASSIFICATION)
-            self.logger.info("字段分类分析完成")
-            
-        except Exception as e:
-            self.logger.error(f"字段分类分析失败: {e}")
-            self.current_result.field_classification = {"error": str(e)}
-            self.current_result.stages_completed.append(AnalysisStage.FIELD_CLASSIFICATION)
+            # 直接使用文本响应
+            self.current_result.field_classification = {
+                "analysis_method": "text_based",
+                "content": response.content,
+                "schema_info": schema_result,
+                "timestamp": datetime.now().isoformat()
+            }
+        
+        self.current_result.stages_completed.append(AnalysisStage.FIELD_CLASSIFICATION)
+        self.logger.info("字段分类分析完成")
     
     def _execute_table_analysis_stage(self):
         """阶段4: 表结构分析"""
         self.logger.info("阶段4: 表结构分析")
         self.current_result.current_stage = AnalysisStage.TABLE_ANALYSIS
         
-        try:
-            # 获取详细的表结构信息
-            tables = self.db_manager.get_tables()
-            table_details = {}
-            
-            for table_name in tables:
-                table_info = self.db_manager.get_table_info(table_name)
-                table_details[table_name] = table_info
-            
-            self.current_result.table_analysis = {
-                "total_tables": len(tables),
-                "table_names": tables,
-                "table_details": table_details,
-                "analysis_timestamp": datetime.now().isoformat()
-            }
-            
-            self.current_result.stages_completed.append(AnalysisStage.TABLE_ANALYSIS)
-            self.logger.info(f"表结构分析完成，共{len(tables)}个表")
-            
-        except Exception as e:
-            self.logger.error(f"表结构分析失败: {e}")
-            self.current_result.table_analysis = {"error": str(e)}
-            self.current_result.stages_completed.append(AnalysisStage.TABLE_ANALYSIS)
+        # 获取详细的表结构信息
+        tables = self.db_manager.get_tables()
+        table_details = {}
+        
+        for table_name in tables:
+            table_info = self.db_manager.get_table_info(table_name)
+            table_details[table_name] = table_info
+        
+        self.current_result.table_analysis = {
+            "total_tables": len(tables),
+            "table_names": tables,
+            "table_details": table_details,
+            "analysis_timestamp": datetime.now().isoformat()
+        }
+        
+        self.current_result.stages_completed.append(AnalysisStage.TABLE_ANALYSIS)
+        self.logger.info(f"表结构分析完成，共{len(tables)}个表")
     
     def _execute_er_analysis_stage(self):
         """阶段5: ER关系分析"""
         self.logger.info("阶段5: ER关系分析")
         self.current_result.current_stage = AnalysisStage.ER_ANALYSIS
         
-        try:
-            er_prompt = self._build_er_analysis_prompt()
-            
-            er_tool = self.tools['analyze_relationships']
-            tool_schema = er_tool.get_schema()
-            
-            response = self.llm_client.chat(
-                messages=[{"role": "user", "content": er_prompt}],
-                tools=[tool_schema],
-                reuse_history=False
-            )
-            
-            # 执行工具调用
-            if response.tool_calls:
-                for tool_call in response.tool_calls:
-                    if hasattr(tool_call, 'name') and tool_call.name == 'analyze_relationships':
-                        result = er_tool.execute(**tool_call.arguments)
-                        self.current_result.er_analysis = result
-                        break
-                    elif isinstance(tool_call, dict) and tool_call.get('name') == 'analyze_relationships':
-                        result = er_tool.execute(**tool_call.get('arguments', {}))
-                        self.current_result.er_analysis = result
-                        break
-            else:
-                # 文本回退
-                self.current_result.er_analysis = {
-                    "analysis_method": "text_based",
-                    "content": response.content,
-                    "table_info": self.current_result.table_analysis
-                }
-            
-            self.current_result.stages_completed.append(AnalysisStage.ER_ANALYSIS)
-            self.logger.info("ER关系分析完成")
-            
-        except Exception as e:
-            self.logger.error(f"ER关系分析失败: {e}")
-            self.current_result.er_analysis = {"error": str(e)}
-            self.current_result.stages_completed.append(AnalysisStage.ER_ANALYSIS)
+        er_prompt = self._build_er_analysis_prompt()
+        
+        response = self.llm_client.chat(
+            messages=[{"role": "user", "content": er_prompt}],
+            tools=None,  # 不使用工具调用
+            reuse_history=False
+        )
+        
+        # 直接使用文本响应
+        self.current_result.er_analysis = {
+            "analysis_method": "text_based",
+            "content": response.content,
+            "table_info": self.current_result.table_analysis,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        self.current_result.stages_completed.append(AnalysisStage.ER_ANALYSIS)
+        self.logger.info("ER关系分析完成")
     
     def _execute_scenario_generation_stage(self):
         """阶段6: 场景化问题生成"""
         self.logger.info("阶段6: 场景化问题生成")
         self.current_result.current_stage = AnalysisStage.SCENARIO_GENERATION
         
-        try:
-            scenario_prompt = self._build_scenario_generation_prompt()
-            
-            response = self.llm_client.chat(
-                messages=[{"role": "user", "content": scenario_prompt}],
-                tools=None,  # 问题生成不需要工具调用
-                reuse_history=False
-            )
-            
-            # 解析生成的场景问题
-            scenarios = self._parse_generated_scenarios(response.content)
-            self.current_result.generated_scenarios = scenarios
-            
-            self.current_result.stages_completed.append(AnalysisStage.SCENARIO_GENERATION)
-            self.logger.info(f"场景问题生成完成，共生成{len(scenarios)}个场景")
-            
-        except Exception as e:
-            self.logger.error(f"场景问题生成失败: {e}")
-            self.current_result.generated_scenarios = []
-            self.current_result.stages_completed.append(AnalysisStage.SCENARIO_GENERATION)
+        scenario_prompt = self._build_scenario_generation_prompt()
+        
+        response = self.llm_client.chat(
+            messages=[{"role": "user", "content": scenario_prompt}],
+            tools=None,  # 问题生成不需要工具调用
+            reuse_history=False
+        )
+        
+        # 解析生成的场景问题
+        scenarios = self._parse_generated_scenarios(response.content)
+        self.current_result.generated_scenarios = scenarios
+        
+        self.current_result.stages_completed.append(AnalysisStage.SCENARIO_GENERATION)
+        self.logger.info(f"场景问题生成完成，共生成{len(scenarios)}个场景")
     
     def _build_domain_analysis_prompt(self) -> str:
         """构建领域分析提示词"""
@@ -380,13 +300,15 @@ class SmartSQLAgent:
 - 数据库类型: {db_info.get('type', 'unknown')}
 - 数据库名称: {db_info.get('database', 'unknown')}
 - 表数量: {db_info.get('tables_count', 0)}
+- 表名列表: {', '.join(db_info.get('tables', []))}
 
 **分析要求:**
 1. 根据数据库名称和表名模式，推断业务领域
 2. 识别可能的应用场景（如：电商、CRM、OA等）
 3. 分析数据库的设计模式和架构特点
+4. 基于表名前缀和命名规律分析业务模块
 
-请调用analyze_domain工具进行分析。
+请提供详细的分析结果。
 """
     
     def _build_field_classification_prompt(self, schema_result: Dict[str, Any]) -> str:
@@ -404,8 +326,9 @@ class SmartSQLAgent:
 2. 分类业务字段（如：用户信息、订单信息、产品信息等）
 3. 识别系统字段（如：创建时间、更新时间、状态字段等）
 4. 分析字段数据类型和用途
+5. 识别字段命名规律和设计模式
 
-请调用classify_fields工具进行分析。
+请提供详细的字段分类分析结果。
 """
     
     def _build_er_analysis_prompt(self) -> str:
@@ -425,8 +348,9 @@ class SmartSQLAgent:
 2. 分析外键约束和引用关系
 3. 构建实体关系图的逻辑结构
 4. 识别核心实体和关联实体
+5. 分析数据库设计的规范化程度
 
-请调用analyze_relationships工具进行分析。
+请提供详细的ER关系分析结果。
 """
     
     def _build_scenario_generation_prompt(self) -> str:

@@ -269,28 +269,56 @@ class SyncBaseAgent(ABC):
             )
         
         try:
-            # 验证参数
-            valid, error_msg = tool.validate_parameters(tool_call.arguments)
-            if not valid:
-                return ToolResult(
-                    call_id=tool_call.id,
-                    name=tool_call.name,
-                    success=False,
-                    error=error_msg
-                )
+            # 验证参数（如果工具支持的话）
+            if hasattr(tool, 'validate_parameters'):
+                valid, error_msg = tool.validate_parameters(tool_call.arguments)
+                if not valid:
+                    return ToolResult(
+                        call_id=tool_call.id,
+                        name=tool_call.name,
+                        success=False,
+                        error=error_msg
+                    )
             
             # 执行工具
             start_time = time.time()
-            result = tool.execute(**tool_call.arguments)
+            import asyncio
+            if asyncio.iscoroutinefunction(tool.execute):
+                # 异步工具执行
+                result = asyncio.run(tool.execute(tool_call.arguments))
+            else:
+                # 同步工具执行
+                result = tool.execute(**tool_call.arguments)
             execution_time = time.time() - start_time
             
-            return ToolResult(
-                call_id=tool_call.id,
-                name=tool_call.name,
-                success=True,
-                output=result,
-                execution_time=execution_time
-            )
+            # 处理Trae Agent框架的ToolExecResult
+            if hasattr(result, 'output') and hasattr(result, 'error'):
+                # Trae Agent框架的ToolExecResult
+                if result.error:
+                    return ToolResult(
+                        call_id=tool_call.id,
+                        name=tool_call.name,
+                        success=False,
+                        error=result.error,
+                        execution_time=execution_time
+                    )
+                else:
+                    return ToolResult(
+                        call_id=tool_call.id,
+                        name=tool_call.name,
+                        success=True,
+                        output=result.output,
+                        execution_time=execution_time
+                    )
+            else:
+                # 直接返回结果
+                return ToolResult(
+                    call_id=tool_call.id,
+                    name=tool_call.name,
+                    success=True,
+                    output=result,
+                    execution_time=execution_time
+                )
             
         except Exception as e:
             return ToolResult(

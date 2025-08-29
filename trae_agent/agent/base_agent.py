@@ -13,7 +13,12 @@ from trae_agent.tools.ckg.ckg_database import clear_older_ckg
 from trae_agent.utils.cli import CLIConsole
 from trae_agent.utils.config import AgentConfig, ModelConfig
 from trae_agent.utils.llm_clients.llm_basics import LLMMessage, LLMResponse
-from trae_agent.utils.llm_clients.llm_client import LLMClient
+# from trae_agent.utils.llm_clients.llm_client import LLMClient
+# Use SemanticSQL Agent's custom LLM client instead
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../semanticsql-agent'))
+from utils.llm_clients.llm_client import LLMClient
 from trae_agent.utils.trajectory_recorder import TrajectoryRecorder
 
 
@@ -26,7 +31,12 @@ class BaseAgent(ABC):
         Args:
             agent_config: Configuration object containing model parameters and other settings.
         """
-        self._llm_client = LLMClient(agent_config.model)
+        # Use SemanticSQL Agent's LLMClient with proper parameters
+        self._llm_client = LLMClient(
+            model=agent_config.model.model,
+            base_url=agent_config.model.model_provider.base_url,
+            api_key=agent_config.model.model_provider.api_key
+        )
         self._model_config = agent_config.model
         self._max_steps = agent_config.max_steps
         self._initial_messages: list[LLMMessage] = []
@@ -56,8 +66,9 @@ class BaseAgent(ABC):
     def set_trajectory_recorder(self, recorder: TrajectoryRecorder | None) -> None:
         """Set the trajectory recorder for this agent."""
         self._trajectory_recorder = recorder
-        # Also set it on the LLM client
-        self._llm_client.set_trajectory_recorder(recorder)
+        # Also set it on the LLM client (if supported)
+        if hasattr(self._llm_client, 'set_trajectory_recorder'):
+            self._llm_client.set_trajectory_recorder(recorder)
 
     @property
     def cli_console(self) -> CLIConsole | None:
@@ -161,7 +172,11 @@ class BaseAgent(ABC):
         step.state = AgentStepState.THINKING
         self._update_cli_console(step, execution)
         # Get LLM response
-        llm_response = self._llm_client.chat(messages, self._model_config, self._tools)
+        # Convert tools to the format expected by SemanticSQL Agent's LLMClient
+        tools_dict = None
+        if self._tools:
+            tools_dict = [tool.to_dict() for tool in self._tools if hasattr(tool, 'to_dict')]
+        llm_response = self._llm_client.chat(messages, tools=tools_dict)
         step.llm_response = llm_response
 
         # Display step with LLM response

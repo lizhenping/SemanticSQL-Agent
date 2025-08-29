@@ -1,4 +1,4 @@
-"""LLM 客户端包（支持 tool calling）"""
+"""LLM 客户端包 - 使用标准 OpenAI 客户端"""
 
 from .llm_basics import (
     LLMMessage, 
