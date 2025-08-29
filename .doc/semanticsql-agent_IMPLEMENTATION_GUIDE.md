@@ -21,10 +21,10 @@
 git clone https://github.com/yourusername/semanticsql-agent.git
 cd semanticsql-agent
 
-# 创建虚拟环境
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-venv\Scripts\activate     # Windows
+# 虚拟环境
+
+source activate alphasql  # Linux/Mac
+
 
 # 安装依赖
 pip install -e .
