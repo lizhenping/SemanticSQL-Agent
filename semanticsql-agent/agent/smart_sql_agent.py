@@ -8,7 +8,7 @@ from enum import Enum
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
-from agent.base_agent import SyncBaseAgent, AgentExecution, AgentStep
+# 不再需要BaseAgent，SmartSQLAgent是独立实现
 from config.trae_config import TraeConfig
 from tools.sql_tools import (
     SyncSchemaExtractionTool as SchemaExtractionTool,
@@ -22,7 +22,7 @@ from tools.analysis_tools import (
     SyncERAnalysisTool as ERAnalysisTool,
     SyncSequentialThinkingTool as SequentialThinkingTool
 )
-from utils.llm_clients.llm_client import LLMClient
+import openai
 from database.connection_manager import DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -82,14 +82,16 @@ class SmartSQLAgent:
         self.config = config
         self.logger = logging.getLogger("agent.smart_sql")
         
-        # 初始化LLM客户端
-        self.llm_client = LLMClient(
-            model=config.llm.model,
-            base_url=config.llm.base_url,
+        # 初始化LLM客户端（直接使用OpenAI客户端）
+        self.llm_client = openai.OpenAI(
             api_key=config.llm.api_key,
-            temperature=config.llm.temperature,
-            max_tokens=config.llm.max_tokens
+            base_url=config.llm.base_url
         )
+        self.llm_config = {
+            'model': config.llm.model,
+            'temperature': config.llm.temperature,
+            'max_tokens': config.llm.max_tokens
+        }
         
         # 初始化数据库管理器
         self.db_manager = DatabaseManager(config.database)
@@ -174,16 +176,15 @@ class SmartSQLAgent:
         # 使用LLM进行领域分析（不使用工具调用）
         domain_prompt = self._build_domain_analysis_prompt()
         
-        response = self.llm_client.chat(
+        response = self.llm_client.chat.completions.create(
             messages=[{"role": "user", "content": domain_prompt}],
-            tools=None,  # 不使用工具调用
-            reuse_history=False
+            **self.llm_config
         )
         
         # 直接使用文本响应
         self.current_result.domain_analysis = {
             "analysis_method": "text_based",
-            "content": response.content,
+            "content": response.choices[0].message.content,
             "database_type": self.current_result.database_info.get('type', 'unknown'),
             "timestamp": datetime.now().isoformat()
         }
@@ -204,16 +205,15 @@ class SmartSQLAgent:
             # 基于schema进行字段分类（不使用工具调用）
             field_prompt = self._build_field_classification_prompt(schema_result)
             
-            response = self.llm_client.chat(
+            response = self.llm_client.chat.completions.create(
                 messages=[{"role": "user", "content": field_prompt}],
-                tools=None,  # 不使用工具调用
-                reuse_history=False
+                **self.llm_config
             )
             
             # 直接使用文本响应
             self.current_result.field_classification = {
                 "analysis_method": "text_based",
-                "content": response.content,
+                "content": response.choices[0].message.content,
                 "schema_info": schema_result,
                 "timestamp": datetime.now().isoformat()
             }
@@ -251,16 +251,15 @@ class SmartSQLAgent:
         
         er_prompt = self._build_er_analysis_prompt()
         
-        response = self.llm_client.chat(
+        response = self.llm_client.chat.completions.create(
             messages=[{"role": "user", "content": er_prompt}],
-            tools=None,  # 不使用工具调用
-            reuse_history=False
+            **self.llm_config
         )
         
         # 直接使用文本响应
         self.current_result.er_analysis = {
             "analysis_method": "text_based",
-            "content": response.content,
+            "content": response.choices[0].message.content,
             "table_info": self.current_result.table_analysis,
             "timestamp": datetime.now().isoformat()
         }
@@ -275,14 +274,13 @@ class SmartSQLAgent:
         
         scenario_prompt = self._build_scenario_generation_prompt()
         
-        response = self.llm_client.chat(
+        response = self.llm_client.chat.completions.create(
             messages=[{"role": "user", "content": scenario_prompt}],
-            tools=None,  # 问题生成不需要工具调用
-            reuse_history=False
+            **self.llm_config
         )
         
         # 解析生成的场景问题
-        scenarios = self._parse_generated_scenarios(response.content)
+        scenarios = self._parse_generated_scenarios(response.choices[0].message.content)
         self.current_result.generated_scenarios = scenarios
         
         self.current_result.stages_completed.append(AnalysisStage.SCENARIO_GENERATION)
@@ -437,3 +435,57 @@ class SmartSQLAgent:
         current = stage_names[self.current_result.current_stage]
         
         return f"当前阶段: {current}, 已完成: {', '.join(completed)}"
+    
+    def query(self, question: str) -> 'SQLQueryResult':
+        """简单查询功能 - 为兼容性而添加"""
+        from models.sql_result import SQLQueryResult
+        
+        try:
+            # 连接数据库
+            if not self.db_manager.initialize():
+                return SQLQueryResult(
+                    success=False,
+                    question=question,
+                    error="数据库连接失败"
+                )
+            
+            # 简单的LLM调用来生成SQL
+            prompt = f"""
+根据以下数据库信息回答用户问题：
+
+用户问题: {question}
+
+数据库信息: 
+- 类型: MySQL
+- 表: {', '.join(self.db_manager.get_tables())}
+
+请生成对应的SQL查询语句。只返回SQL语句，不要其他解释。
+"""
+            
+            response = self.llm_client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                **self.llm_config
+            )
+            
+            sql = response.choices[0].message.content.strip()
+            
+            # 简单清理SQL（移除markdown标记等）
+            if sql.startswith('```'):
+                sql = sql.split('\n')[1:-1]  # 移除```sql和```
+                sql = '\n'.join(sql)
+            
+            return SQLQueryResult(
+                success=True,
+                question=question,
+                sql=sql,
+                answer=f"已生成SQL查询: {sql}"
+            )
+            
+        except Exception as e:
+            return SQLQueryResult(
+                success=False,
+                question=question,
+                error=str(e)
+            )
+        finally:
+            self.db_manager.close()

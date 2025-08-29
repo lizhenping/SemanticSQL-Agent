@@ -11,7 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from config.database_models import DatabaseConfig
+from config.trae_config import DatabaseConfig
 
 
 class DatabaseManager:

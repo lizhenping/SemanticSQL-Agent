@@ -8,7 +8,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 from tools.trae_base_tool import TraeBaseTool, ToolParameter
-from config.database_models import DatabaseConfig
+from config.trae_config import DatabaseConfig
 from database.connection_manager import DatabaseManager
 
 

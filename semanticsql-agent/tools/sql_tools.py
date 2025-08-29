@@ -12,7 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from langchain_community.utilities import SQLDatabase
 
 from tools.trae_base_tool import TraeBaseTool, ToolParameter
-from config.database_models import DatabaseConfig
+from config.trae_config import DatabaseConfig
 
 
 class SyncSchemaExtractionTool(TraeBaseTool):
@@ -30,10 +30,9 @@ class SyncSchemaExtractionTool(TraeBaseTool):
     def _init_database(self):
         """初始化数据库连接"""
         try:
-            engine = create_engine(self.database_config.connection_string)
-            self.db = SQLDatabase.from_uri(
-                self.database_config.connection_string
-            )
+            connection_string = self.database_config.to_connection_string()
+            engine = create_engine(connection_string)
+            self.db = SQLDatabase.from_uri(connection_string)
         except Exception as e:
             self.logger.error(f"数据库连接失败: {e}")
             raise
@@ -111,7 +110,7 @@ class SyncSchemaExtractionTool(TraeBaseTool):
         """提取表详细信息"""
         try:
             # 获取列信息
-            engine = create_engine(self.database_config.connection_string)
+            engine = create_engine(self.database_config.to_connection_string())
             with engine.connect() as conn:
                 if self.database_config.type == "mysql":
                     columns = conn.execute(text(f"DESCRIBE {table_name}")).fetchall()
@@ -357,7 +356,7 @@ class SyncSQLValidationTool(TraeBaseTool):
     def execute(self, sql: str, check_tables: bool = True, check_permissions: bool = False) -> Dict[str, Any]:
         """执行SQL验证"""
         try:
-            engine = create_engine(self.database_config.connection_string)
+            engine = create_engine(self.database_config.to_connection_string())
             
             validation_result = {
                 "sql": sql,
@@ -432,7 +431,7 @@ class SyncSQLExecutionTool(TraeBaseTool):
     def execute(self, sql: str, max_rows: int = 1000, include_metadata: bool = True) -> Dict[str, Any]:
         """执行SQL查询"""
         try:
-            engine = create_engine(self.database_config.connection_string)
+            engine = create_engine(self.database_config.to_connection_string())
             
             # 安全检查：只允许SELECT查询
             sql_upper = sql.strip().upper()

@@ -8,7 +8,59 @@ from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List
 from pathlib import Path
 
-from .database_models import DatabaseConfig, DatabaseType
+from enum import Enum
+
+
+class DatabaseType(Enum):
+    """数据库类型枚举"""
+    MYSQL = "mysql"
+    POSTGRESQL = "postgresql"
+    SQLITE = "sqlite"
+
+
+@dataclass
+class DatabaseConfig:
+    """数据库配置"""
+    type: str = "mysql"
+    host: str = "192.168.200.216"
+    port: int = 13306
+    database: str = "testdb"
+    username: str = "testuser"
+    password: str = "testpass"
+    connection_timeout: int = 30
+    pool_size: int = 5
+    
+    # SQLAlchemy连接参数
+    echo: bool = False
+    pool_pre_ping: bool = True
+    pool_recycle: int = 3600
+    
+    # 额外的数据库参数
+    charset: Optional[str] = "utf8mb4"
+    max_overflow: int = 10
+    sample_rows_in_table_info: int = 3
+    pool_timeout: int = 30
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "DatabaseConfig":
+        """从字典创建配置"""
+        # 过滤掉dataclass中不存在的字段
+        valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        filtered_data = {k: v for k, v in data.items() if k in valid_fields}
+        return cls(**filtered_data)
+    
+    def to_connection_string(self) -> str:
+        """生成数据库连接字符串"""
+        if self.type == DatabaseType.MYSQL.value:
+            driver = "mysql+pymysql"
+        elif self.type == DatabaseType.POSTGRESQL.value:
+            driver = "postgresql+psycopg2"
+        elif self.type == DatabaseType.SQLITE.value:
+            return f"sqlite:///{self.database}"
+        else:
+            raise ValueError(f"不支持的数据库类型: {self.type}")
+        
+        return f"{driver}://{self.username}:{self.password}@{self.host}:{self.port}/{self.database}"
 
 
 @dataclass
@@ -182,7 +234,7 @@ class TraeConfig:
             return cls.from_yaml(config_path)
         
         # 2. 从默认路径加载
-        default_paths = ["trae_config.yaml", "config.yaml", "semanticsql_config.yaml"]
+        default_paths = ["config.yaml", "semanticsql_config.yaml", "trae_config.yaml"]
         for path in default_paths:
             if Path(path).exists():
                 return cls.from_yaml(path)

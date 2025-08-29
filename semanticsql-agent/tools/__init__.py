@@ -2,7 +2,7 @@
 trae_agent风格的工具系统
 """
 
-from .base import Tool as BaseTool
+from .trae_base_tool import TraeBaseTool as BaseTool
 
 from .sql_tools import (
     SyncSchemaExtractionTool as SchemaExtractionTool,
@@ -25,7 +25,6 @@ class ToolFactory:
     @staticmethod
     def create_tools(config, enabled_tools: list = None) -> list:
         """根据配置创建工具实例"""
-        from ..config.database_models import DatabaseConfig
         import logging
         
         tools = []

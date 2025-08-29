@@ -14,7 +14,7 @@ import yaml
 from click.testing import CliRunner
 
 from config.trae_config import TraeConfig, DEFAULT_CONFIG_TEMPLATE
-from agent.sql_agent import SQLAgent
+# 只需要SmartSQLAgent即可
 from agent.smart_sql_agent import SmartSQLAgent
 from database.connection_manager import DatabaseManager
 
@@ -28,7 +28,7 @@ logging.basicConfig(
 
 @click.group()
 @click.version_option(version="2.0.0")
-@click.option('--config', '-c', default='trae_config.yaml', help='配置文件路径')
+@click.option('--config', '-c', default='configs/config.yaml', help='配置文件路径')
 @click.option('--verbose', '-v', is_flag=True, help='详细输出')
 @click.pass_context
 def cli(ctx, config: str, verbose: bool):
@@ -42,7 +42,7 @@ def cli(ctx, config: str, verbose: bool):
 
 
 @cli.command()
-@click.option('--output', '-o', default='trae_config.yaml', help='输出配置文件路径')
+@click.option('--output', '-o', default='configs/config.yaml', help='输出配置文件路径')
 @click.option('--database-type', default='mysql', help='数据库类型')
 @click.option('--host', default='192.168.200.216', help='数据库主机')
 @click.option('--port', default=13306, help='数据库端口')
@@ -92,7 +92,7 @@ def init(output: str, database_type: str, host: str, port: int, database: str,
 @cli.command()
 @click.argument("query", required=False)
 @click.option('--file', '-f', help='包含查询的文件路径')
-@click.option('--config', '-c', default='trae_config.yaml', help='配置文件路径')
+@click.option('--config', '-c', default='configs/config.yaml', help='配置文件路径')
 @click.option('--model', '-m', help='使用的模型')
 @click.option('--database', '-d', help='数据库连接信息')
 @click.option('--max-steps', type=int, help='最大执行步数')
@@ -160,8 +160,8 @@ def run(ctx, query: Optional[str], file: Optional[str], config: str,
             click.echo("错误: 数据库连接失败", err=True)
             sys.exit(1)
         
-        # 创建SQL智能体
-        agent = SQLAgent(trae_config)
+        # 创建智能SQL Agent
+        agent = SmartSQLAgent(trae_config)
         
         # 执行查询
         result = agent.query(query)
@@ -227,7 +227,7 @@ def run(ctx, query: Optional[str], file: Optional[str], config: str,
 
 
 @cli.command()
-@click.option('--config', '-c', default='trae_config.yaml', help='配置文件路径')
+@click.option('--config', '-c', default='configs/config.yaml', help='配置文件路径')
 @click.option('--save-history', is_flag=True, help='保存历史记录')
 @click.pass_context
 def interactive(ctx, config: str, save_history: bool):
@@ -242,8 +242,8 @@ def interactive(ctx, config: str, save_history: bool):
             click.echo("错误: 数据库连接失败", err=True)
             sys.exit(1)
         
-        # 创建SQL智能体
-        agent = SQLAgent(trae_config)
+        # 创建智能SQL Agent
+        agent = SmartSQLAgent(trae_config)
         
         click.echo("SemanticSQL Agent 交互式模式")
         click.echo("输入 'help' 查看帮助，输入 'exit' 退出")
@@ -322,7 +322,7 @@ def interactive(ctx, config: str, save_history: bool):
 
 
 @cli.command()
-@click.option('--config', '-c', default='trae_config.yaml', help='配置文件路径')
+@click.option('--config', '-c', default='configs/config.yaml', help='配置文件路径')
 @click.option('--table', '-t', help='指定表名')
 @click.pass_context
 def schema(ctx, config: str, table: Optional[str]):
@@ -359,7 +359,7 @@ def schema(ctx, config: str, table: Optional[str]):
 
 
 @cli.command()
-@click.option('--config', '-c', default='trae_config.yaml', help='配置文件路径')
+@click.option('--config', '-c', default='configs/config.yaml', help='配置文件路径')
 @click.pass_context
 def test(ctx, config: str):
     """测试数据库连接"""
@@ -392,7 +392,7 @@ def test(ctx, config: str):
 
 @cli.command()
 @click.argument("request", required=False, default="请分析这个数据库")
-@click.option('--config', '-c', default='trae_config.yaml', help='配置文件路径')
+@click.option('--config', '-c', default='configs/config.yaml', help='配置文件路径')
 @click.option('--save-result', '-s', help='保存结果到文件')
 @click.option('--verbose', '-v', is_flag=True, help='详细输出')
 @click.option('--stage-by-stage', is_flag=True, help='分阶段显示结果')
