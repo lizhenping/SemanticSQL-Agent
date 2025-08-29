@@ -2,12 +2,15 @@
 
 ## 1. 快速开始
 
-### 1.1 环境准备
+### 1.1 项目定位
+SemanticSQL Agent 是一个 **NL2SQL 训练数据生成系统**，通过分析数据库结构自动生成高质量的"自然语言问题-SQL查询"对。
+
+### 1.2 环境准备
 
 #### 基本要求
 - Python 3.8+
-- 支持的数据库之一（MySQL、PostgreSQL、SQLite）
-- Qwen 模型服务（本地或远程）
+- 目标数据库（MySQL/PostgreSQL/SQLite）
+- Qwen 模型服务（支持 OpenAI API）
 
 #### 安装步骤
 ```bash
@@ -16,644 +19,505 @@ git clone <repository-url>
 cd semanticsql-agent
 
 # 2. 创建虚拟环境
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# 或
-venv\Scripts\activate  # Windows
+conda create -n semanticsql python=3.8
+conda activate semanticsql
 
 # 3. 安装依赖
-pip install -r requirements.txt
+pip install click pyyaml sqlalchemy openai
+pip install pymysql psycopg2-binary  # 根据数据库类型
 ```
 
-### 1.2 配置 Qwen 模型
+### 1.3 配置准备
 
-#### 本地部署 Qwen
-```bash
-# 使用 vLLM 或其他推理框架部署 Qwen
-# 示例：使用 vLLM
-python -m vllm.entrypoints.openai.api_server \
-    --model Qwen/Qwen3-14B \
-    --port 9009 \
-    --api-key not-needed
-```
-
-#### 配置文件设置
-```yaml
-# configs/config.yaml
-llm:
-  model: "Qwen3-14B"
-  base_url: "http://localhost:9009/v1"  # OpenAI 兼容端点
-  api_key: "not-needed"  # 本地部署通常不需要
-  temperature: 0.1  # 降低随机性，提高 SQL 准确性
-  max_tokens: 2000
-```
-
-### 1.3 数据库配置
-
-#### MySQL 配置示例
-```yaml
-database:
-  type: "mysql"
-  host: "localhost"
-  port: 3306
-  database: "testdb"
-  username: "root"
-  password: "password"
-```
-
-#### 快速初始化
+#### 初始化配置
 ```bash
 # 生成配置文件
 python main.py init \
     --database-type mysql \
-    --host localhost \
-    --port 3306 \
+    --host 192.168.200.216 \
+    --port 13306 \
     --database testdb \
-    --username root \
-    --password password \
+    --username testuser \
+    --password testpass \
     --model Qwen3-14B \
-    --base-url http://localhost:9009/v1
-
-# 测试连接
-python main.py test
-
-# 查看数据库结构
-python main.py schema
+    --base-url http://192.168.200.216:9009/v1 \
+    --api-key not-needed
 ```
 
-## 2. 基本使用
-
-### 2.1 命令行模式
-
-#### 单次查询
-```bash
-# 基本查询
-python main.py run "查询所有用户的数量"
-
-# 带详细输出
-python main.py run "统计每个部门的员工数" --verbose
-
-# 指定配置文件
-python main.py run "查找工资最高的10个员工" --config my_config.yaml
-```
-
-#### 交互模式
-```bash
-# 启动交互模式
-python main.py interactive
-
-# 交互示例
-SemanticSQL> 查询所有订单的总金额
-正在分析您的查询...
-生成的SQL: SELECT SUM(amount) as total_amount FROM orders
-执行结果:
-┌──────────────┐
-│ total_amount │
-├──────────────┤
-│   1234567.89 │
-└──────────────┘
-
-SemanticSQL> 统计每个月的销售额
-...
-
-SemanticSQL> exit
-再见！
-```
-
-### 2.2 Python API 使用
-
-#### 基础示例
-```python
-from agent.smart_sql_agent import SmartSQLAgent
-from config.trae_config import TraeConfig
-
-# 加载配置
-config = TraeConfig.from_yaml("configs/config.yaml")
-
-# 创建 Agent
-agent = SmartSQLAgent(config)
-
-# 执行查询
-result = agent.query("查询最近7天的订单数量")
-
-# 处理结果
-if result.success:
-    print(f"SQL: {result.sql}")
-    print(f"结果: {result.data}")
-else:
-    print(f"查询失败: {result.error}")
-```
-
-#### 批量查询
-```python
-queries = [
-    "统计每个产品类别的销售额",
-    "查找库存不足的商品",
-    "计算本月的营收增长率"
-]
-
-for query in queries:
-    result = agent.query(query)
-    print(f"\n查询: {query}")
-    print(f"SQL: {result.sql}")
-    print(f"行数: {result.row_count}")
-```
-
-## 3. 工具开发
-
-### 3.1 创建自定义工具
-
-#### 工具模板
-```python
-from tools.trae_base_tool import TraeBaseTool, ToolParameter
-from typing import List, Dict, Any
-
-class DataAnalysisTool(TraeBaseTool):
-    """数据分析工具"""
-    
-    def __init__(self, database_manager):
-        super().__init__(
-            name="analyze_data",
-            description="对查询结果进行统计分析"
-        )
-        self.db_manager = database_manager
-    
-    def get_parameters(self) -> List[ToolParameter]:
-        return [
-            ToolParameter(
-                name="sql",
-                type="string",
-                description="要分析的SQL查询",
-                required=True
-            ),
-            ToolParameter(
-                name="analysis_type",
-                type="string",
-                description="分析类型：summary/trend/distribution",
-                required=False
-            )
-        ]
-    
-    def run(self, **kwargs) -> Dict[str, Any]:
-        sql = kwargs.get("sql")
-        analysis_type = kwargs.get("analysis_type", "summary")
-        
-        try:
-            # 执行查询
-            results = self.db_manager.execute_query(sql)
-            
-            # 执行分析
-            if analysis_type == "summary":
-                analysis = self._summary_analysis(results)
-            elif analysis_type == "trend":
-                analysis = self._trend_analysis(results)
-            else:
-                analysis = self._distribution_analysis(results)
-            
-            return {
-                "success": True,
-                "analysis": analysis,
-                "row_count": len(results)
-            }
-            
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
-```
-
-#### 注册工具
-```python
-# 在 tools/__init__.py 中添加
-from .data_analysis_tool import DataAnalysisTool
-
-# 注册到可用工具列表
-AVAILABLE_TOOLS = [
-    # ... 现有工具
-    DataAnalysisTool,
-]
-```
-
-### 3.2 实现 Function Calling 工具
-
-#### 工具定义
-```python
-def get_function_definition(self) -> Dict[str, Any]:
-    """获取 OpenAI Function Calling 格式的工具定义"""
-    return {
-        "type": "function",
-        "function": {
-            "name": self.name,
-            "description": self.description,
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    param.name: {
-                        "type": param.type,
-                        "description": param.description
-                    }
-                    for param in self.get_parameters()
-                },
-                "required": [
-                    param.name 
-                    for param in self.get_parameters() 
-                    if param.required
-                ]
-            }
-        }
-    }
-```
-
-#### 在 Agent 中使用
-```python
-class SmartSQLAgent(BaseAgent):
-    
-    def _call_llm_with_tools(self, messages: List[Dict]) -> Any:
-        """调用 LLM 并处理 Function Calling"""
-        
-        # 获取所有工具定义
-        tools = [tool.get_function_definition() for tool in self.tools]
-        
-        # 调用 LLM
-        response = self.llm_client.chat.completions.create(
-            model=self.config.llm.model,
-            messages=messages,
-            tools=tools,
-            tool_choice="auto"
-        )
-        
-        # 处理响应
-        message = response.choices[0].message
-        
-        if message.tool_calls:
-            # 执行工具调用
-            for tool_call in message.tool_calls:
-                tool_name = tool_call.function.name
-                tool_args = json.loads(tool_call.function.arguments)
-                
-                # 执行工具
-                result = self._execute_tool(tool_name, tool_args)
-                
-                # 将结果添加到消息历史
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": json.dumps(result)
-                })
-        
-        return response
-```
-
-## 4. 高级功能
-
-### 4.1 提示词优化
-
-#### 系统提示词模板
-```python
-SYSTEM_PROMPT = """你是一个专业的数据库查询助手，精通 SQL 语言。
-
-数据库类型：{database_type}
-可用的表：
-{table_schemas}
-
-你的任务：
-1. 理解用户的中文查询需求
-2. 生成准确的 SQL 语句
-3. 只生成 SELECT 查询，不允许修改数据
-4. 考虑查询性能，必要时添加 LIMIT
-
-回答格式要求：
-- 使用 Thought/Action/Observation 格式
-- SQL 语句要格式化，便于阅读
-- 解释查询逻辑
-"""
-
-def build_system_prompt(self, database_info: Dict) -> str:
-    """构建系统提示词"""
-    table_schemas = self._format_table_schemas(database_info)
-    
-    return SYSTEM_PROMPT.format(
-        database_type=self.config.database.type,
-        table_schemas=table_schemas
-    )
-```
-
-#### Few-shot 示例
-```python
-FEW_SHOT_EXAMPLES = [
-    {
-        "question": "查询所有用户的数量",
-        "thought": "需要统计 users 表的总行数",
-        "sql": "SELECT COUNT(*) as user_count FROM users",
-    },
-    {
-        "question": "查找最近7天注册的用户",
-        "thought": "需要使用 created_at 字段筛选最近7天的记录",
-        "sql": """
-        SELECT * FROM users 
-        WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
-        ORDER BY created_at DESC
-        """
-    }
-]
-```
-
-### 4.2 查询优化
-
-#### SQL 优化建议
-```python
-class QueryOptimizer:
-    """查询优化器"""
-    
-    def optimize_query(self, sql: str, schema: Dict) -> Dict[str, Any]:
-        """分析并优化 SQL 查询"""
-        suggestions = []
-        
-        # 检查是否有 LIMIT
-        if "limit" not in sql.lower() and "count" not in sql.lower():
-            suggestions.append("建议添加 LIMIT 限制结果集大小")
-        
-        # 检查是否使用索引
-        tables_used = self._extract_tables(sql)
-        for table in tables_used:
-            indexed_columns = schema.get(table, {}).get("indexes", [])
-            where_columns = self._extract_where_columns(sql)
-            
-            missing_indexes = set(where_columns) - set(indexed_columns)
-            if missing_indexes:
-                suggestions.append(
-                    f"表 {table} 的列 {missing_indexes} 可能需要索引"
-                )
-        
-        return {
-            "original_sql": sql,
-            "suggestions": suggestions,
-            "optimized": len(suggestions) == 0
-        }
-```
-
-### 4.3 结果后处理
-
-#### 数据格式化
-```python
-def format_result(self, data: List[Dict], format_type: str = "table") -> str:
-    """格式化查询结果"""
-    
-    if format_type == "table":
-        # 表格格式
-        from tabulate import tabulate
-        if not data:
-            return "查询结果为空"
-        headers = list(data[0].keys())
-        rows = [list(row.values()) for row in data]
-        return tabulate(rows, headers=headers, tablefmt="grid")
-        
-    elif format_type == "json":
-        # JSON 格式
-        return json.dumps(data, ensure_ascii=False, indent=2)
-        
-    elif format_type == "csv":
-        # CSV 格式
-        import csv
-        import io
-        output = io.StringIO()
-        if data:
-            writer = csv.DictWriter(output, fieldnames=data[0].keys())
-            writer.writeheader()
-            writer.writerows(data)
-        return output.getvalue()
-```
-
-## 5. 配置详解
-
-### 5.1 完整配置示例
+#### 配置文件示例
 ```yaml
-# configs/production.yaml
+# configs/config.yaml
 app:
   name: "SemanticSQL Agent"
   version: "2.0.0"
   environment: "production"
-  debug: false
 
 database:
   type: "mysql"
-  host: "${DB_HOST}"  # 支持环境变量
-  port: ${DB_PORT:3306}  # 支持默认值
-  database: "${DB_NAME}"
-  username: "${DB_USER}"
-  password: "${DB_PASSWORD}"
-  # 连接池设置
-  pool_size: 5
-  max_overflow: 10
-  pool_timeout: 30
-  echo: false  # 不打印 SQL 语句
+  host: "192.168.200.216"
+  port: 13306
+  database: "testdb"
+  username: "testuser"
+  password: "testpass"
 
 llm:
   model: "Qwen3-14B"
-  base_url: "${LLM_BASE_URL:http://localhost:9009/v1}"
-  api_key: "${LLM_API_KEY:not-needed}"
-  temperature: 0.1  # 低温度for更确定的输出
+  base_url: "http://192.168.200.216:9009/v1"
+  api_key: "not-needed"
+  temperature: 0.7  # 生成多样性
   max_tokens: 2000
-  timeout: 30
-  # Function Calling 设置
-  tools_enabled: true
-  tool_choice: "auto"  # auto/none/required
+```
 
+## 2. 核心功能使用
+
+### 2.1 执行数据生成
+
+#### 基本命令
+```bash
+# 执行完整的数据库分析和数据生成
+python main.py smart-analyze "全面分析这个数据库系统" \
+    --config configs/config.yaml \
+    --verbose \
+    --save-result output/analysis_result.json
+
+# 分阶段查看执行进度
+python main.py smart-analyze "为电商系统生成查询场景" \
+    --stage-by-stage \
+    --save-result ecommerce_scenarios.json
+```
+
+#### 执行流程说明
+```
+执行步骤：
+1️⃣ 连接数据库 - 建立连接，获取基本信息
+2️⃣ 分析数据库领域 - 识别业务类型（电商/教育/金融等）
+3️⃣ 字段分类分析 - 理解每个字段的业务含义
+4️⃣ 表结构分析 - 识别核心表和辅助表
+5️⃣ ER关系分析 - 分析表之间的关联关系
+6️⃣ 场景问题生成 - 生成自然语言问题和SQL对
+```
+
+### 2.2 查看分析结果
+
+#### 结果文件结构
+```json
+{
+  "success": true,
+  "execution_time": 45.8,
+  "steps_taken": 6,
+  "final_result": {
+    "database_connection": {
+      "database": "testdb",
+      "type": "mysql",
+      "total_tables": 12
+    },
+    "domain_analysis": {
+      "domain": "电子商务",
+      "confidence": 0.92,
+      "key_entities": ["用户", "商品", "订单"]
+    },
+    "generated_scenarios": [
+      {
+        "id": "scenario_001",
+        "category": "用户分析",
+        "question": "查询最近30天内下单次数超过5次的活跃用户",
+        "sql": "SELECT user_id, COUNT(*) as order_count FROM orders WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY) GROUP BY user_id HAVING order_count > 5",
+        "difficulty": "medium",
+        "concepts": ["时间筛选", "分组", "Having条件"]
+      }
+    ]
+  }
+}
+```
+
+### 2.3 辅助功能
+
+#### 测试数据库连接
+```bash
+python main.py test --config configs/config.yaml
+```
+
+#### 查看数据库结构
+```bash
+python main.py schema --config configs/config.yaml
+```
+
+## 3. 深入理解工作原理
+
+### 3.1 智能体工作流程
+
+#### ReAct 模式示例
+```
+用户输入: "全面分析这个数据库系统"
+
+Agent 执行过程:
+Thought: 我需要先连接数据库了解基本信息
+Action: connect_database
+Action Input: {}
+Observation: 成功连接，发现12个表
+
+Thought: 现在我需要分析这是什么类型的业务系统
+Action: analyze_domain
+Action Input: {"tables": ["users", "products", "orders", ...]}
+Observation: 识别为电子商务系统，置信度0.92
+
+Thought: 接下来分析各个字段的含义
+Action: classify_fields
+...继续执行直到完成6个步骤
+```
+
+### 3.2 领域分析逻辑
+
+#### 领域识别规则
+```python
+# 电商领域特征
+E_COMMERCE_INDICATORS = {
+    "tables": ["products", "orders", "cart", "payment"],
+    "fields": ["price", "quantity", "shipping", "discount"],
+    "patterns": ["user_product", "order_item", "shopping_cart"]
+}
+
+# 教育领域特征
+EDUCATION_INDICATORS = {
+    "tables": ["students", "courses", "grades", "enrollment"],
+    "fields": ["score", "semester", "credit", "gpa"],
+    "patterns": ["student_course", "teacher_class"]
+}
+```
+
+### 3.3 场景生成策略
+
+#### 生成模板
+```python
+SCENARIO_TEMPLATES = {
+    "电子商务": {
+        "用户分析": [
+            "查询活跃用户",
+            "用户购买行为统计",
+            "用户价值分析"
+        ],
+        "商品分析": [
+            "热销商品排行",
+            "库存预警查询",
+            "商品类别统计"
+        ],
+        "订单分析": [
+            "订单趋势分析",
+            "支付方式统计",
+            "物流时效分析"
+        ]
+    }
+}
+```
+
+## 4. 高级配置
+
+### 4.1 自定义分析深度
+
+#### Agent 配置
+```yaml
 agent:
-  max_steps: 10  # ReAct 最大步数
+  max_steps: 20  # 增加分析步骤上限
   enable_thinking: true  # 显示思考过程
-  enable_reflection: false  # 关闭反思步骤
+  verbose: true  # 详细输出
   tools:
     - connect_database
-    - analyze_schema
-    - generate_sql
-    - execute_sql
+    - analyze_domain
+    - classify_fields
+    - analyze_tables  # 可选：深度表分析
+    - analyze_er
+    - generate_scenarios
 ```
 
-### 5.2 环境变量配置
-```bash
-# .env 文件
-# 数据库配置
-DB_HOST=localhost
-DB_PORT=3306
-DB_NAME=production_db
-DB_USER=app_user
-DB_PASSWORD=secure_password
+### 4.2 场景生成配置
 
-# LLM 配置
-LLM_BASE_URL=http://gpu-server:9009/v1
-LLM_API_KEY=your-api-key
-LLM_MODEL=Qwen3-14B
-
-# 应用配置
-LOG_LEVEL=INFO
-MAX_QUERY_ROWS=1000
-CACHE_TTL=3600
-```
-
-## 6. 部署建议
-
-### 6.1 生产环境部署
-
-#### Docker 部署
-```dockerfile
-# Dockerfile
-FROM python:3.8-slim
-
-WORKDIR /app
-
-# 安装系统依赖
-RUN apt-get update && apt-get install -y \
-    default-libmysqlclient-dev \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# 复制并安装 Python 依赖
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# 复制应用代码
-COPY . .
-
-# 非 root 用户运行
-RUN useradd -m appuser && chown -R appuser:appuser /app
-USER appuser
-
-# 启动命令
-CMD ["python", "main.py", "interactive"]
-```
-
-#### Docker Compose
-```yaml
-version: '3.8'
-
-services:
-  semanticsql:
-    build: .
-    environment:
-      - DB_HOST=mysql
-      - DB_PORT=3306
-      - DB_NAME=semanticsql
-      - DB_USER=root
-      - DB_PASSWORD=password
-      - LLM_BASE_URL=http://llm-server:9009/v1
-    depends_on:
-      - mysql
-    volumes:
-      - ./configs:/app/configs
-      - ./logs:/app/logs
-    restart: unless-stopped
-
-  mysql:
-    image: mysql:8.0
-    environment:
-      - MYSQL_ROOT_PASSWORD=password
-      - MYSQL_DATABASE=semanticsql
-    volumes:
-      - mysql_data:/var/lib/mysql
-    ports:
-      - "3306:3306"
-
-volumes:
-  mysql_data:
-```
-
-### 6.2 性能优化
-
-#### 缓存配置
+#### 控制生成数量和难度
 ```python
-# utils/cache.py
-from functools import lru_cache
-import hashlib
-
-class QueryCache:
-    """查询缓存"""
-    
-    def __init__(self, max_size=100, ttl=3600):
-        self.cache = {}
-        self.max_size = max_size
-        self.ttl = ttl
-    
-    def get_cache_key(self, question: str, schema_hash: str) -> str:
-        """生成缓存键"""
-        content = f"{question}:{schema_hash}"
-        return hashlib.md5(content.encode()).hexdigest()
-    
-    @lru_cache(maxsize=128)
-    def get_cached_sql(self, question: str) -> Optional[str]:
-        """获取缓存的 SQL"""
-        # 实现缓存逻辑
-        pass
+# 在代码中配置
+GENERATION_CONFIG = {
+    "scenarios_per_category": 5,  # 每个类别生成5个场景
+    "difficulty_distribution": {
+        "easy": 0.3,    # 30% 简单查询
+        "medium": 0.5,  # 50% 中等难度
+        "hard": 0.2     # 20% 复杂查询
+    },
+    "max_tables_in_query": 3,  # 最多涉及3个表
+    "include_advanced_features": True  # 包含窗口函数等高级特性
+}
 ```
 
-## 7. 故障排查
+### 4.3 Prompt 优化
 
-### 7.1 常见问题
+#### 自定义系统提示词
+```python
+CUSTOM_SYSTEM_PROMPT = """你是一个数据库分析和SQL生成专家。
 
-#### 连接问题
+分析任务要求：
+1. 深入理解数据库的业务含义
+2. 生成真实、实用的查询场景
+3. 确保SQL语法正确且高效
+4. 覆盖不同难度级别
+
+生成的查询场景应该：
+- 贴近实际业务需求
+- 问题描述自然流畅
+- SQL逻辑清晰准确
+- 包含适当的注释说明
+"""
+```
+
+## 5. 工具开发指南
+
+### 5.1 添加新的分析工具
+
+#### 示例：数据质量分析工具
+```python
+from tools.trae_base_tool import TraeBaseTool, ToolParameter
+
+class DataQualityTool(TraeBaseTool):
+    """分析数据质量"""
+    
+    def __init__(self, database_config):
+        super().__init__(
+            name="analyze_data_quality",
+            description="分析数据库中的数据质量问题"
+        )
+        self.db_config = database_config
+    
+    def get_parameters(self) -> List[ToolParameter]:
+        return [
+            ToolParameter(
+                name="tables",
+                type="array",
+                description="要分析的表列表",
+                required=True
+            )
+        ]
+    
+    def run(self, **kwargs) -> Dict[str, Any]:
+        tables = kwargs.get("tables", [])
+        quality_issues = []
+        
+        for table in tables:
+            # 检查空值
+            null_check = self._check_nulls(table)
+            # 检查重复
+            duplicate_check = self._check_duplicates(table)
+            # 检查数据一致性
+            consistency_check = self._check_consistency(table)
+            
+            quality_issues.append({
+                "table": table,
+                "null_percentage": null_check,
+                "duplicate_rows": duplicate_check,
+                "consistency_score": consistency_check
+            })
+        
+        return {
+            "success": True,
+            "quality_analysis": quality_issues,
+            "overall_score": self._calculate_score(quality_issues)
+        }
+```
+
+### 5.2 扩展场景生成
+
+#### 添加领域特定模板
+```python
+# 金融领域场景模板
+FINANCE_TEMPLATES = {
+    "风险分析": {
+        "template": "查询{time_period}内{risk_type}的{entity}",
+        "variables": {
+            "time_period": ["最近30天", "本季度", "今年"],
+            "risk_type": ["信用风险", "市场风险", "操作风险"],
+            "entity": ["客户", "产品", "交易"]
+        },
+        "sql_pattern": """
+        SELECT {columns}
+        FROM {main_table}
+        WHERE {time_condition}
+        AND risk_level > {threshold}
+        GROUP BY {group_by}
+        """
+    }
+}
+```
+
+## 6. 数据质量保证
+
+### 6.1 SQL 验证
+
+#### 执行前验证
+```python
+def validate_generated_sql(sql: str, schema: Dict) -> Dict[str, Any]:
+    """验证生成的SQL"""
+    validation_result = {
+        "is_valid": True,
+        "errors": [],
+        "warnings": []
+    }
+    
+    # 1. 语法检查
+    try:
+        parsed = sqlparse.parse(sql)[0]
+    except:
+        validation_result["is_valid"] = False
+        validation_result["errors"].append("SQL语法错误")
+    
+    # 2. 表名验证
+    tables_in_sql = extract_table_names(sql)
+    for table in tables_in_sql:
+        if table not in schema:
+            validation_result["errors"].append(f"表 {table} 不存在")
+    
+    # 3. 字段验证
+    # ... 更多验证逻辑
+    
+    return validation_result
+```
+
+### 6.2 场景质量评估
+
+#### 自动评分系统
+```python
+def score_scenario(scenario: Dict) -> float:
+    """对生成的场景进行评分"""
+    score = 100.0
+    
+    # 问题自然度评分
+    if len(scenario["question"]) < 10:
+        score -= 10  # 问题太短
+    
+    # SQL 复杂度评分
+    sql_complexity = analyze_sql_complexity(scenario["sql"])
+    if sql_complexity != scenario["difficulty"]:
+        score -= 15  # 难度不匹配
+    
+    # 业务相关性评分
+    if not contains_business_terms(scenario["question"]):
+        score -= 20  # 缺乏业务术语
+    
+    return score / 100.0
+```
+
+## 7. 批量处理
+
+### 7.1 多数据库批量分析
+
 ```bash
-# 测试数据库连接
-python main.py test --verbose
+# 批量分析脚本
+#!/bin/bash
 
-# 常见错误：
-# - Access denied: 检查用户名密码
-# - Unknown database: 确认数据库存在
-# - Connection refused: 检查主机和端口
+databases=("ecommerce_db" "education_db" "finance_db")
+
+for db in "${databases[@]}"; do
+    echo "分析数据库: $db"
+    python main.py smart-analyze "分析 $db 数据库" \
+        --config configs/${db}_config.yaml \
+        --save-result output/${db}_scenarios.json
+done
 ```
 
-#### LLM 调用问题
+### 7.2 结果合并处理
+
+```python
+# merge_results.py
+import json
+from pathlib import Path
+
+def merge_scenario_files(output_dir: str, merged_file: str):
+    """合并多个场景文件"""
+    all_scenarios = []
+    
+    for json_file in Path(output_dir).glob("*_scenarios.json"):
+        with open(json_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            scenarios = data.get("final_result", {}).get("generated_scenarios", [])
+            
+            # 添加来源标记
+            for scenario in scenarios:
+                scenario["source_db"] = json_file.stem
+                
+            all_scenarios.extend(scenarios)
+    
+    # 保存合并结果
+    with open(merged_file, 'w', encoding='utf-8') as f:
+        json.dump({
+            "total_scenarios": len(all_scenarios),
+            "scenarios": all_scenarios
+        }, f, ensure_ascii=False, indent=2)
+```
+
+## 8. 故障排查
+
+### 8.1 常见问题
+
+#### LLM 调用失败
 ```python
 # 测试 LLM 连接
 import openai
 
 client = openai.OpenAI(
-    base_url="http://localhost:9009/v1",
+    base_url="http://192.168.200.216:9009/v1",
     api_key="not-needed"
 )
 
-response = client.chat.completions.create(
-    model="Qwen3-14B",
-    messages=[{"role": "user", "content": "Hello"}]
-)
-print(response)
+try:
+    response = client.chat.completions.create(
+        model="Qwen3-14B",
+        messages=[{"role": "user", "content": "测试"}]
+    )
+    print("LLM 连接正常")
+except Exception as e:
+    print(f"LLM 连接失败: {e}")
 ```
 
-### 7.2 调试技巧
-
-#### 启用详细日志
+#### 分析中断处理
 ```bash
-# 设置日志级别
+# 启用详细日志
 export LOG_LEVEL=DEBUG
+python main.py smart-analyze "分析数据库" --verbose
 
-# 或在代码中
-import logging
-logging.basicConfig(level=logging.DEBUG)
+# 查看具体错误
+# 通常是因为：
+# 1. 表结构过于复杂
+# 2. LLM 响应超时
+# 3. 数据库连接断开
 ```
 
-#### SQL 调试
+### 8.2 性能优化
+
+#### 大型数据库处理
 ```python
-# 在配置中启用 SQL 日志
-database:
-  echo: true  # 打印所有 SQL 语句
+# 配置优化建议
+LARGE_DB_CONFIG = {
+    # 限制分析表数量
+    "max_tables_to_analyze": 50,
+    
+    # 采样分析
+    "enable_sampling": True,
+    "sample_size": 1000,
+    
+    # 并行处理
+    "parallel_analysis": True,
+    "worker_threads": 4
+}
 ```
 
-## 8. 最佳实践
+## 9. 最佳实践
 
-### 8.1 查询编写
-- 使用清晰、具体的中文描述
-- 指明时间范围（如"最近7天"）
-- 说明排序和限制需求
-- 避免歧义表达
+### 9.1 数据准备
+- 确保数据库有合理的表名和字段名
+- 建立明确的外键关系
+- 为表和字段添加注释
 
-### 8.2 性能建议
-- 为常用查询字段建立索引
-- 使用连接池管理数据库连接
-- 合理设置查询结果限制
-- 定期清理缓存
+### 9.2 生成策略
+- 先在小型数据库上测试
+- 逐步调整生成参数
+- 人工审核生成质量
 
-### 8.3 安全建议
-- 只授予 SELECT 权限
-- 使用独立的查询账号
-- 定期审计查询日志
-- 限制敏感表访问
+### 9.3 使用建议
+- 定期更新场景模板
+- 根据实际需求调整难度分布
+- 保存高质量的生成结果作为种子数据

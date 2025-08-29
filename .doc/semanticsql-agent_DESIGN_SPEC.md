@@ -3,20 +3,20 @@
 ## 1. 项目概述
 
 ### 1.1 项目背景
-SemanticSQL Agent 是一个基于大语言模型（LLM）的自然语言转 SQL 查询智能体。该项目专注于将中文自然语言查询转换为准确的 SQL 语句并执行，为非技术用户提供便捷的数据库查询能力。
+SemanticSQL Agent 是一个基于大语言模型（LLM）的 NL2SQL 训练数据生成系统。该项目通过智能分析数据库结构，自动生成高质量的自然语言问题和对应的 SQL 查询对，用于训练和评估 NL2SQL 模型。
 
 ### 1.2 设计理念
-- **简单易用**：用户只需输入中文问题，无需了解 SQL 语法
-- **工具化思维**：将 NL2SQL 任务分解为多个专业工具的协同工作
-- **模型兼容**：基于 OpenAI API 标准，完美支持 Qwen 等兼容模型
-- **实用优先**：专注核心功能，避免过度设计
+- **智能分析优先**：深度理解数据库结构和业务含义
+- **工具链架构**：将复杂的分析任务分解为专业工具的协同工作
+- **数据质量导向**：生成真实、多样、准确的训练数据
+- **可扩展设计**：支持不同领域和数据库类型
 
 ### 1.3 核心特性
+- 基于 ReAct 模式的智能数据库分析
+- 六步渐进式分析流程
 - 支持 Qwen 模型的 OpenAI 兼容 API（包括 Function Calling）
+- 自动生成领域相关的查询场景
 - 支持多种数据库（MySQL、PostgreSQL、SQLite）
-- 基于 ReAct 模式的智能推理
-- 灵活的 YAML 配置系统
-- 完整的命令行界面
 
 ## 2. 系统架构设计
 
@@ -25,6 +25,7 @@ SemanticSQL Agent 是一个基于大语言模型（LLM）的自然语言转 SQL 
 ┌─────────────────────────────────────────────────────────┐
 │                      用户接口层                           │
 │                   (CLI Interface)                        │
+│            smart-analyze 命令（核心入口）                  │
 └────────────────────────┬────────────────────────────────┘
                         │
 ┌────────────────────────┴────────────────────────────────┐
@@ -32,17 +33,17 @@ SemanticSQL Agent 是一个基于大语言模型（LLM）的自然语言转 SQL 
 │                  (Agent Layer)                           │
 │  ┌─────────────┐  ┌──────────────┐                     │
 │  │  BaseAgent  │  │SmartSQLAgent │                     │
-│  │  (ReAct基类)│  │ (SQL专用实现) │                     │
+│  │  (ReAct基类)│  │ (分析专用)   │                     │
 │  └─────────────┘  └──────────────┘                     │
 └────────────────────────┬────────────────────────────────┘
                         │
 ┌────────────────────────┴────────────────────────────────┐
-│                     工具层                                │
-│                  (Tools Layer)                           │
+│                   分析工具层                              │
+│               (Analysis Tools Layer)                     │
 │  ┌────────────┐  ┌──────────────┐  ┌───────────────┐  │
-│  │数据库连接   │  │  模式分析     │  │  SQL生成      │  │
+│  │数据库连接   │  │  领域分析     │  │  字段分类     │  │
 │  ├────────────┤  ├──────────────┤  ├───────────────┤  │
-│  │SQL执行     │  │  领域分析     │  │  数据分析     │  │
+│  │表结构分析   │  │  ER关系分析   │  │ 场景生成      │  │
 │  └────────────┘  └──────────────┘  └───────────────┘  │
 └────────────────────────┬────────────────────────────────┘
                         │
@@ -58,265 +59,262 @@ SemanticSQL Agent 是一个基于大语言模型（LLM）的自然语言转 SQL 
 
 ### 2.2 核心组件设计
 
-#### 2.2.1 智能体设计 (Agent Design)
-- **BaseAgent**: ReAct 模式基础实现
-  - 观察-思考-行动循环
-  - 工具调用管理
-  - 执行状态跟踪
-  - LLM 交互接口
+#### 2.2.1 分析流程设计
+完整的数据生成流程包含六个阶段：
 
-- **SmartSQLAgent**: SQL 查询专用智能体
-  - 继承 BaseAgent 的 ReAct 能力
-  - 集成 SQL 相关工具链
-  - 返回结构化的查询结果
-  - 智能错误处理
+1. **数据库连接** (`connect_database`)
+   - 建立数据库连接
+   - 获取基本信息（表数量、数据库类型等）
 
-#### 2.2.2 工具系统设计 (Tool System)
+2. **领域分析** (`analyze_domain`)
+   - 识别业务领域（电商、金融、教育等）
+   - 理解数据库的业务用途
+
+3. **字段分类** (`classify_fields`)
+   - 分析每个字段的业务含义
+   - 识别主键、外键、业务字段
+
+4. **表结构分析** (`analyze_tables`)
+   - 深入分析每张表的结构
+   - 识别核心业务表和辅助表
+
+5. **ER关系分析** (`analyze_er`)
+   - 分析表之间的关联关系
+   - 构建实体关系图谱
+
+6. **场景生成** (`generate_scenarios`)
+   - 基于分析结果生成查询场景
+   - 生成自然语言问题和对应SQL
+
+#### 2.2.2 工具系统设计
 - **工具基类** (TraeBaseTool)
   - 标准化的工具接口
-  - 参数定义（ToolParameter）
-  - 统一的执行方法
+  - 参数定义和验证
+  - 统一的结果格式
   
-- **SQL 工具集**:
-  1. **连接管理**: `connect_database` - 建立数据库连接
-  2. **模式分析**: `analyze_schema` - 分析表结构和关系
-  3. **SQL生成**: `generate_sql` - 将自然语言转换为 SQL
-  4. **查询执行**: `execute_sql` - 执行 SQL 并返回结果
-  5. **领域分析**: `analyze_domain` - 理解业务领域
+- **分析工具集**:
+  1. **DomainAnalysisTool**: 业务领域识别
+  2. **FieldClassificationTool**: 字段语义分类
+  3. **SchemaExtractionTool**: 数据库模式提取
+  4. **ERAnalysisTool**: 实体关系分析
+  5. **SequentialThinkingTool**: 序列化思考辅助
 
-#### 2.2.3 LLM 集成设计
-- **Qwen 模型支持**:
-  - 完全兼容 OpenAI API 格式
-  - 支持 Function Calling（工具调用）
-  - 流式响应支持（可选）
-  - 自定义 base_url 配置
-
-- **Function Calling 实现**:
-  ```python
-  # 工具定义格式
-  {
-      "type": "function",
-      "function": {
-          "name": "execute_sql",
-          "description": "执行SQL查询",
-          "parameters": {
-              "type": "object",
-              "properties": {
-                  "sql": {"type": "string", "description": "要执行的SQL语句"}
-              },
-              "required": ["sql"]
-          }
-      }
-  }
-  ```
+#### 2.2.3 数据生成策略
+- **场景多样性**：覆盖简单查询、聚合统计、多表关联等
+- **难度分级**：从简单到复杂的渐进式生成
+- **领域相关**：基于识别的业务领域生成相关查询
+- **真实性保证**：生成符合实际业务场景的问题
 
 ### 2.3 数据流设计
 
-#### 2.3.1 查询处理流程
+#### 2.3.1 分析执行流程
 ```
-用户输入中文查询
+用户启动分析命令
     ↓
-CLI 接收并解析 → 加载配置 → 初始化 Agent
+加载配置 → 初始化 SmartSQLAgent
     ↓
-连接数据库 → 分析表结构 → 缓存模式信息
+执行六步分析流程:
+    ├─ Step 1: 连接数据库，获取元数据
+    ├─ Step 2: 分析业务领域特征
+    ├─ Step 3: 对字段进行语义分类
+    ├─ Step 4: 深入分析表结构
+    ├─ Step 5: 提取实体关系
+    └─ Step 6: 生成查询场景
     ↓
-ReAct 执行循环:
-    ├─ Thought: 理解查询需求
-    ├─ Action: 调用合适的工具
-    ├─ Observation: 观察执行结果
-    └─ 继续或完成
+整合分析结果 → 生成训练数据集
     ↓
-格式化结果 → 返回给用户
+保存结果（JSON格式）
 ```
 
-#### 2.3.2 Function Calling 流程
+#### 2.3.2 ReAct 执行模式
 ```
-Agent 发送消息给 LLM
-    ↓
-LLM 返回 function_call
-    ↓
-解析函数名和参数 → 验证参数合法性
-    ↓
-调用对应工具执行 → 获取执行结果
-    ↓
-将结果作为 function response 发送给 LLM
-    ↓
-LLM 生成最终回复
+对于每个分析步骤:
+    ├─ Thought: 分析当前需要什么信息
+    ├─ Action: 调用相应的分析工具
+    ├─ Observation: 观察工具返回结果
+    └─ 继续或进入下一步
 ```
 
 ## 3. 关键设计决策
 
-### 3.1 模型选择
-- 使用 Qwen 系列模型（如 Qwen3-14B）
-- 通过 OpenAI 兼容 API 调用
-- 支持本地部署和云端 API
+### 3.1 渐进式分析
+- 从宏观到微观的分析顺序
+- 每步分析基于前步结果
+- 确保分析的连贯性和深度
 
-### 3.2 工具设计原则
-- 每个工具专注单一职责
-- 工具之间松耦合
-- 参数和返回值标准化
-- 错误信息友好明确
+### 3.2 工具协同
+- 工具之间通过共享上下文协作
+- 后续工具可以访问前序工具的分析结果
+- 支持工具间的依赖关系
 
-### 3.3 配置管理
-- 使用 YAML 格式，易读易写
-- 支持环境变量覆盖
-- 敏感信息（如密码）支持加密存储
+### 3.3 质量控制
+- 生成的SQL必须语法正确
+- 问题描述要自然、准确
+- 覆盖不同复杂度的查询场景
 
 ## 4. 接口设计
 
 ### 4.1 CLI 接口
 ```bash
-# 初始化配置
-python main.py init --model Qwen3-14B --base-url http://localhost:9009/v1
+# 执行完整的智能分析
+python main.py smart-analyze "全面分析数据库" \
+    --config config.yaml \
+    --save-result analysis_result.json \
+    --verbose
 
-# 执行查询
-python main.py run "查询所有用户的数量"
+# 分阶段显示进度
+python main.py smart-analyze "生成电商查询场景" \
+    --stage-by-stage
 
-# 交互模式
-python main.py interactive
-
-# 测试连接
-python main.py test
-
-# 查看数据库结构
-python main.py schema
+# 其他辅助命令
+python main.py test        # 测试连接
+python main.py schema      # 查看结构
 ```
 
 ### 4.2 核心 API
 ```python
-# Agent 接口
 class SmartSQLAgent:
-    def query(self, question: str) -> SQLQueryResult:
-        """执行自然语言查询"""
-        pass
-
-# 工具接口
-class TraeBaseTool:
-    def get_parameters(self) -> List[ToolParameter]:
-        """获取工具参数定义"""
-        pass
-    
-    def run(self, **kwargs) -> Dict[str, Any]:
-        """执行工具"""
-        pass
+    def smart_analyze(self, request: str) -> Dict[str, Any]:
+        """执行智能分析流程"""
+        # 返回包含6步分析结果的字典
+        
+    def new_task(self, task: str) -> AgentExecution:
+        """创建新的分析任务"""
+        # 返回执行记录
 ```
 
-### 4.3 配置格式
-```yaml
-# 应用配置
-app:
-  name: "SemanticSQL Agent"
-  version: "2.0.0"
-  environment: "production"
-
-# 数据库配置
-database:
-  type: "mysql"
-  host: "192.168.200.216"
-  port: 13306
-  database: "testdb"
-  username: "testuser"
-  password: "testpass"
-
-# LLM 配置
-llm:
-  model: "Qwen3-14B"
-  base_url: "http://192.168.200.216:9009/v1"
-  api_key: "not-needed"  # Qwen 本地部署可能不需要
-  temperature: 0.1
-  max_tokens: 2000
-```
-
-## 5. 扩展性设计
-
-### 5.1 添加新工具
+### 4.3 分析结果格式
 ```python
-# 1. 继承 TraeBaseTool
-class MyCustomTool(TraeBaseTool):
-    def __init__(self):
-        super().__init__(
-            name="my_tool",
-            description="自定义工具描述"
-        )
-    
-    def get_parameters(self) -> List[ToolParameter]:
-        return [
-            ToolParameter(name="param1", type="string", required=True)
+{
+    "success": true,
+    "execution_time": 45.2,
+    "steps_taken": 6,
+    "final_result": {
+        "database_connection": {...},
+        "domain_analysis": {
+            "domain": "电子商务",
+            "confidence": 0.95,
+            "key_entities": ["用户", "订单", "商品"]
+        },
+        "field_classification": {...},
+        "table_analysis": {...},
+        "er_relationships": {...},
+        "generated_scenarios": [
+            {
+                "name": "用户订单统计",
+                "question": "查询每个用户的订单总数",
+                "sql": "SELECT user_id, COUNT(*) FROM orders GROUP BY user_id",
+                "difficulty": "medium"
+            }
         ]
+    }
+}
+```
+
+## 5. 工具详细设计
+
+### 5.1 领域分析工具
+```python
+class DomainAnalysisTool:
+    """识别数据库的业务领域"""
     
-    def run(self, **kwargs) -> Dict[str, Any]:
-        # 实现工具逻辑
-        return {"success": True, "result": "..."}
-
-# 2. 注册到工具列表
-AVAILABLE_TOOLS.append(MyCustomTool)
+    分析维度:
+    - 表名模式（如 orders, products 暗示电商）
+    - 字段名称（如 student, course 暗示教育）
+    - 数据类型分布
+    - 表关系复杂度
+    
+    输出:
+    - 主要领域及置信度
+    - 关键业务实体
+    - 领域特征描述
 ```
 
-### 5.2 支持新数据库
-- 实现数据库方言适配器
-- 添加对应的连接驱动
-- 更新配置验证逻辑
-
-## 6. 部署方案
-
-### 6.1 本地部署
-```bash
-# 1. 安装依赖
-pip install -r requirements.txt
-
-# 2. 配置数据库和 LLM
-python main.py init
-
-# 3. 运行服务
-python main.py interactive
+### 5.2 字段分类工具
+```python
+class FieldClassificationTool:
+    """对数据库字段进行语义分类"""
+    
+    分类类别:
+    - 标识符（ID、编码）
+    - 时间戳（创建时间、更新时间）
+    - 金额（价格、金额、费用）
+    - 状态（状态码、标志位）
+    - 描述性（名称、描述、备注）
+    - 关联字段（外键引用）
 ```
 
-### 6.2 Docker 部署
-```dockerfile
-FROM python:3.8-slim
-WORKDIR /app
-COPY . .
-RUN pip install -r requirements.txt
-CMD ["python", "main.py", "interactive"]
+### 5.3 场景生成策略
+```python
+场景类型:
+1. 简单查询
+   - 单表查询
+   - 条件筛选
+   - 排序和限制
+
+2. 聚合统计
+   - 计数、求和、平均
+   - 分组统计
+   - Having筛选
+
+3. 多表关联
+   - Inner Join
+   - Left Join
+   - 子查询
+
+4. 复杂分析
+   - 窗口函数
+   - CTE查询
+   - 复杂条件组合
 ```
 
-## 7. 性能考虑
+## 6. 扩展性设计
 
-### 7.1 优化策略
-- 数据库模式缓存，避免重复查询
-- 连接池管理，复用数据库连接
-- 合理的 LLM 参数设置（temperature、max_tokens）
+### 6.1 支持新领域
+- 添加领域识别规则
+- 定制领域相关的查询模板
+- 扩展字段分类规则
 
-### 7.2 资源限制
-- 单次查询超时控制
-- 结果集大小限制
-- 并发请求限制
+### 6.2 支持新数据库
+- 实现数据库方言适配
+- 调整元数据提取逻辑
+- 适配特定数据库特性
 
-## 8. 安全设计
+### 6.3 自定义生成策略
+- 可配置的场景生成模板
+- 难度级别自定义
+- 特定业务场景支持
 
-### 8.1 查询安全
-- SQL 注入防护
-- 只允许 SELECT 查询（可配置）
-- 敏感表/字段访问控制
+## 7. 质量保证
 
-### 8.2 配置安全
-- 密码加密存储
-- API Key 环境变量管理
-- 访问日志记录
+### 7.1 生成数据验证
+- SQL语法检查
+- 执行可行性验证
+- 结果合理性检查
 
-## 9. 未来规划
+### 7.2 多样性保证
+- 避免生成重复问题
+- 确保覆盖不同查询类型
+- 平衡难度分布
 
-### 9.1 功能增强
-- 支持更复杂的多表查询
-- 查询结果可视化
-- 查询历史和收藏
+### 7.3 领域相关性
+- 生成符合领域特点的问题
+- 使用领域专业术语
+- 反映真实业务场景
 
-### 9.2 模型优化
-- 针对特定领域的 Prompt 优化
-- Few-shot 示例管理
-- 查询意图分类
+## 8. 未来规划
 
-### 9.3 生态集成
-- REST API 服务化
-- Jupyter Notebook 插件
-- 数据分析平台集成
+### 8.1 功能增强
+- 支持更多复杂SQL特性
+- 多语言问题生成
+- 自动化质量评估
+
+### 8.2 模型优化
+- 针对特定领域的Prompt优化
+- Few-shot示例自动选择
+- 生成策略自适应
+
+### 8.3 应用扩展
+- Web界面支持
+- 批量数据库分析
+- 与NL2SQL训练流程集成
