@@ -121,14 +121,19 @@ class QueryGenerationTool(AgentTool):
         super().__init__(config)
         self.llm_client = llm_client
     
-    def execute(self, question: str, schema_context: Optional[Dict] = None, **kwargs) -> Dict[str, Any]:
+    def execute(self, question: Optional[str] = None, query: Optional[str] = None, schema_context: Optional[Dict] = None, **kwargs) -> Dict[str, Any]:
         """根据自然语言问题生成SQL查询"""
         try:
             if not self.llm_client:
                 return {"success": False, "error": "LLM客户端未初始化"}
             
+            # 兼容不同的参数名
+            actual_question = question or query or kwargs.get("input", "")
+            if not actual_question:
+                return {"success": False, "error": "缺少问题或查询内容"}
+            
             # 构建提示词
-            prompt = self._build_sql_generation_prompt(question, schema_context)
+            prompt = self._build_sql_generation_prompt(actual_question, schema_context)
             
             # 调用LLM生成SQL
             response = self.llm_client.chat.completions.create(
@@ -145,7 +150,7 @@ class QueryGenerationTool(AgentTool):
             
             return {
                 "success": True,
-                "question": question,
+                "question": actual_question,
                 "generated_sql": sql,
                 "message": f"已生成SQL查询: {sql[:100]}..."
             }
@@ -189,7 +194,7 @@ SQL查询:"""
         return sql
     
     def get_description(self) -> str:
-        return "根据自然语言问题生成SQL查询语句。需要参数: question (必需), schema_context (可选)"
+        return "根据自然语言问题生成SQL查询语句。参数: question 或 query (问题内容), schema_context (可选的表结构信息)"
 
 
 class QueryExecutionTool(AgentTool):
@@ -236,10 +241,25 @@ class DataAnalysisTool(AgentTool):
         super().__init__(config)
         self.llm_client = llm_client
     
-    def execute(self, data: List[Dict], question: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+    def execute(self, data: Optional[List[Dict]] = None, question: Optional[str] = None, **kwargs) -> Dict[str, Any]:
         """分析查询结果数据"""
         try:
-            if not data:
+            # 兼容不同的数据传入方式
+            actual_data = data
+            if not actual_data:
+                # 尝试从kwargs获取数据
+                if "database" in kwargs and "table" in kwargs:
+                    # 如果传入的是数据库和表信息，返回提示
+                    return {
+                        "success": True,
+                        "analysis": f"需要先执行查询获取 {kwargs.get('table')} 表的数据才能进行分析",
+                        "suggestion": "请先使用 execute_sql 工具执行查询获取数据",
+                        "message": "数据分析工具需要实际的查询结果数据"
+                    }
+                else:
+                    actual_data = []
+            
+            if not actual_data:
                 return {
                     "success": True,
                     "analysis": "没有数据需要分析",
@@ -247,13 +267,13 @@ class DataAnalysisTool(AgentTool):
                 }
             
             # 基础统计信息
-            basic_stats = self._calculate_basic_stats(data)
+            basic_stats = self._calculate_basic_stats(actual_data)
             
             # 如果有LLM，进行智能分析
             insights = []
             if self.llm_client and question:
                 try:
-                    ai_analysis = self._perform_ai_analysis(data, question)
+                    ai_analysis = self._perform_ai_analysis(actual_data, question)
                     insights.append(ai_analysis)
                 except Exception as e:
                     self.logger.warning(f"AI分析失败: {e}")
@@ -262,7 +282,7 @@ class DataAnalysisTool(AgentTool):
                 "success": True,
                 "data_summary": basic_stats,
                 "insights": insights,
-                "message": f"已分析 {len(data)} 行数据"
+                "message": f"已分析 {len(actual_data)} 行数据"
             }
             
         except Exception as e:
@@ -323,7 +343,7 @@ class DataAnalysisTool(AgentTool):
         return response.choices[0].message.content.strip()
     
     def get_description(self) -> str:
-        return "分析查询结果数据，提供统计信息和洞察。参数: data (必需), question (可选)"
+        return "分析查询结果数据，提供统计信息和洞察。参数: data (查询结果列表), question (可选的分析问题)"
 
 
 class ReasoningTool(AgentTool):

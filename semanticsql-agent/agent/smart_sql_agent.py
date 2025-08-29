@@ -108,7 +108,7 @@ class SmartSQLAgent(BaseAgent):
 5. 重复直到任务完成
 
 ## 响应格式
-请使用以下格式响应：
+请严格按照以下格式响应：
 
 ```
 Thought: 我需要[你的思考过程]
@@ -116,12 +116,24 @@ Action: [工具名称]
 Action Input: {{"参数名": "参数值"}}
 ```
 
+**重要**: Action后面只能是确切的工具名称！
+
+## 可用工具名称（严格使用）
+- connect_database  
+- analyze_schema
+- generate_sql
+- execute_sql
+- analyze_data
+- reasoning  
+- analyze_domain
+
 ## 注意事项
 - 始终先连接数据库获取基本信息
 - 根据实际情况灵活选择分析策略
 - 在执行SQL前先分析相关表结构
 - 为用户提供清晰的分析结果和建议
 - 如果遇到错误，尝试其他方法或工具
+- Action必须是上述工具名称之一，不能是中文描述或句子
 
 开始分析吧！"""
 

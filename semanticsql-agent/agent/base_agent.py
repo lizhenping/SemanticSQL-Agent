@@ -331,11 +331,29 @@ class BaseAgent(ABC):
     def _format_tool_output(self, output: Any) -> str:
         """格式化工具输出"""
         if isinstance(output, dict):
-            return json.dumps(output, ensure_ascii=False, indent=2)[:500]
+            # 对字典类型，保留更多信息，特别是success和关键数据
+            formatted = json.dumps(output, ensure_ascii=False, indent=2)
+            if len(formatted) > 2000:  # 增加到2000字符
+                # 如果太长，保留关键信息
+                summary = {
+                    "success": output.get("success"),
+                    "message": output.get("message", ""),
+                    "error": output.get("error"),
+                }
+                # 添加数据摘要
+                if "schemas" in output:
+                    summary["schemas_count"] = len(output["schemas"])
+                if "results" in output:
+                    summary["results_count"] = len(output.get("results", []))
+                if "data" in output:
+                    summary["data_sample"] = output.get("data", [])[:2]  # 只显示前2条
+                
+                return json.dumps(summary, ensure_ascii=False, indent=2) + "\n[输出已简化，完整信息已保存]"
+            return formatted
         elif isinstance(output, (list, tuple)):
-            return str(output)[:500]
+            return str(output)[:1000]
         else:
-            return str(output)[:500]
+            return str(output)[:1000]
     
     def _reflect_on_progress(self) -> Optional[str]:
         """反思进度 - 子类可以重写"""
