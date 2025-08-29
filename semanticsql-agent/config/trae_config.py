@@ -67,7 +67,7 @@ class DatabaseConfig:
 class LLMConfig:
     """LLM配置"""
     model: str = "Qwen3-14B"
-    base_url: str = "http://192.168.200.216:9009/v1"
+    base_url: str = "http://localhost:9009/v1"
     api_key: str = "not-needed"
     temperature: float = 0.1
     max_tokens: int = 2000
@@ -109,14 +109,13 @@ class AgentConfig:
     
     # 工具配置
     enabled_tools: List[str] = field(default_factory=lambda: [
-        "schema_extraction",
-        "domain_analysis", 
-        "field_classification",
-        "er_analysis",
-        "sql_generation",
-        "sql_validation",
-        "sql_execution",
-        "sequential_thinking"
+        "connect_database",
+        "analyze_schema", 
+        "generate_sql",
+        "execute_sql",
+        "analyze_data",
+        "reasoning",
+        "analyze_domain"
     ])
     
     # 上下文配置

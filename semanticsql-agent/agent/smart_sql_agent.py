@@ -1,491 +1,308 @@
 """
-智能SQL Agent - 自动执行完整数据分析流程
+SmartSQLAgent - 基于ReAct模式的智能数据库分析Agent
+完全重写为真正的智能体架构
 """
 
 import json
 import logging
-from enum import Enum
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 from datetime import datetime
 
-# 不再需要BaseAgent，SmartSQLAgent是独立实现
+from .base_agent import BaseAgent, AgentExecution
+from tools.agent_tools import (
+    DatabaseConnectionTool,
+    SchemaAnalysisTool, 
+    QueryGenerationTool,
+    QueryExecutionTool,
+    DataAnalysisTool,
+    ReasoningTool,
+    DomainAnalysisTool
+)
 from config.trae_config import TraeConfig
-from tools.sql_tools import (
-    SyncSchemaExtractionTool as SchemaExtractionTool,
-    SyncSQLGenerationTool as SQLGenerationTool,
-    SyncSQLValidationTool as SQLValidationTool,
-    SyncSQLExecutionTool as SQLExecutionTool
-)
-from tools.analysis_tools import (
-    SyncDomainAnalysisTool as DomainAnalysisTool,
-    SyncFieldClassificationTool as FieldClassificationTool,
-    SyncERAnalysisTool as ERAnalysisTool,
-    SyncSequentialThinkingTool as SequentialThinkingTool
-)
-import openai
-from database.connection_manager import DatabaseManager
-
-logger = logging.getLogger(__name__)
+from models.sql_result import SQLQueryResult
 
 
-class AnalysisStage(Enum):
-    """分析阶段枚举"""
-    CONNECT = "connect"              # 连接数据库
-    DOMAIN_ANALYSIS = "domain"       # 分析数据库领域
-    FIELD_CLASSIFICATION = "field"   # 字段分类
-    TABLE_ANALYSIS = "table"         # 表结构分析
-    ER_ANALYSIS = "er"              # ER关系分析
-    SCENARIO_GENERATION = "scenario" # 场景问题生成
-    COMPLETED = "completed"          # 完成
-
-
-class SmartAnalysisResult:
-    """智能分析结果"""
-    
-    def __init__(self):
-        self.success = True
-        self.current_stage = AnalysisStage.CONNECT
-        self.stages_completed = []
-        self.database_info = {}
-        self.domain_analysis = {}
-        self.field_classification = {}
-        self.table_analysis = {}
-        self.er_analysis = {}
-        self.generated_scenarios = []
-        self.execution_time = 0.0
-        self.error = None
-        self.steps_taken = 0
-        
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
-        return {
-            "success": self.success,
-            "current_stage": self.current_stage.value,
-            "stages_completed": [stage.value for stage in self.stages_completed],
-            "database_info": self.database_info,
-            "domain_analysis": self.domain_analysis,
-            "field_classification": self.field_classification,
-            "table_analysis": self.table_analysis,
-            "er_analysis": self.er_analysis,
-            "generated_scenarios": self.generated_scenarios,
-            "execution_time": self.execution_time,
-            "error": self.error,
-            "steps_taken": self.steps_taken
-        }
-
-
-class SmartSQLAgent:
-    """智能SQL Agent - 自动执行完整分析流程"""
+class SmartSQLAgent(BaseAgent):
+    """智能SQL分析Agent - 使用ReAct模式进行数据库分析"""
     
     def __init__(self, config: TraeConfig):
         """初始化智能SQL Agent"""
-        self.config = config
-        self.logger = logging.getLogger("agent.smart_sql")
+        super().__init__(config)
+        self.logger = logging.getLogger("SmartSQLAgent")
         
-        # 初始化LLM客户端（直接使用OpenAI客户端）
-        self.llm_client = openai.OpenAI(
-            api_key=config.llm.api_key,
-            base_url=config.llm.base_url
-        )
-        self.llm_config = {
-            'model': config.llm.model,
-            'temperature': config.llm.temperature,
-            'max_tokens': config.llm.max_tokens
-        }
+        # 存储当前分析上下文
+        self.current_database_info = None
+        self.current_schema_info = None
+        self.analysis_results = {}
         
-        # 初始化数据库管理器
-        self.db_manager = DatabaseManager(config.database)
-        
-        # 初始化工具
-        self.tools = self._create_tools()
-        
-        # 状态跟踪
-        self.current_result = SmartAnalysisResult()
-        
-    def _create_tools(self) -> Dict[str, Any]:
-        """创建所有需要的工具"""
-        tools = {}
-        
-        # 数据库相关工具
-        tools['schema_extraction'] = SchemaExtractionTool(self.config.database)
-        tools['sql_generation'] = SQLGenerationTool(self.config.database)
-        tools['sql_validation'] = SQLValidationTool(self.config.database)
-        tools['sql_execution'] = SQLExecutionTool(self.config.database)
-        
-        # 分析工具
-        tools['analyze_domain'] = DomainAnalysisTool(self.config.database)
-        tools['classify_fields'] = FieldClassificationTool(self.config.database)
-        tools['analyze_relationships'] = ERAnalysisTool(self.config.database)
-        tools['sequential_thinking'] = SequentialThinkingTool(self.config.database)
-        
-        return tools
-    
-    def smart_analyze(self, user_request: str = "请分析这个数据库") -> SmartAnalysisResult:
-        """执行智能分析流程"""
-        start_time = datetime.now()
-        self.logger.info(f"开始智能分析流程: {user_request}")
-        
-        try:
-            # 执行6步流程
-            self._execute_connect_stage()
-            self._execute_domain_analysis_stage()
-            self._execute_field_classification_stage()
-            self._execute_table_analysis_stage()
-            self._execute_er_analysis_stage()
-            self._execute_scenario_generation_stage()
-            
-            # 标记完成
-            self.current_result.current_stage = AnalysisStage.COMPLETED
-            self.current_result.stages_completed.append(AnalysisStage.COMPLETED)
-            
-        except Exception as e:
-            self.logger.error(f"智能分析流程失败: {e}")
-            self.current_result.success = False
-            self.current_result.error = str(e)
-        
-        finally:
-            # 关闭数据库连接
-            self.db_manager.close()
-            
-            # 计算执行时间
-            end_time = datetime.now()
-            self.current_result.execution_time = (end_time - start_time).total_seconds()
-            
-        return self.current_result
-    
-    def _execute_connect_stage(self):
-        """阶段1: 连接数据库"""
-        self.logger.info("阶段1: 连接数据库")
-        self.current_result.current_stage = AnalysisStage.CONNECT
-        
-        # 连接数据库
-        if not self.db_manager.initialize():
-            raise Exception("数据库连接失败")
-            
-        # 获取数据库基本信息
-        self.current_result.database_info = self.db_manager.get_database_info()
-        self.current_result.stages_completed.append(AnalysisStage.CONNECT)
-        
-        self.logger.info(f"数据库连接成功: {self.current_result.database_info}")
-    
-    def _execute_domain_analysis_stage(self):
-        """阶段2: 分析数据库领域"""
-        self.logger.info("阶段2: 分析数据库领域")
-        self.current_result.current_stage = AnalysisStage.DOMAIN_ANALYSIS
-        
-        # 使用LLM进行领域分析（不使用工具调用）
-        domain_prompt = self._build_domain_analysis_prompt()
-        
-        response = self.llm_client.chat.completions.create(
-            messages=[{"role": "user", "content": domain_prompt}],
-            **self.llm_config
+    def _initialize_tools(self):
+        """初始化智能体工具"""
+        # 注册所有可用的工具
+        self.register_tool(
+            "connect_database",
+            DatabaseConnectionTool(self.config),
+            "连接数据库并获取基本信息"
         )
         
-        # 直接使用文本响应
-        self.current_result.domain_analysis = {
-            "analysis_method": "text_based",
-            "content": response.choices[0].message.content,
-            "database_type": self.current_result.database_info.get('type', 'unknown'),
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        self.current_result.stages_completed.append(AnalysisStage.DOMAIN_ANALYSIS)
-        self.logger.info("领域分析完成")
-    
-    def _execute_field_classification_stage(self):
-        """阶段3: 字段分类分析"""
-        self.logger.info("阶段3: 字段分类分析")
-        self.current_result.current_stage = AnalysisStage.FIELD_CLASSIFICATION
-        
-        # 首先获取schema信息
-        schema_tool = self.tools['schema_extraction']
-        schema_result = schema_tool.execute()
-        
-        if schema_result.get('success'):
-            # 基于schema进行字段分类（不使用工具调用）
-            field_prompt = self._build_field_classification_prompt(schema_result)
-            
-            response = self.llm_client.chat.completions.create(
-                messages=[{"role": "user", "content": field_prompt}],
-                **self.llm_config
-            )
-            
-            # 直接使用文本响应
-            self.current_result.field_classification = {
-                "analysis_method": "text_based",
-                "content": response.choices[0].message.content,
-                "schema_info": schema_result,
-                "timestamp": datetime.now().isoformat()
-            }
-        
-        self.current_result.stages_completed.append(AnalysisStage.FIELD_CLASSIFICATION)
-        self.logger.info("字段分类分析完成")
-    
-    def _execute_table_analysis_stage(self):
-        """阶段4: 表结构分析"""
-        self.logger.info("阶段4: 表结构分析")
-        self.current_result.current_stage = AnalysisStage.TABLE_ANALYSIS
-        
-        # 获取详细的表结构信息
-        tables = self.db_manager.get_tables()
-        table_details = {}
-        
-        for table_name in tables:
-            table_info = self.db_manager.get_table_info(table_name)
-            table_details[table_name] = table_info
-        
-        self.current_result.table_analysis = {
-            "total_tables": len(tables),
-            "table_names": tables,
-            "table_details": table_details,
-            "analysis_timestamp": datetime.now().isoformat()
-        }
-        
-        self.current_result.stages_completed.append(AnalysisStage.TABLE_ANALYSIS)
-        self.logger.info(f"表结构分析完成，共{len(tables)}个表")
-    
-    def _execute_er_analysis_stage(self):
-        """阶段5: ER关系分析"""
-        self.logger.info("阶段5: ER关系分析")
-        self.current_result.current_stage = AnalysisStage.ER_ANALYSIS
-        
-        er_prompt = self._build_er_analysis_prompt()
-        
-        response = self.llm_client.chat.completions.create(
-            messages=[{"role": "user", "content": er_prompt}],
-            **self.llm_config
+        self.register_tool(
+            "analyze_schema", 
+            SchemaAnalysisTool(self.config),
+            "分析数据库表结构和字段信息"
         )
         
-        # 直接使用文本响应
-        self.current_result.er_analysis = {
-            "analysis_method": "text_based",
-            "content": response.choices[0].message.content,
-            "table_info": self.current_result.table_analysis,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        self.current_result.stages_completed.append(AnalysisStage.ER_ANALYSIS)
-        self.logger.info("ER关系分析完成")
-    
-    def _execute_scenario_generation_stage(self):
-        """阶段6: 场景化问题生成"""
-        self.logger.info("阶段6: 场景化问题生成")
-        self.current_result.current_stage = AnalysisStage.SCENARIO_GENERATION
-        
-        scenario_prompt = self._build_scenario_generation_prompt()
-        
-        response = self.llm_client.chat.completions.create(
-            messages=[{"role": "user", "content": scenario_prompt}],
-            **self.llm_config
+        self.register_tool(
+            "generate_sql",
+            QueryGenerationTool(self.config, self.llm_client),
+            "根据自然语言问题生成SQL查询"
         )
         
-        # 解析生成的场景问题
-        scenarios = self._parse_generated_scenarios(response.choices[0].message.content)
-        self.current_result.generated_scenarios = scenarios
+        self.register_tool(
+            "execute_sql",
+            QueryExecutionTool(self.config),
+            "执行SQL查询并返回结果"
+        )
         
-        self.current_result.stages_completed.append(AnalysisStage.SCENARIO_GENERATION)
-        self.logger.info(f"场景问题生成完成，共生成{len(scenarios)}个场景")
-    
-    def _build_domain_analysis_prompt(self) -> str:
-        """构建领域分析提示词"""
-        db_info = self.current_result.database_info
-        return f"""
-# 数据库领域分析任务
-
-请分析以下数据库的业务领域和应用场景：
-
-**数据库信息:**
-- 数据库类型: {db_info.get('type', 'unknown')}
-- 数据库名称: {db_info.get('database', 'unknown')}
-- 表数量: {db_info.get('tables_count', 0)}
-- 表名列表: {', '.join(db_info.get('tables', []))}
-
-**分析要求:**
-1. 根据数据库名称和表名模式，推断业务领域
-2. 识别可能的应用场景（如：电商、CRM、OA等）
-3. 分析数据库的设计模式和架构特点
-4. 基于表名前缀和命名规律分析业务模块
-
-请提供详细的分析结果。
-"""
-    
-    def _build_field_classification_prompt(self, schema_result: Dict[str, Any]) -> str:
-        """构建字段分类提示词"""
-        return f"""
-# 字段分类分析任务
-
-基于以下数据库schema信息，对字段进行分类：
-
-**Schema信息:**
-{json.dumps(schema_result.get('data', {}), ensure_ascii=False, indent=2)}
-
-**分类要求:**
-1. 识别主键、外键字段
-2. 分类业务字段（如：用户信息、订单信息、产品信息等）
-3. 识别系统字段（如：创建时间、更新时间、状态字段等）
-4. 分析字段数据类型和用途
-5. 识别字段命名规律和设计模式
-
-请提供详细的字段分类分析结果。
-"""
-    
-    def _build_er_analysis_prompt(self) -> str:
-        """构建ER关系分析提示词"""
-        return f"""
-# ER关系分析任务
-
-基于已分析的数据库信息，分析表与表之间的实体关系：
-
-**已有信息:**
-- 领域分析: {json.dumps(self.current_result.domain_analysis, ensure_ascii=False, indent=2)}
-- 字段分类: {json.dumps(self.current_result.field_classification, ensure_ascii=False, indent=2)}
-- 表结构: {json.dumps(self.current_result.table_analysis, ensure_ascii=False, indent=2)}
-
-**分析要求:**
-1. 识别表之间的一对一、一对多、多对多关系
-2. 分析外键约束和引用关系
-3. 构建实体关系图的逻辑结构
-4. 识别核心实体和关联实体
-5. 分析数据库设计的规范化程度
-
-请提供详细的ER关系分析结果。
-"""
-    
-    def _build_scenario_generation_prompt(self) -> str:
-        """构建场景问题生成提示词"""
-        return f"""
-# 场景化问题生成任务
-
-基于完整的数据库分析结果，生成实用的查询场景和问题：
-
-**完整分析结果:**
-- 数据库信息: {json.dumps(self.current_result.database_info, ensure_ascii=False)}
-- 领域分析: {json.dumps(self.current_result.domain_analysis, ensure_ascii=False)}
-- 字段分类: {json.dumps(self.current_result.field_classification, ensure_ascii=False)}
-- 表结构分析: {json.dumps(self.current_result.table_analysis, ensure_ascii=False)}
-- ER关系分析: {json.dumps(self.current_result.er_analysis, ensure_ascii=False)}
-
-**生成要求:**
-请生成10-15个实用的查询场景，每个场景包含：
-1. 场景描述
-2. 业务问题
-3. 预期查询类型（统计、筛选、关联等）
-4. 涉及的表和字段
-
-**输出格式:**
-场景1: [场景名称]
-描述: [场景描述]
-问题: [具体业务问题]
-查询类型: [查询类型]
-涉及表: [相关表名]
-
-场景2: ...
-
-请确保场景贴合实际业务需求，问题具有实用价值。
-"""
-    
-    def _parse_generated_scenarios(self, content: str) -> List[Dict[str, Any]]:
-        """解析生成的场景问题"""
-        scenarios = []
+        self.register_tool(
+            "analyze_data",
+            DataAnalysisTool(self.config, self.llm_client),
+            "分析查询结果数据并提供洞察"
+        )
         
-        # 简单的文本解析，提取场景信息
-        lines = content.split('\n')
-        current_scenario = {}
+        self.register_tool(
+            "reasoning",
+            ReasoningTool(self.config, self.llm_client),
+            "进行推理思考，规划下一步行动"
+        )
         
-        for line in lines:
-            line = line.strip()
-            if line.startswith('场景') and ':' in line:
-                if current_scenario:
-                    scenarios.append(current_scenario)
-                current_scenario = {
-                    "name": line.split(':', 1)[1].strip(),
-                    "description": "",
-                    "question": "",
-                    "query_type": "",
-                    "tables": ""
+        self.register_tool(
+            "analyze_domain",
+            DomainAnalysisTool(self.config, self.llm_client),
+            "分析数据库的业务领域和应用场景"
+        )
+    
+    def get_system_prompt(self) -> str:
+        """获取系统提示词"""
+        tools_desc = "\n".join([
+            f"- {name}: {desc}" 
+            for name, desc in self.tool_descriptions.items()
+        ])
+        
+        return f"""# 智能数据库分析Agent
+
+你是一个专业的数据库分析专家，能够：
+1. 连接和分析各种数据库系统
+2. 理解自然语言查询并生成SQL
+3. 执行查询并分析结果
+4. 提供业务洞察和建议
+
+## 可用工具
+{tools_desc}
+
+## 工作流程
+请遵循ReAct (Reasoning + Acting) 模式：
+
+1. **Observation**: 观察当前状态和用户需求
+2. **Thought**: 思考需要采取什么行动
+3. **Action**: 选择并执行合适的工具
+4. **Observation**: 观察工具执行结果
+5. 重复直到任务完成
+
+## 响应格式
+请使用以下格式响应：
+
+```
+Thought: 我需要[你的思考过程]
+Action: [工具名称]
+Action Input: {{"参数名": "参数值"}}
+```
+
+## 注意事项
+- 始终先连接数据库获取基本信息
+- 根据实际情况灵活选择分析策略
+- 在执行SQL前先分析相关表结构
+- 为用户提供清晰的分析结果和建议
+- 如果遇到错误，尝试其他方法或工具
+
+开始分析吧！"""
+
+    def smart_analyze(self, user_request: str = "请分析这个数据库系统") -> Dict[str, Any]:
+        """智能分析入口 - 保持兼容性"""
+        execution = self.new_task(user_request)
+        
+        # 转换为兼容的结果格式
+        result = {
+            "success": execution.success,
+            "task": execution.task,
+            "steps_taken": execution.total_steps,
+            "execution_time": execution.execution_time,
+            "final_result": execution.final_result,
+            "error": execution.error,
+            "detailed_steps": [
+                {
+                    "type": step.step_type.value,
+                    "content": step.content,
+                    "tool": step.tool_name,
+                    "timestamp": step.timestamp.isoformat()
                 }
-            elif line.startswith('描述:'):
-                current_scenario["description"] = line.split(':', 1)[1].strip()
-            elif line.startswith('问题:'):
-                current_scenario["question"] = line.split(':', 1)[1].strip()
-            elif line.startswith('查询类型:'):
-                current_scenario["query_type"] = line.split(':', 1)[1].strip()
-            elif line.startswith('涉及表:'):
-                current_scenario["tables"] = line.split(':', 1)[1].strip()
-        
-        # 添加最后一个场景
-        if current_scenario:
-            scenarios.append(current_scenario)
-        
-        return scenarios
-    
-    def get_stage_summary(self) -> str:
-        """获取当前阶段摘要"""
-        stage_names = {
-            AnalysisStage.CONNECT: "数据库连接",
-            AnalysisStage.DOMAIN_ANALYSIS: "领域分析", 
-            AnalysisStage.FIELD_CLASSIFICATION: "字段分类",
-            AnalysisStage.TABLE_ANALYSIS: "表结构分析",
-            AnalysisStage.ER_ANALYSIS: "ER关系分析", 
-            AnalysisStage.SCENARIO_GENERATION: "场景问题生成",
-            AnalysisStage.COMPLETED: "分析完成"
+                for step in execution.steps
+            ]
         }
         
-        completed = [stage_names[stage] for stage in self.current_result.stages_completed]
-        current = stage_names[self.current_result.current_stage]
-        
-        return f"当前阶段: {current}, 已完成: {', '.join(completed)}"
+        return result
     
-    def query(self, question: str) -> 'SQLQueryResult':
-        """简单查询功能 - 为兼容性而添加"""
-        from models.sql_result import SQLQueryResult
-        
+    def query(self, question: str) -> SQLQueryResult:
+        """简单查询功能 - 兼容性方法"""
         try:
-            # 连接数据库
-            if not self.db_manager.initialize():
+            # 使用智能体执行查询任务
+            execution = self.new_task(f"回答这个问题: {question}")
+            
+            if execution.success and execution.final_result:
+                # 从执行结果中提取SQL查询信息
+                sql = None
+                data = []
+                row_count = 0
+                
+                # 查找SQL执行步骤
+                for step in execution.steps:
+                    if step.tool_name == "execute_sql" and step.tool_output:
+                        if step.tool_output.get("success"):
+                            sql = step.tool_output.get("sql")
+                            data = step.tool_output.get("results", [])
+                            row_count = step.tool_output.get("row_count", 0)
+                            break
+                
+                return SQLQueryResult(
+                    success=True,
+                    question=question,
+                    sql=sql,
+                    answer=str(execution.final_result),
+                    data=data,
+                    row_count=row_count,
+                    execution_time=execution.execution_time,
+                    steps=execution.total_steps
+                )
+            else:
                 return SQLQueryResult(
                     success=False,
                     question=question,
-                    error="数据库连接失败"
+                    error=execution.error or "任务执行失败",
+                    steps=execution.total_steps
                 )
-            
-            # 简单的LLM调用来生成SQL
-            prompt = f"""
-根据以下数据库信息回答用户问题：
-
-用户问题: {question}
-
-数据库信息: 
-- 类型: MySQL
-- 表: {', '.join(self.db_manager.get_tables())}
-
-请生成对应的SQL查询语句。只返回SQL语句，不要其他解释。
-"""
-            
-            response = self.llm_client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                **self.llm_config
-            )
-            
-            sql = response.choices[0].message.content.strip()
-            
-            # 简单清理SQL（移除markdown标记等）
-            if sql.startswith('```'):
-                sql = sql.split('\n')[1:-1]  # 移除```sql和```
-                sql = '\n'.join(sql)
-            
-            return SQLQueryResult(
-                success=True,
-                question=question,
-                sql=sql,
-                answer=f"已生成SQL查询: {sql}"
-            )
-            
+                
         except Exception as e:
+            self.logger.error(f"查询执行失败: {e}")
             return SQLQueryResult(
                 success=False,
                 question=question,
                 error=str(e)
             )
-        finally:
-            self.db_manager.close()
+    
+    def _generate_final_result(self) -> Dict[str, Any]:
+        """生成最终分析结果"""
+        if not self.current_execution:
+            return {"error": "没有执行记录"}
+        
+        # 收集所有工具的输出
+        results = {
+            "task_completed": True,
+            "analysis_summary": {},
+            "key_findings": [],
+            "recommendations": []
+        }
+        
+        # 从执行步骤中提取关键信息
+        for step in self.current_execution.steps:
+            if step.tool_output and step.tool_output.get("success"):
+                
+                if step.tool_name == "connect_database":
+                    results["database_connection"] = step.tool_output.get("database_info")
+                    
+                elif step.tool_name == "analyze_schema":
+                    results["schema_analysis"] = step.tool_output
+                    
+                elif step.tool_name == "analyze_domain":
+                    results["domain_analysis"] = step.tool_output.get("domain_analysis")
+                    
+                elif step.tool_name == "execute_sql":
+                    if "query_results" not in results:
+                        results["query_results"] = []
+                    results["query_results"].append({
+                        "sql": step.tool_output.get("sql"),
+                        "row_count": step.tool_output.get("row_count"),
+                        "data_sample": step.tool_output.get("results", [])[:3]  # 只保留前3行作为样本
+                    })
+                    
+                elif step.tool_name == "analyze_data":
+                    if "data_insights" not in results:
+                        results["data_insights"] = []
+                    results["data_insights"].append(step.tool_output)
+        
+        # 生成总结
+        if self.current_database_info:
+            results["analysis_summary"] = {
+                "database_name": self.current_database_info.get("database"),
+                "total_tables": self.current_database_info.get("tables_count"),
+                "database_type": self.current_database_info.get("type"),
+                "analysis_completed": True
+            }
+        
+        # 添加建议
+        if results.get("domain_analysis"):
+            results["recommendations"].append("建议基于识别的业务领域制定相应的数据管理策略")
+            
+        if results.get("query_results"):
+            results["recommendations"].append("建议定期审查查询性能并优化慢查询")
+        
+        return results
+    
+    def _reflect_on_progress(self) -> Optional[str]:
+        """反思当前进度"""
+        if not self.current_execution or len(self.current_execution.steps) < 2:
+            return None
+        
+        # 检查是否已连接数据库
+        has_db_connection = any(
+            step.tool_name == "connect_database" and 
+            step.tool_output and step.tool_output.get("success")
+            for step in self.current_execution.steps
+        )
+        
+        # 检查是否已进行架构分析
+        has_schema_analysis = any(
+            step.tool_name == "analyze_schema"
+            for step in self.current_execution.steps
+        )
+        
+        if has_db_connection and not has_schema_analysis:
+            return "我已成功连接数据库，接下来应该分析数据库架构以了解表结构"
+            
+        elif has_schema_analysis:
+            # 检查是否有用户的具体查询需求
+            user_task = self.current_execution.task.lower()
+            if any(keyword in user_task for keyword in ["查询", "统计", "计算", "多少", "什么"]):
+                return "我已了解数据库结构，现在应该专注于回答用户的具体问题"
+            else:
+                return "我已分析了数据库架构，可能需要进行业务领域分析或生成示例查询"
+        
+        return "让我评估当前进度，确保朝着正确方向前进"
+
+
+# 为了保持向后兼容性，保留原有的SmartAnalysisResult类
+class SmartAnalysisResult:
+    """智能分析结果 - 兼容性类"""
+    
+    def __init__(self, execution: AgentExecution):
+        self.success = execution.success
+        self.execution_time = execution.execution_time
+        self.error = execution.error
+        self.final_result = execution.final_result
+        self.steps_taken = execution.total_steps
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "success": self.success,
+            "execution_time": self.execution_time,
+            "error": self.error,
+            "final_result": self.final_result,
+            "steps_taken": self.steps_taken
+        }
