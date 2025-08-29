@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Union
 import logging
 
-from .base import BaseSemanticSQLTool, ToolExecResult, ToolParameter
+from .trae_base_tool import TraeBaseTool, ToolParameter
 
 logger = logging.getLogger(__name__)
 

@@ -242,51 +242,34 @@ class LLMClient:
         formatted = []
         
         for msg in messages:
-            try:
-                # 处理不同类型的消息
-                if isinstance(msg, dict):
-                    # 如果已经是字典格式，直接添加
-                    formatted.append(msg)
-                    continue
-                    
-                if hasattr(msg, 'tool_call') and msg.tool_call:
-                    # 工具调用消息
-                    formatted.append({
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [{
-                            "id": msg.tool_call.call_id,
-                            "type": "function",
-                            "function": {
-                                "name": msg.tool_call.name,
-                                "arguments": str(msg.tool_call.arguments)
-                            }
-                        }]
-                    })
-                elif hasattr(msg, 'tool_result') and msg.tool_result:
-                    # 工具结果消息
-                    formatted.append({
-                        "role": "tool",
-                        "tool_call_id": msg.tool_result.call_id,
-                        "name": msg.tool_result.name,
-                        "content": msg.tool_result.result or msg.tool_result.error or ""
-                    })
-                else:
-                    # 普通消息
-                    formatted.append({
-                        "role": getattr(msg, 'role', 'user'),
-                        "content": getattr(msg, 'content', str(msg))
-                    })
-            except Exception as e:
-                # 如果消息处理失败，尝试简单的字符串处理
-                self.logger.warning(f"消息转换失败: {e}, 消息内容: {msg}")
-                if isinstance(msg, dict):
-                    formatted.append(msg)
-                else:
-                    formatted.append({
-                        "role": "user",
-                        "content": str(msg)
-                    })
+            if msg.tool_call:
+                # 工具调用消息
+                formatted.append({
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": msg.tool_call.call_id,
+                        "type": "function",
+                        "function": {
+                            "name": msg.tool_call.name,
+                            "arguments": str(msg.tool_call.arguments)
+                        }
+                    }]
+                })
+            elif msg.tool_result:
+                # 工具结果消息
+                formatted.append({
+                    "role": "tool",
+                    "tool_call_id": msg.tool_result.call_id,
+                    "name": msg.tool_result.name,
+                    "content": msg.tool_result.result or msg.tool_result.error or ""
+                })
+            else:
+                # 普通消息
+                formatted.append({
+                    "role": msg.role,
+                    "content": msg.content
+                })
         
         return formatted
     
@@ -304,41 +287,19 @@ class LLMClient:
             tool_calls = []
             for tc in message.tool_calls:
                 try:
-                    # 处理不同格式的tool_calls
-                    if hasattr(tc, 'function'):
-                        # 对象格式
-                        func_name = tc.function.name
-                        func_args = tc.function.arguments
-                        tc_id = tc.id
-                    elif isinstance(tc, dict):
-                        # 字典格式
-                        func_name = tc.get('function', {}).get('name', '')
-                        func_args = tc.get('function', {}).get('arguments', '{}')
-                        tc_id = tc.get('id', f'call_{len(tool_calls)}')
-                    else:
-                        continue
+                    arguments = eval(tc.function.arguments) if tc.function.arguments else {}
+                except:
+                    arguments = {}
                     
-                    # 解析参数
-                    try:
-                        if isinstance(func_args, str):
-                            arguments = eval(func_args) if func_args else {}
-                        else:
-                            arguments = func_args or {}
-                    except:
-                        arguments = {}
-                        
-                    tool_call = ToolCall(
-                        name=func_name,
-                        call_id=tc_id,
-                        arguments=arguments
-                    )
-                    tool_calls.append(tool_call)
-                    
-                    if not content:
-                        content = f"[调用工具: {tool_call.name}]"
-                except Exception as e:
-                    self.logger.warning(f"解析工具调用失败: {e}")
-                    continue
+                tool_call = ToolCall(
+                    name=tc.function.name,
+                    call_id=tc.id,
+                    arguments=arguments
+                )
+                tool_calls.append(tool_call)
+                
+                if not content:
+                    content = f"[调用工具: {tool_call.name}]"
         
         # 解析 usage
         usage = None
@@ -351,37 +312,108 @@ class LLMClient:
         
         # 更新消息历史
         if tool_calls:
-            formatted_tool_calls = []
-            for tc in message.tool_calls:
-                try:
-                    if hasattr(tc, 'function'):
-                        # 对象格式
-                        formatted_tool_calls.append({
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments
-                            }
-                        })
-                    elif isinstance(tc, dict):
-                        # 字典格式
-                        formatted_tool_calls.append({
-                            "id": tc.get('id', f'call_{len(formatted_tool_calls)}'),
-                            "type": "function",
-                            "function": {
-                                "name": tc.get('function', {}).get('name', ''),
-                                "arguments": tc.get('function', {}).get('arguments', '{}')
-                            }
-                        })
-                except Exception as e:
-                    self.logger.warning(f"格式化工具调用历史失败: {e}")
-                    continue
-                    
             self.message_history.append({
                 "role": "assistant",
                 "content": None,
-                "tool_calls": formatted_tool_calls
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments
+                        }
+                    }
+                    for tc in message.tool_calls
+                ]
+            })
+        else:
+            self.message_history.append({
+                "role": "assistant",
+                "content": content
+            })
+        
+        return LLMResponse(
+            content=content,
+            usage=usage,
+            model=response.model,
+            finish_reason=choice.finish_reason,
+            tool_calls=tool_calls
+        )
+    
+    def complete(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        """简单的文本补全接口"""
+        messages = []
+        if system_prompt:
+            messages.append(LLMMessage(role="system", content=system_prompt))
+        messages.append(LLMMessage(role="user", content=prompt))
+        
+        response = self.chat(messages, tools=None, reuse_history=False)
+        return response.content
+                # 工具结果消息
+                formatted.append({
+                    "role": "tool",
+                    "tool_call_id": msg.tool_result.call_id,
+                    "name": msg.tool_result.name,
+                    "content": msg.tool_result.result or msg.tool_result.error or ""
+                })
+            else:
+                # 普通消息
+                formatted.append({
+                    "role": msg.role,
+                    "content": msg.content
+                })
+        
+        return formatted
+    
+    def _parse_response(self, response) -> LLMResponse:
+        """解析 OpenAI SDK 响应"""
+        choice = response.choices[0]
+        message = choice.message
+        
+        # 解析内容
+        content = message.content or ""
+        
+        # 解析 tool calls
+        tool_calls = None
+        if message.tool_calls:
+            tool_calls = []
+            for tc in message.tool_calls:
+                tool_call = ToolCall(
+                    name=tc.function.name,
+                    call_id=tc.id,
+                    arguments=eval(tc.function.arguments)  # 解析 JSON 字符串
+                )
+                tool_calls.append(tool_call)
+                
+                if not content:
+                    content = f"[调用工具: {tool_call.name}]"
+        
+        # 解析 usage
+        usage = None
+        if response.usage:
+            usage = LLMUsage(
+                input_tokens=response.usage.prompt_tokens,
+                output_tokens=response.usage.completion_tokens,
+                total_tokens=response.usage.total_tokens
+            )
+        
+        # 更新消息历史
+        if tool_calls:
+            self.message_history.append({
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments
+                        }
+                    }
+                    for tc in message.tool_calls
+                ]
             })
         else:
             self.message_history.append({

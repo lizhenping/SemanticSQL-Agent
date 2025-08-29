@@ -2,28 +2,20 @@
 trae_agent风格的工具系统
 """
 
-from .trae_base_tool import (
-    TraeBaseTool,
-    ToolParameter,
-    ToolRegistry,
-    register_tool,
-    get_tool,
-    list_tools,
-    get_all_schemas
-)
+from .base import Tool as BaseTool
 
 from .sql_tools import (
-    SchemaExtractionTool,
-    SQLGenerationTool,
-    SQLValidationTool,
-    SQLExecutionTool
+    SyncSchemaExtractionTool as SchemaExtractionTool,
+    SyncSQLGenerationTool as SQLGenerationTool,
+    SyncSQLValidationTool as SQLValidationTool,
+    SyncSQLExecutionTool as SQLExecutionTool
 )
 
 from .analysis_tools import (
-    DomainAnalysisTool,
-    FieldClassificationTool,
-    ERAnalysisTool,
-    SequentialThinkingTool
+    SyncDomainAnalysisTool as DomainAnalysisTool,
+    SyncFieldClassificationTool as FieldClassificationTool,
+    SyncERAnalysisTool as ERAnalysisTool,
+    SyncSequentialThinkingTool as SequentialThinkingTool
 )
 
 # 工具工厂
@@ -71,16 +63,7 @@ class ToolFactory:
 
 __all__ = [
     # 基础类
-    "TraeBaseTool",
-    "ToolParameter",
-    "ToolRegistry",
-    
-    # 工具函数
-    "register_tool",
-    "get_tool",
-    "list_tools",
-    "get_all_schemas",
-    "ToolFactory",
+    "BaseTool",
     
     # SQL工具
     "SchemaExtractionTool",

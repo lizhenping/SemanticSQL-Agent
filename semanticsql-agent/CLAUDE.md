@@ -3,183 +3,192 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
-SemanticSQL Agent is a natural language to SQL query system built with Python, now fully refactored to follow trae_agent design patterns. It uses an LLM-based agent architecture with ReAct pattern for converting natural language queries into SQL and executing them against databases.
-
+SemanticSQL Agent is a natural language to SQL query system built with Python, refactored to follow trae_agent design patterns. It uses an LLM-based agent architecture with ReAct pattern for converting natural language queries into SQL and executing them against databases.
+我的conda 环境是：source activate alphasql
+模型数据库配置是
+--model "Qwen3-14B"
+--api-key "not-needed"
+--base-url "http://192.168.200.216:9009/v1"
+--host "192.168.200.216" --port "13306" --user "testuser"
+--password "testpass" --database "testdb"
+generate --count "20" --output "test_ddd.json"
 ## Core Architecture (trae_agent Style)
 
 ### Agent System (`agent/`)
-- **BaseAgent (`trae_base_agent.py`)**: Abstract ReAct pattern implementation with tool calling
-- **SQLAgent (`sql_agent.py`)**: trae_agent-style SQL query agent
-- **AgentState/StepState**: Enum-based state management
+- **BaseAgent (`base_agent.py`)**: Abstract ReAct pattern implementation with tool calling
+- **SQLAgent (`sql_agent.py`)**: Synchronous SQL query agent with `SQLQueryResult` response format
+- **SyncSQLAgent (`sync_sql_agent.py`)**: Alternative synchronous implementation
+- **AgentExecution/AgentStep**: State management classes
 
 ### Tools (`tools/`)
-- **TraeBaseTool (`trae_base_tool.py`)**: Standardized tool interface base class
-- **SchemaExtractionTool**: Database schema analysis
-- **SQLGenerationTool**: Natural language to SQL conversion
-- **SQLValidationTool**: SQL syntax validation
-- **SQLExecutionTool**: Safe query execution
-- **DomainAnalysisTool**: Business domain understanding
-- **FieldClassificationTool**: Field categorization
-- **ERAnalysisTool**: Entity-relationship analysis
-- **SequentialThinkingTool**: Multi-step reasoning
+- **TraeBaseTool (`trae_base_tool.py`)**: Standardized tool interface with `ToolParameter` definitions
+- **Schema Tools**: `SyncSchemaExtractionTool` for database structure analysis
+- **SQL Tools**: `SyncSQLGenerationTool`, `SyncSQLValidationTool`, `SyncSQLExecutionTool`
+- **Analysis Tools**: Domain analysis, field classification, ER analysis, sequential thinking
+- All tools follow sync/async patterns with consistent naming
 
 ### Configuration System (`config/`)
-- **TraeConfig**: Unified configuration management
-- **DatabaseConfig**: Database connection configuration
-- **LLMConfig**: LLM client configuration
-- **Environment-based configuration loading**
+- **TraeConfig (`trae_config.py`)**: Main configuration dataclass with nested configs
+- **DatabaseConfig**: Database connection and pool settings
+- **LLMConfig**: LLM client parameters (model, base_url, temperature, etc.)
+- **AgentConfig**: Agent-specific settings
+- Environment variable loading with fallback to defaults
 
 ### Database Management (`database/`)
-- **DatabaseManager**: Connection pool management
-- **SchemaCache**: Schema caching and refresh
-- **QueryExecutor**: Safe query execution with validation
+- **ConnectionManager**: Async database connection handling
+- Connection pooling and lifecycle management
+- Multi-database support (MySQL, PostgreSQL, SQLite)
 
-### CLI Interface (`cli/trae_cli.py`)
-- **init**: Generate trae_agent-style configuration
-- **run**: Execute single query
-- **interactive**: REPL-style interactive mode
-- **schema**: View database schema
-- **test**: Test database connection
+## Development Commands
 
-## Development Setup
-
-### Dependencies
-Install required packages:
+### Essential Commands
 ```bash
+# Install dependencies
 pip install click pyyaml sqlalchemy langchain-community aiomysql aiosqlite asyncpg
-```
 
-### Configuration
-1. Generate config: `python main.py init`
-2. Edit `trae_config.yaml` with database and LLM settings
-3. Supports model database configuration from `模型数据库配置.md`
-
-### Running the System
-
-#### Generate Configuration
-```bash
+# Initialize configuration
 python main.py init --database-type mysql --host 192.168.200.216 --port 13306 --database testdb --model Qwen3-14B
-```
 
-#### Single Query
-```bash
+# Run single query
 python main.py run "查询所有用户的数量" --config trae_config.yaml --verbose
-```
 
-#### Interactive Mode
-```bash
+# Interactive mode
 python main.py interactive --config trae_config.yaml
-```
 
-#### Schema Inspection
-```bash
-python main.py schema --config trae_config.yaml
-python main.py schema --table users --config trae_config.yaml
-```
-
-#### Test Connection
-```bash
+# Test database connection
 python main.py test --config trae_config.yaml
+
+# View schema
+python main.py schema --config trae_config.yaml
 ```
 
-## Key Configuration (trae_agent Style)
-
-### Database Support (from 模型数据库配置.md)
-- **MySQL**: `mysql+aiomysql://user:pass@host:port/db`
-- **PostgreSQL**: `postgresql+asyncpg://user:pass@host:port/db`
-- **SQLite**: `sqlite+aiosqlite:///path/to/db`
-
-### LLM Configuration
-- **Model**: Qwen3-14B (configurable)
-- **Base URL**: http://192.168.200.216:9009/v1 (configurable)
-- **Temperature**: 0.1 (configurable)
-- **Max tokens**: 2000 (configurable)
-
-### Environment Variables
-- `LLM_MODEL`, `LLM_BASE_URL`, `LLM_API_KEY`
-- `DB_TYPE`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
-- `APP_NAME`, `APP_VERSION`, `ENVIRONMENT`
-
-## Important Files (trae_agent Architecture)
-
-### Core Components
-- `agent/trae_base_agent.py`: Abstract BaseAgent implementation
-- `agent/sql_agent.py`: SQLAgent with SQLQueryResult
-- `config/trae_config.py`: Unified configuration system
-- `tools/trae_base_tool.py`: Tool interface base class
-- `database/connection_manager.py`: Database connection management
-
-### CLI Commands
-- `cli/trae_cli.py`: trae_agent-style CLI interface
-- `main.py`: Main entry point
-
-### Configuration Files
-- `trae_config.yaml`: trae_agent configuration template
-- `config/database_models.py`: Database configuration models
-
-## Testing
-
-### Run Tests
+### Testing
 ```bash
-# 配置测试
+# Run specific tests
 python -m pytest tests/test_config.py -v
 
-# 工具测试
-python -m pytest tests/test_tools.py -v
-
-# 数据库测试
-python -m pytest tests/test_database.py -v
+# Run all tests
+python -m pytest tests/ -v
 ```
 
-### Test Coverage Areas
-1. **Configuration loading and validation**
-2. **Tool parameter validation and execution**
-3. **Database connection management**
-4. **Schema caching and refresh**
-5. **Query execution and safety validation**
+### Quick Development Flow
+```bash
+# 1. Generate config
+python main.py init --database-type mysql --host localhost --port 3306 --database mydb --model Qwen3-14B
 
-## Architecture Patterns
+# 2. Test connection
+python main.py test --config trae_config.yaml
 
-### trae_agent Design Patterns
-1. **Abstract Base Classes**: `BaseAgent`, `TraeBaseTool`
-2. **Factory Pattern**: `ToolFactory.create_tools()`
-3. **Configuration Management**: Unified `TraeConfig`
-4. **Async/Await**: Full async support throughout
-5. **Type Safety**: Dataclasses and enums
-6. **Error Handling**: Graceful degradation and validation
+# 3. Verify schema
+python main.py schema --config trae_config.yaml
 
-### Data Flow
-1. **CLI → Configuration → Agent → Tools → Database**
-2. **Natural Language → ReAct Agent → SQL → Results**
-3. **Configuration → Environment Variables → CLI Arguments**
+# 4. Test query
+python main.py run "count users" --config trae_config.yaml --verbose
+```
 
-## Extension Points
+## Code Architecture Patterns
 
-### Adding New Tools
-1. Inherit from `TraeBaseTool`
-2. Implement `parameters` and `execute` methods
-3. Register in `ToolFactory`
+### Data Flow (Three-Step Process)
+1. **Database Connection** (`database/connection_manager.py`): 
+   - `DatabaseManager` handles connection pooling and validation
+   - Supports MySQL, PostgreSQL, SQLite with async/await patterns
 
-### Adding Database Support
-1. Extend `DatabaseType` enum
-2. Update connection string builders
-3. Add database-specific SQL handlers
+2. **Schema Analysis** (`tools/sql_tools.py`):
+   - `SyncSchemaExtractionTool` extracts table structures and relationships
+   - Caches schema information for performance
 
-### Custom Configuration
-1. Extend `TraeConfig` dataclass
-2. Add validation logic
-3. Update configuration templates
+3. **Query Generation** (`agent/sql_agent.py`):
+   - `SQLAgent` coordinates tool execution using ReAct pattern
+   - Returns `SQLQueryResult` with structured response data
 
-## Performance Considerations
+### Tool System Design
+- All tools inherit from `TraeBaseTool` with standardized interfaces
+- Tools use `ToolParameter` for type-safe parameter definitions
+- Consistent sync/async patterns across tool implementations
+- Factory pattern for tool creation and registration
 
-- **Connection Pooling**: Automatic pool management
-- **Schema Caching**: TTL-based caching
-- **Query Limits**: Configurable row limits
-- **Async Execution**: Non-blocking operations
+### Configuration Hierarchy
+```
+TraeConfig (root)
+├── DatabaseConfig (connection settings)
+├── LLMConfig (model parameters)  
+├── AgentConfig (agent behavior)
+└── Environment variable overrides
+```
 
-## Security Features
+## Key Implementation Details
 
-- **SQL Injection Prevention**: Safe query execution
-- **Query Validation**: SELECT-only restriction
-- **Connection Security**: SSL/TLS support
-- **Environment Variables**: Secure configuration loading
+### Entry Point
+- `main.py` → `cli/cli.py` → Command handlers
+- All CLI commands route through unified configuration loading
+
+### Agent Execution Flow
+1. Load configuration from YAML + environment variables
+2. Initialize `DatabaseManager` and test connection
+3. Create tool instances with database config
+4. Execute ReAct loop: Observe → Think → Act → Repeat
+5. Return structured `SQLQueryResult`
+
+## Configuration Reference
+
+### Database Configuration
+- **MySQL**: `mysql+aiomysql://user:pass@host:port/db`
+- **PostgreSQL**: `postgresql+asyncpg://user:pass@host:port/db` 
+- **SQLite**: `sqlite+aiosqlite:///path/to/db`
+
+### Environment Variables
+```bash
+# LLM Settings
+LLM_MODEL=Qwen3-14B
+LLM_BASE_URL=http://192.168.200.216:9009/v1
+LLM_API_KEY=not-needed
+
+# Database Settings  
+DB_TYPE=mysql
+DB_HOST=192.168.200.216
+DB_PORT=13306
+DB_NAME=testdb
+DB_USER=your_user
+DB_PASSWORD=your_password
+```
+
+### Default Configuration Template (`trae_config.yaml`)
+```yaml
+app:
+  name: "SemanticSQL Agent"
+  version: "1.0.0"
+  environment: "development"
+
+database:
+  type: "mysql"
+  host: "192.168.200.216"
+  port: 13306
+  database: "testdb"
+  username: "your_user"
+  password: "your_password"
+  connection_timeout: 30
+  pool_size: 5
+
+llm:
+  model: "Qwen3-14B"
+  base_url: "http://192.168.200.216:9009/v1"
+  api_key: "not-needed"
+  temperature: 0.1
+  max_tokens: 2000
+  timeout: 30
+```
+
+## Key Files for Development
+
+### Core Implementation Files
+- `agent/sql_agent.py` - Main SQL agent with `SQLQueryResult` response format
+- `tools/trae_base_tool.py` - Base tool class with `ToolParameter` system
+- `config/trae_config.py` - Configuration management with dataclasses
+- `database/connection_manager.py` - Database connection and pooling
+
+### Important Implementation Notes
+- All tools follow `Sync*Tool` naming convention for synchronous operations
+- Configuration loading supports environment variable overrides
+- Database connections use async patterns but tools provide sync wrappers
+- CLI entry point is `main.py` which delegates to `cli/cli.py`
+- Error handling preserves context throughout the execution chain

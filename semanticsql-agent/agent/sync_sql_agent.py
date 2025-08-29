@@ -1,5 +1,5 @@
 """
-SQL智能体实现 - 同步版本
+同步版本的SQL智能体实现
 """
 
 import json
@@ -7,20 +7,9 @@ import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
-from agent.base_agent import SyncBaseAgent as BaseAgent, AgentExecution, AgentStep
+from agent.trae_base_agent import BaseAgent, AgentExecution, AgentStep
 from config.trae_config import TraeConfig
-from tools.sql_tools import (
-    SyncSchemaExtractionTool as SchemaExtractionTool,
-    SyncSQLGenerationTool as SQLGenerationTool,
-    SyncSQLValidationTool as SQLValidationTool,
-    SyncSQLExecutionTool as SQLExecutionTool
-)
-from tools.analysis_tools import (
-    SyncDomainAnalysisTool as DomainAnalysisTool,
-    SyncFieldClassificationTool as FieldClassificationTool,
-    SyncERAnalysisTool as ERAnalysisTool,
-    SyncSequentialThinkingTool as SequentialThinkingTool
-)
+from tools import ToolFactory
 from utils.llm_clients.llm_client import LLMClient
 
 
@@ -65,7 +54,7 @@ class SQLQueryResult:
 
 
 class SQLAgent(BaseAgent):
-    """SQL智能体 - 同步版本"""
+    """同步版本的SQL智能体"""
     
     def __init__(self, config: TraeConfig):
         """初始化SQL智能体"""
@@ -78,8 +67,8 @@ class SQLAgent(BaseAgent):
             max_tokens=config.llm.max_tokens
         )
         
-        # 创建同步工具
-        tools = self._create_sync_tools(config)
+        # 创建工具
+        tools = ToolFactory.create_tools(config, config.agent.enabled_tools)
         
         super().__init__(
             name="SQLAgent",
@@ -92,43 +81,6 @@ class SQLAgent(BaseAgent):
         
         self.logger = logging.getLogger("agent.sql")
         self.context = {}
-    
-    def _create_sync_tools(self, config: TraeConfig) -> List:
-        """创建同步工具"""
-        tools = []
-        
-        # 根据配置创建启用的工具
-        enabled_tools = config.agent.enabled_tools or [
-            "extract_schema",
-            "generate_sql",
-            "validate_sql",
-            "execute_sql",
-            "analyze_domain",
-            "classify_fields",
-            "analyze_relationships",
-            "sequential_thinking"
-        ]
-        
-        tool_map = {
-            "extract_schema": lambda: SchemaExtractionTool(config.database),
-            "generate_sql": lambda: SQLGenerationTool(config.database),
-            "validate_sql": lambda: SQLValidationTool(config.database),
-            "execute_sql": lambda: SQLExecutionTool(config.database),
-            "analyze_domain": lambda: DomainAnalysisTool(config.database),
-            "classify_fields": lambda: FieldClassificationTool(config.database),
-            "analyze_relationships": lambda: ERAnalysisTool(config.database),
-            "sequential_thinking": lambda: SequentialThinkingTool()
-        }
-        
-        for tool_name in enabled_tools:
-            if tool_name in tool_map:
-                try:
-                    tool = tool_map[tool_name]()
-                    tools.append(tool)
-                except Exception as e:
-                    self.logger.error(f"创建工具 {tool_name} 失败: {e}")
-        
-        return tools
     
     def _build_system_message(self) -> str:
         """构建系统消息"""

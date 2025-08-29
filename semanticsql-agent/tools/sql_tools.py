@@ -1,8 +1,7 @@
 """
-SQL相关工具实现 - 基于trae_agent风格
+同步版本的SQL相关工具实现
 """
 
-import asyncio
 import json
 import logging
 from typing import Dict, Any, List, Optional
@@ -12,12 +11,12 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 from langchain_community.utilities import SQLDatabase
 
-from .trae_base_tool import TraeBaseTool, ToolParameter
-from ..config.database_models import DatabaseConfig
+from tools.trae_base_tool import TraeBaseTool, ToolParameter
+from config.database_models import DatabaseConfig
 
 
-class SchemaExtractionTool(TraeBaseTool):
-    """数据库Schema提取工具"""
+class SyncSchemaExtractionTool(TraeBaseTool):
+    """同步版本的数据库Schema提取工具"""
     
     def __init__(self, database_config: DatabaseConfig):
         super().__init__(
@@ -33,10 +32,7 @@ class SchemaExtractionTool(TraeBaseTool):
         try:
             engine = create_engine(self.database_config.connection_string)
             self.db = SQLDatabase.from_uri(
-                self.database_config.connection_string,
-                include_tables=self.database_config.include_tables,
-                exclude_tables=self.database_config.exclude_tables,
-                sample_rows_in_table_info=self.database_config.sample_rows_in_table_info
+                self.database_config.connection_string
             )
         except Exception as e:
             self.logger.error(f"数据库连接失败: {e}")
@@ -67,19 +63,19 @@ class SchemaExtractionTool(TraeBaseTool):
             )
         ]
     
-    async def execute(self, include_indexes: bool = False, include_constraints: bool = True, table_name: str = None) -> Dict[str, Any]:
+    def execute(self, include_indexes: bool = False, include_constraints: bool = True, table_name: str = None) -> Dict[str, Any]:
         """执行Schema提取"""
         try:
             if table_name:
-                return await self._extract_single_table(table_name, include_indexes, include_constraints)
+                return self._extract_single_table(table_name, include_indexes, include_constraints)
             else:
-                return await self._extract_all_tables(include_indexes, include_constraints)
+                return self._extract_all_tables(include_indexes, include_constraints)
                 
         except Exception as e:
             self.logger.error(f"Schema提取失败: {e}")
             return self.format_error(str(e))
     
-    async def _extract_all_tables(self, include_indexes: bool, include_constraints: bool) -> Dict[str, Any]:
+    def _extract_all_tables(self, include_indexes: bool, include_constraints: bool) -> Dict[str, Any]:
         """提取所有表信息"""
         try:
             tables = self.db.get_table_names()
@@ -91,7 +87,7 @@ class SchemaExtractionTool(TraeBaseTool):
             }
             
             for table in tables:
-                table_info = await self._extract_table_info(table, include_indexes, include_constraints)
+                table_info = self._extract_table_info(table, include_indexes, include_constraints)
                 schema_info["tables"][table] = table_info
             
             return self.format_result(schema_info)
@@ -99,61 +95,125 @@ class SchemaExtractionTool(TraeBaseTool):
         except Exception as e:
             raise e
     
-    async def _extract_single_table(self, table_name: str, include_indexes: bool, include_constraints: bool) -> Dict[str, Any]:
+    def _extract_single_table(self, table_name: str, include_indexes: bool, include_constraints: bool) -> Dict[str, Any]:
         """提取单个表信息"""
         try:
             if table_name not in self.db.get_table_names():
                 return self.format_error(f"表 {table_name} 不存在")
             
-            table_info = await self._extract_table_info(table_name, include_indexes, include_constraints)
+            table_info = self._extract_table_info(table_name, include_indexes, include_constraints)
             return self.format_result(table_info)
             
         except Exception as e:
             raise e
     
-    async def _extract_table_info(self, table_name: str, include_indexes: bool, include_constraints: bool) -> Dict[str, Any]:
+    def _extract_table_info(self, table_name: str, include_indexes: bool, include_constraints: bool) -> Dict[str, Any]:
         """提取表详细信息"""
         try:
-            # 获取表信息
-            table_info = self.db.get_table_info_no_throw([table_name])
-            
             # 获取列信息
-            columns = self.db._execute(
-                text(f"DESCRIBE {table_name}")
-            ).fetchall()
+            engine = create_engine(self.database_config.connection_string)
+            with engine.connect() as conn:
+                if self.database_config.type == "mysql":
+                    columns = conn.execute(text(f"DESCRIBE {table_name}")).fetchall()
+                    
+                    # 构建列信息
+                    column_info = []
+                    for col in columns:
+                        column_info.append({
+                            "name": col[0],
+                            "type": str(col[1]),
+                            "nullable": col[2] == "YES",
+                            "key": col[3],
+                            "default": col[4],
+                            "extra": str(col[5]) if len(col) > 5 else ""
+                        })
+                    
+                    # 获取索引信息
+                    indexes = []
+                    if include_indexes:
+                        result = conn.execute(text(f"SHOW INDEX FROM {table_name}"))
+                        for row in result.fetchall():
+                            indexes.append({
+                                "name": row[2],
+                                "column": row[4],
+                                "unique": row[1] == 0
+                            })
+                    
+                    # 获取约束信息
+                    constraints = []
+                    if include_constraints:
+                        result = conn.execute(text(f"SELECT * FROM information_schema.TABLE_CONSTRAINTS WHERE table_name = '{table_name}'"))
+                        for row in result.fetchall():
+                            constraints.append({
+                                "name": row[2],
+                                "type": row[1]
+                            })
+                
+                elif self.database_config.type == "postgresql":
+                    # PostgreSQL表信息
+                    columns = conn.execute(text(f"SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = '{table_name}'")).fetchall()
+                    
+                    column_info = []
+                    for col in columns:
+                        column_info.append({
+                            "name": col[0],
+                            "type": str(col[1]),
+                            "nullable": col[2] == "YES",
+                            "default": col[3]
+                        })
+                    
+                    indexes = []
+                    constraints = []
+                
+                elif self.database_config.type == "sqlite":
+                    # SQLite表信息
+                    columns = conn.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
+                    
+                    column_info = []
+                    for col in columns:
+                        column_info.append({
+                            "name": col[1],
+                            "type": str(col[2]),
+                            "nullable": not col[3],
+                            "default": col[4],
+                            "key": col[5]
+                        })
+                    
+                    indexes = []
+                    constraints = []
+                else:
+                    column_info = []
+                    indexes = []
+                    constraints = []
             
-            # 构建列信息
-            column_info = []
-            for col in columns:
-                column_info.append({
-                    "name": col[0],
-                    "type": col[1],
-                    "nullable": col[2] == "YES",
-                    "key": col[3],
-                    "default": col[4],
-                    "extra": col[5]
-                })
-            
-            # 获取索引信息
-            indexes = []
-            if include_indexes:
-                indexes = self.db._execute(
-                    text(f"SHOW INDEX FROM {table_name}")
-                ).fetchall()
-            
-            # 获取约束信息
-            constraints = []
-            if include_constraints:
-                constraints = self.db._execute(
-                    text(f"SELECT * FROM information_schema.TABLE_CONSTRAINTS WHERE table_name = '{table_name}'")
-                ).fetchall()
+            # 获取样本数据
+            sample_data = []
+            try:
+                with engine.connect() as conn:
+                    result = conn.execute(text(f"SELECT * FROM {table_name} LIMIT 3"))
+                    rows = result.fetchall()
+                    columns = list(result.keys())
+                    for row in rows:
+                        # 转换不可序列化的对象
+                        row_dict = {}
+                        for col, val in zip(columns, row):
+                            if hasattr(val, 'isoformat'):  # 日期/时间对象
+                                row_dict[col] = val.isoformat()
+                            elif isinstance(val, bytes):  # 二进制数据
+                                row_dict[col] = val.decode('utf-8', errors='ignore')
+                            else:
+                                row_dict[col] = str(val) if val is not None else None
+                        sample_data.append(row_dict)
+            except Exception:
+                sample_data = []
             
             return {
                 "name": table_name,
                 "columns": column_info,
-                "indexes": [dict(idx) for idx in indexes] if indexes else [],
-                "constraints": [dict(constraint) for constraint in constraints] if constraints else [],
-                "sample_data": self.db.run(f"SELECT * FROM {table_name} LIMIT 3")
+                "indexes": indexes,
+                "constraints": constraints,
+                "sample_data": sample_data,
+                "row_count": len(sample_data)
             }
             
         except Exception as e:
@@ -162,12 +222,13 @@ class SchemaExtractionTool(TraeBaseTool):
                 "error": str(e),
                 "columns": [],
                 "indexes": [],
-                "constraints": []
+                "constraints": [],
+                "sample_data": []
             }
 
 
-class SQLGenerationTool(TraeBaseTool):
-    """SQL生成工具"""
+class SyncSQLGenerationTool(TraeBaseTool):
+    """同步版本的SQL生成工具"""
     
     def __init__(self, database_config: DatabaseConfig, schema_info: Dict[str, Any] = None):
         super().__init__(
@@ -201,7 +262,7 @@ class SQLGenerationTool(TraeBaseTool):
             )
         ]
     
-    async def execute(self, query: str, context: Dict[str, Any] = None, max_complexity: int = 5) -> Dict[str, Any]:
+    def execute(self, query: str, context: Dict[str, Any] = None, max_complexity: int = 5) -> Dict[str, Any]:
         """生成SQL查询"""
         try:
             # 构建提示
@@ -258,8 +319,8 @@ class SQLGenerationTool(TraeBaseTool):
             return f"-- 基于查询: {query}\nSELECT * FROM information LIMIT 10"
 
 
-class SQLValidationTool(TraeBaseTool):
-    """SQL验证工具"""
+class SyncSQLValidationTool(TraeBaseTool):
+    """同步版本的SQL验证工具"""
     
     def __init__(self, database_config: DatabaseConfig):
         super().__init__(
@@ -293,10 +354,9 @@ class SQLValidationTool(TraeBaseTool):
             )
         ]
     
-    async def execute(self, sql: str, check_tables: bool = True, check_permissions: bool = False) -> Dict[str, Any]:
+    def execute(self, sql: str, check_tables: bool = True, check_permissions: bool = False) -> Dict[str, Any]:
         """执行SQL验证"""
         try:
-            # 创建临时的只读连接
             engine = create_engine(self.database_config.connection_string)
             
             validation_result = {
@@ -334,8 +394,8 @@ class SQLValidationTool(TraeBaseTool):
             return self.format_error(str(e))
 
 
-class SQLExecutionTool(TraeBaseTool):
-    """SQL执行工具"""
+class SyncSQLExecutionTool(TraeBaseTool):
+    """同步版本的SQL执行工具"""
     
     def __init__(self, database_config: DatabaseConfig):
         super().__init__(
@@ -369,7 +429,7 @@ class SQLExecutionTool(TraeBaseTool):
             )
         ]
     
-    async def execute(self, sql: str, max_rows: int = 1000, include_metadata: bool = True) -> Dict[str, Any]:
+    def execute(self, sql: str, max_rows: int = 1000, include_metadata: bool = True) -> Dict[str, Any]:
         """执行SQL查询"""
         try:
             engine = create_engine(self.database_config.connection_string)
@@ -383,6 +443,7 @@ class SQLExecutionTool(TraeBaseTool):
             if "LIMIT" not in sql_upper:
                 sql = f"{sql} LIMIT {max_rows}"
             
+            start_time = datetime.now()
             with engine.connect() as conn:
                 result = conn.execute(text(sql))
                 
@@ -395,12 +456,15 @@ class SQLExecutionTool(TraeBaseTool):
                 for row in rows:
                     data.append(dict(zip(columns, row)))
                 
+                end_time = datetime.now()
+                execution_time = (end_time - start_time).total_seconds()
+                
                 execution_result = {
                     "sql": sql,
                     "row_count": len(data),
                     "columns": columns,
                     "data": data,
-                    "execution_time": 0.0,  # 实际应计算执行时间
+                    "execution_time": execution_time,
                     "truncated": len(data) >= max_rows
                 }
                 

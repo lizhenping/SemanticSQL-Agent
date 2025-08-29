@@ -1,20 +1,22 @@
 """
-trae_agent风格的CLI命令行接口
+同步版本的CLI命令行接口
 """
 
-import asyncio
 import json
 import logging
 import sys
 from pathlib import Path
 from typing import Optional, Dict, Any
+from datetime import datetime
 
 import click
 import yaml
+from click.testing import CliRunner
 
-from ..config.trae_config import TraeConfig, DEFAULT_CONFIG_TEMPLATE
-from ..agent.sql_agent import SQLAgent
-from ..database.connection_manager import DatabaseManager
+from config.trae_config import TraeConfig, DEFAULT_CONFIG_TEMPLATE
+from agent.sql_agent import SQLAgent
+from agent.smart_sql_agent import SmartSQLAgent
+from database.connection_manager import DatabaseManager
 
 
 # 设置日志
@@ -30,7 +32,7 @@ logging.basicConfig(
 @click.option('--verbose', '-v', is_flag=True, help='详细输出')
 @click.pass_context
 def cli(ctx, config: str, verbose: bool):
-    """SemanticSQL Agent - trae_agent风格实现"""
+    """SemanticSQL Agent - 同步版本"""
     ctx.ensure_object(dict)
     ctx.obj['config_path'] = config
     ctx.obj['verbose'] = verbose
@@ -51,7 +53,7 @@ def cli(ctx, config: str, verbose: bool):
 @click.option('--base-url', default='http://192.168.200.216:9009/v1', help='LLM基础URL')
 def init(output: str, database_type: str, host: str, port: int, database: str, 
          username: str, password: str, model: str, base_url: str):
-    """生成trae_agent风格配置文件"""
+    """生成配置文件"""
     
     config_data = {
         **DEFAULT_CONFIG_TEMPLATE,
@@ -98,9 +100,9 @@ def init(output: str, database_type: str, host: str, port: int, database: str,
 @click.option('--verbose', '-v', is_flag=True, help='详细输出')
 @click.option('--save-trajectory', '-t', help='保存执行轨迹')
 @click.pass_context
-async def run(ctx, query: Optional[str], file: Optional[str], config: str, 
-              model: Optional[str], database: Optional[str], max_steps: Optional[int],
-              save_result: Optional[str], verbose: bool, save_trajectory: Optional[str]):
+def run(ctx, query: Optional[str], file: Optional[str], config: str, 
+        model: Optional[str], database: Optional[str], max_steps: Optional[int],
+        save_result: Optional[str], verbose: bool, save_trajectory: Optional[str]):
     """执行自然语言查询"""
     
     # 获取查询内容
@@ -132,7 +134,6 @@ async def run(ctx, query: Optional[str], file: Optional[str], config: str,
         if database:
             # 简化的数据库连接字符串解析
             if "://" in database:
-                # 完整的连接字符串
                 import re
                 match = re.match(r'(.+?)://(.+?):(.+?)@(.+?):(\d+)/(.+)', database)
                 if match:
@@ -153,9 +154,9 @@ async def run(ctx, query: Optional[str], file: Optional[str], config: str,
     
     try:
         # 初始化数据库连接
-        from ..database.connection_manager import DatabaseManager
+        from database.connection_manager import DatabaseManager
         db_manager = DatabaseManager(trae_config.database)
-        if not await db_manager.initialize():
+        if not db_manager.initialize():
             click.echo("错误: 数据库连接失败", err=True)
             sys.exit(1)
         
@@ -163,7 +164,7 @@ async def run(ctx, query: Optional[str], file: Optional[str], config: str,
         agent = SQLAgent(trae_config)
         
         # 执行查询
-        result = await agent.query(query)
+        result = agent.query(query)
         
         # 显示结果
         if result.success:
@@ -215,7 +216,7 @@ async def run(ctx, query: Optional[str], file: Optional[str], config: str,
                 
                 click.echo(f"\n轨迹已保存到: {save_trajectory}")
         
-        await db_manager.close()
+        db_manager.close()
         
     except Exception as e:
         click.echo(f"错误: 执行查询失败: {e}", err=True)
@@ -229,7 +230,7 @@ async def run(ctx, query: Optional[str], file: Optional[str], config: str,
 @click.option('--config', '-c', default='trae_config.yaml', help='配置文件路径')
 @click.option('--save-history', is_flag=True, help='保存历史记录')
 @click.pass_context
-async def interactive(ctx, config: str, save_history: bool):
+def interactive(ctx, config: str, save_history: bool):
     """交互式查询模式"""
     
     try:
@@ -237,7 +238,7 @@ async def interactive(ctx, config: str, save_history: bool):
         
         # 初始化数据库连接
         db_manager = DatabaseManager(trae_config.database)
-        if not await db_manager.initialize():
+        if not db_manager.initialize():
             click.echo("错误: 数据库连接失败", err=True)
             sys.exit(1)
         
@@ -266,7 +267,7 @@ async def interactive(ctx, config: str, save_history: bool):
                     click.echo(f"当前配置: {agent.get_config()}")
                     continue
                 elif query.lower() == 'schema':
-                    schema = await agent.explain_schema()
+                    schema = agent.explain_schema()
                     click.echo(f"数据库Schema: {schema}")
                     continue
                 
@@ -274,7 +275,7 @@ async def interactive(ctx, config: str, save_history: bool):
                     continue
                 
                 # 执行查询
-                result = await agent.query(query)
+                result = agent.query(query)
                 
                 # 保存历史
                 if save_history:
@@ -313,7 +314,7 @@ async def interactive(ctx, config: str, save_history: bool):
                 json.dump(history, f, ensure_ascii=False, indent=2)
             click.echo(f"\n历史记录已保存到: {history_file}")
         
-        await db_manager.close()
+        db_manager.close()
         
     except Exception as e:
         click.echo(f"错误: 启动交互模式失败: {e}", err=True)
@@ -324,7 +325,7 @@ async def interactive(ctx, config: str, save_history: bool):
 @click.option('--config', '-c', default='trae_config.yaml', help='配置文件路径')
 @click.option('--table', '-t', help='指定表名')
 @click.pass_context
-async def schema(ctx, config: str, table: Optional[str]):
+def schema(ctx, config: str, table: Optional[str]):
     """查看数据库Schema"""
     
     try:
@@ -332,25 +333,25 @@ async def schema(ctx, config: str, table: Optional[str]):
         
         # 初始化数据库连接
         db_manager = DatabaseManager(trae_config.database)
-        if not await db_manager.initialize():
+        if not db_manager.initialize():
             click.echo("错误: 数据库连接失败", err=True)
             sys.exit(1)
         
         if table:
             # 显示指定表的信息
-            table_info = await db_manager.get_table_info(table)
+            table_info = db_manager.get_table_info(table)
             click.echo(f"表信息: {table}")
             click.echo(json.dumps(table_info, ensure_ascii=False, indent=2))
         else:
             # 显示所有表
-            tables = await db_manager.get_tables()
+            tables = db_manager.get_tables()
             click.echo(f"数据库: {trae_config.database.database}")
             click.echo(f"表 ({len(tables)} 个):")
             
             for table_name in tables:
                 click.echo(f"  - {table_name}")
         
-        await db_manager.close()
+        db_manager.close()
         
     except Exception as e:
         click.echo(f"错误: 获取Schema失败: {e}", err=True)
@@ -360,7 +361,7 @@ async def schema(ctx, config: str, table: Optional[str]):
 @cli.command()
 @click.option('--config', '-c', default='trae_config.yaml', help='配置文件路径')
 @click.pass_context
-async def test(ctx, config: str):
+def test(ctx, config: str):
     """测试数据库连接"""
     
     try:
@@ -369,11 +370,11 @@ async def test(ctx, config: str):
         click.echo("测试数据库连接...")
         
         db_manager = DatabaseManager(trae_config.database)
-        if await db_manager.initialize():
+        if db_manager.initialize():
             click.echo("✓ 数据库连接成功")
             
             # 获取数据库信息
-            info = await db_manager.get_database_info()
+            info = db_manager.get_database_info()
             click.echo(f"数据库: {info['database']}")
             click.echo(f"类型: {info['type']}")
             click.echo(f"版本: {info['version']}")
@@ -382,11 +383,135 @@ async def test(ctx, config: str):
         else:
             click.echo("✗ 数据库连接失败")
         
-        await db_manager.close()
+        db_manager.close()
         
     except Exception as e:
         click.echo(f"错误: 测试连接失败: {e}", err=True)
         sys.exit(1)
+
+
+@cli.command()
+@click.argument("request", required=False, default="请分析这个数据库")
+@click.option('--config', '-c', default='trae_config.yaml', help='配置文件路径')
+@click.option('--save-result', '-s', help='保存结果到文件')
+@click.option('--verbose', '-v', is_flag=True, help='详细输出')
+@click.option('--stage-by-stage', is_flag=True, help='分阶段显示结果')
+@click.pass_context
+def smart_analyze(ctx, request: str, config: str, save_result: Optional[str], 
+                 verbose: bool, stage_by_stage: bool):
+    """智能分析数据库 - 自动执行完整6步流程"""
+    
+    click.echo("🤖 启动智能数据库分析...")
+    click.echo(f"📋 分析请求: {request}")
+    click.echo("=" * 60)
+    
+    try:
+        # 加载配置
+        trae_config = TraeConfig.load_config(config)
+        
+        if verbose:
+            trae_config.agent.verbose = True
+            logging.getLogger().setLevel(logging.DEBUG)
+        
+        # 创建智能SQL Agent
+        smart_agent = SmartSQLAgent(trae_config)
+        
+        # 显示开始信息
+        click.echo("📊 开始执行智能分析流程:")
+        click.echo("   1️⃣ 连接数据库")
+        click.echo("   2️⃣ 分析数据库领域") 
+        click.echo("   3️⃣ 字段分类分析")
+        click.echo("   4️⃣ 表结构分析")
+        click.echo("   5️⃣ ER关系分析")
+        click.echo("   6️⃣ 场景问题生成")
+        click.echo()
+        
+        # 执行智能分析
+        if stage_by_stage:
+            # 分阶段显示进度
+            result = smart_agent.smart_analyze(request)
+        else:
+            # 正常执行
+            with click.progressbar(length=6, label='分析进度') as bar:
+                result = smart_agent.smart_analyze(request)
+                for _ in range(6):
+                    bar.update(1)
+        
+        # 显示结果
+        if result.success:
+            click.echo("✅ 智能分析完成!")
+            click.echo(f"⏱️  总执行时间: {result.execution_time:.2f}秒")
+            click.echo(f"📈 完成阶段: {len(result.stages_completed)}/6")
+            click.echo()
+            
+            # 显示各阶段结果摘要
+            _display_analysis_summary(result)
+            
+            # 显示生成的场景问题
+            if result.generated_scenarios:
+                click.echo("🎯 生成的查询场景:")
+                for i, scenario in enumerate(result.generated_scenarios[:5], 1):
+                    click.echo(f"  {i}. {scenario.get('name', '未命名场景')}")
+                    if scenario.get('question'):
+                        click.echo(f"     问题: {scenario['question']}")
+                    click.echo()
+            
+        else:
+            click.echo("❌ 智能分析失败")
+            click.echo(f"错误: {result.error}")
+        
+        # 保存结果
+        if save_result:
+            save_path = Path(save_result)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(save_path, 'w', encoding='utf-8') as f:
+                json.dump(result.to_dict(), f, ensure_ascii=False, indent=2)
+            
+            click.echo(f"💾 结果已保存到: {save_result}")
+        
+    except Exception as e:
+        click.echo(f"❌ 智能分析失败: {e}", err=True)
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+def _display_analysis_summary(result):
+    """显示分析结果摘要"""
+    click.echo("📋 分析结果摘要:")
+    click.echo("-" * 40)
+    
+    # 数据库信息
+    if result.database_info:
+        db_info = result.database_info
+        click.echo(f"📊 数据库: {db_info.get('database', 'N/A')} ({db_info.get('type', 'N/A')})")
+        click.echo(f"📁 表数量: {db_info.get('tables_count', 0)}")
+    
+    # 领域分析
+    if result.domain_analysis:
+        click.echo(f"🏢 业务领域: 已识别")
+    
+    # 字段分类
+    if result.field_classification:
+        click.echo(f"🏷️  字段分类: 已完成")
+    
+    # 表结构
+    if result.table_analysis:
+        table_count = result.table_analysis.get('total_tables', 0)
+        click.echo(f"📋 表结构: 分析了{table_count}个表")
+    
+    # ER关系
+    if result.er_analysis:
+        click.echo(f"🔗 ER关系: 已分析")
+    
+    # 场景生成
+    if result.generated_scenarios:
+        scenario_count = len(result.generated_scenarios)
+        click.echo(f"💡 场景问题: 生成了{scenario_count}个场景")
+    
+    click.echo()
 
 
 def _show_interactive_help():
@@ -413,6 +538,6 @@ def _show_interactive_help():
     click.echo(help_text)
 
 
-# 异步运行支持
-if sys.version_info >= (3, 7):
-    cli = asyncio.run
+# CLI入口点
+if __name__ == "__main__":
+    cli()
