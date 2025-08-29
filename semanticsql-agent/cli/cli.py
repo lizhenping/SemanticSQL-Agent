@@ -15,7 +15,7 @@ from click.testing import CliRunner
 
 from config.trae_config import TraeConfig, DEFAULT_CONFIG_TEMPLATE
 from agent.sql_agent import SQLAgent
-from agent.smart_sql_agent import SmartSQLAgent
+
 from database.connection_manager import DatabaseManager
 
 
@@ -389,129 +389,6 @@ def test(ctx, config: str):
         click.echo(f"错误: 测试连接失败: {e}", err=True)
         sys.exit(1)
 
-
-@cli.command()
-@click.argument("request", required=False, default="请分析这个数据库")
-@click.option('--config', '-c', default='trae_config.yaml', help='配置文件路径')
-@click.option('--save-result', '-s', help='保存结果到文件')
-@click.option('--verbose', '-v', is_flag=True, help='详细输出')
-@click.option('--stage-by-stage', is_flag=True, help='分阶段显示结果')
-@click.pass_context
-def smart_analyze(ctx, request: str, config: str, save_result: Optional[str], 
-                 verbose: bool, stage_by_stage: bool):
-    """智能分析数据库 - 自动执行完整6步流程"""
-    
-    click.echo("🤖 启动智能数据库分析...")
-    click.echo(f"📋 分析请求: {request}")
-    click.echo("=" * 60)
-    
-    try:
-        # 加载配置
-        trae_config = TraeConfig.load_config(config)
-        
-        if verbose:
-            trae_config.agent.verbose = True
-            logging.getLogger().setLevel(logging.DEBUG)
-        
-        # 创建智能SQL Agent
-        smart_agent = SmartSQLAgent(trae_config)
-        
-        # 显示开始信息
-        click.echo("📊 开始执行智能分析流程:")
-        click.echo("   1️⃣ 连接数据库")
-        click.echo("   2️⃣ 分析数据库领域") 
-        click.echo("   3️⃣ 字段分类分析")
-        click.echo("   4️⃣ 表结构分析")
-        click.echo("   5️⃣ ER关系分析")
-        click.echo("   6️⃣ 场景问题生成")
-        click.echo()
-        
-        # 执行智能分析
-        if stage_by_stage:
-            # 分阶段显示进度
-            result = smart_agent.smart_analyze(request)
-        else:
-            # 正常执行
-            with click.progressbar(length=6, label='分析进度') as bar:
-                result = smart_agent.smart_analyze(request)
-                for _ in range(6):
-                    bar.update(1)
-        
-        # 显示结果
-        if result.success:
-            click.echo("✅ 智能分析完成!")
-            click.echo(f"⏱️  总执行时间: {result.execution_time:.2f}秒")
-            click.echo(f"📈 完成阶段: {len(result.stages_completed)}/6")
-            click.echo()
-            
-            # 显示各阶段结果摘要
-            _display_analysis_summary(result)
-            
-            # 显示生成的场景问题
-            if result.generated_scenarios:
-                click.echo("🎯 生成的查询场景:")
-                for i, scenario in enumerate(result.generated_scenarios[:5], 1):
-                    click.echo(f"  {i}. {scenario.get('name', '未命名场景')}")
-                    if scenario.get('question'):
-                        click.echo(f"     问题: {scenario['question']}")
-                    click.echo()
-            
-        else:
-            click.echo("❌ 智能分析失败")
-            click.echo(f"错误: {result.error}")
-        
-        # 保存结果
-        if save_result:
-            save_path = Path(save_result)
-            save_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            with open(save_path, 'w', encoding='utf-8') as f:
-                json.dump(result.to_dict(), f, ensure_ascii=False, indent=2)
-            
-            click.echo(f"💾 结果已保存到: {save_result}")
-        
-    except Exception as e:
-        click.echo(f"❌ 智能分析失败: {e}", err=True)
-        if verbose:
-            import traceback
-            traceback.print_exc()
-        sys.exit(1)
-
-
-def _display_analysis_summary(result):
-    """显示分析结果摘要"""
-    click.echo("📋 分析结果摘要:")
-    click.echo("-" * 40)
-    
-    # 数据库信息
-    if result.database_info:
-        db_info = result.database_info
-        click.echo(f"📊 数据库: {db_info.get('database', 'N/A')} ({db_info.get('type', 'N/A')})")
-        click.echo(f"📁 表数量: {db_info.get('tables_count', 0)}")
-    
-    # 领域分析
-    if result.domain_analysis:
-        click.echo(f"🏢 业务领域: 已识别")
-    
-    # 字段分类
-    if result.field_classification:
-        click.echo(f"🏷️  字段分类: 已完成")
-    
-    # 表结构
-    if result.table_analysis:
-        table_count = result.table_analysis.get('total_tables', 0)
-        click.echo(f"📋 表结构: 分析了{table_count}个表")
-    
-    # ER关系
-    if result.er_analysis:
-        click.echo(f"🔗 ER关系: 已分析")
-    
-    # 场景生成
-    if result.generated_scenarios:
-        scenario_count = len(result.generated_scenarios)
-        click.echo(f"💡 场景问题: 生成了{scenario_count}个场景")
-    
-    click.echo()
 
 
 def _show_interactive_help():
