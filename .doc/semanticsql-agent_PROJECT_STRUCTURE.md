@@ -1,6 +1,6 @@
-# SemanticSQL Agent 项目结构设计
+# SemanticSQL Agent 项目结构
 
-## 1. 完整项目结构
+## 1. 项目目录结构
 
 ```
 semanticsql-agent/
@@ -12,119 +12,86 @@ semanticsql-agent/
 │
 ├── config/                     # 配置模块
 │   ├── __init__.py
-│   ├── settings.py             # 全局配置管理
-│   ├── database.py             # 数据库配置
-│   └── example.yaml            # 配置示例文件
+│   ├── settings.py              # 统一配置管理
+│   └── config.yaml             # 默认配置文件
 │
 ├── core/                       # 核心模块
 │   ├── __init__.py
-│   ├── models.py               # Pydantic数据模型
+│   ├── models.py               # 所有数据模型
 │   ├── exceptions.py           # 自定义异常
 │   └── constants.py            # 常量定义
 │
 ├── agent/                      # 智能体模块
 │   ├── __init__.py
-│   ├── base_agent.py           # 基础Agent类（ReAct实现）
-│   ├── smart_sql_agent.py      # SQL智能体
-│   ├── executor.py             # 执行器（含轨迹记录）
-│   └── context.py              # 执行上下文管理
+│   ├── base_agent.py           # 基础Agent（含执行记录）
+│   ├── smart_sql_agent.py      # SQL数据生成Agent
+│   └── execution_tracker.py    # 执行轨迹记录器
 │
 ├── tools/                      # 工具模块
 │   ├── __init__.py
-│   ├── base.py                 # 工具基类
+│   ├── base_tool.py            # 工具基类
 │   │
 │   ├── analysis/               # 分析工具
 │   │   ├── __init__.py
-│   │   ├── schema_analyzer.py         # 数据库结构分析
-│   │   ├── domain_analyzer.py         # 领域识别
-│   │   ├── field_classifier.py        # 字段分类
-│   │   └── relationship_analyzer.py   # 关系分析
+│   │   ├── schema_extraction_tool.py   # 数据库结构提取
+│   │   ├── domain_analysis_tool.py     # 领域分析
+│   │   ├── field_classification_tool.py # 字段分类
+│   │   └── er_analysis_tool.py         # 关系分析
 │   │
 │   ├── generation/             # 生成工具
 │   │   ├── __init__.py
-│   │   ├── scenario_generator.py      # 场景生成（基于规则）
-│   │   ├── question_generator.py      # 问题生成
-│   │   └── sql_generator.py          # SQL生成（一步完成）
+│   │   ├── scenario_tool.py           # 场景生成
+│   │   ├── operation_selection_tool.py # 操作选择
+│   │   ├── question_generation_tool.py # 问题生成
+│   │   └── sql_generation_tool.py     # SQL生成
 │   │
-│   ├── sql/                    # SQL操作工具
+│   ├── validation/             # 验证执行工具
 │   │   ├── __init__.py
-│   │   ├── sql_executor.py            # SQL执行
-│   │   ├── sql_validator.py           # SQL验证
-│   │   └── sql_optimizer.py           # SQL优化建议
+│   │   ├── sql_validation_tool.py     # SQL语法验证
+│   │   └── sql_execution_tool.py      # SQL执行测试
 │   │
-│   └── reflection/             # 反思工具
+│   └── reflection/             # 反思优化工具
 │       ├── __init__.py
-│       ├── execution_analyzer.py      # 执行结果分析
-│       └── quality_improver.py        # 质量改进建议
+│       └── sql_reflection_tool.py      # SQL执行反思与优化
 │
 ├── prompts/                    # 提示词管理
 │   ├── __init__.py
-│   ├── system.yaml             # 系统级提示词
-│   ├── tools.yaml              # 工具提示词配置
-│   ├── templates/              # 提示词模板
-│   │   ├── __init__.py
-│   │   ├── react/              # ReAct相关模板
-│   │   │   ├── thought.j2
-│   │   │   └── action.j2
-│   │   ├── analysis/           # 分析类模板
-│   │   │   ├── domain.j2
-│   │   │   └── schema.j2
-│   │   ├── generation/         # 生成类模板
-│   │   │   ├── scenario.j2
-│   │   │   ├── question.j2
-│   │   │   └── sql.j2
-│   │   └── reflection/         # 反思类模板
-│   │       ├── execution.j2
-│   │       └── quality.j2
-│   └── loader.py               # 提示词加载器
+│   ├── system_prompt.yaml      # 系统提示词
+│   ├── tool_prompts.yaml       # 工具提示词
+│   └── prompt_manager.py       # 提示词管理器
 │
 ├── utils/                      # 工具模块
 │   ├── __init__.py
-│   ├── database.py             # 数据库连接管理
-│   ├── llm_client.py           # LLM客户端封装
-│   ├── logger.py               # 日志工具
-│   ├── validators.py           # 数据验证工具
+│   ├── database.py             # 数据库连接工具
+│   ├── llm_client.py           # LLM客户端（支持Qwen）
+│   ├── logger.py               # 日志配置
+│   ├── output_handler.py       # 输出处理
 │   └── helpers.py              # 辅助函数
-│
-├── output/                     # 输出处理
-│   ├── __init__.py
-│   ├── formatter.py            # 结果格式化
-│   ├── exporter.py             # 导出器（JSON/CSV/SQL）
-│   └── adapters/               # 导出适配器
-│       ├── __init__.py
-│       ├── huggingface.py      # HuggingFace格式
-│       └── jsonl.py            # JSONL格式
 │
 ├── cli/                        # 命令行接口
 │   ├── __init__.py
-│   ├── cli.py                  # 主CLI入口
-│   ├── commands/               # CLI命令
-│   │   ├── __init__.py
-│   │   ├── analyze.py          # smart-analyze命令
-│   │   ├── test.py             # 测试相关命令
-│   │   └── config.py           # 配置相关命令
-│   └── utils.py                # CLI工具函数
+│   └── cli.py                  # 命令行接口
+│
+├── output/                     # 输出目录（运行时生成）
+│   └── .gitkeep
 │
 ├── tests/                      # 测试模块
 │   ├── __init__.py
 │   ├── conftest.py             # pytest配置
-│   ├── unit/                   # 单元测试
+│   ├── test_tools/             # 工具测试
 │   │   ├── __init__.py
-│   │   ├── test_tools/         # 工具测试
-│   │   ├── test_agent/         # 智能体测试
-│   │   └── test_models.py      # 模型测试
-│   ├── integration/            # 集成测试
+│   │   ├── test_scenario_tool.py
+│   │   └── test_sql_tools.py
+│   ├── test_agent/             # 智能体测试
 │   │   ├── __init__.py
-│   │   └── test_workflow.py    # 工作流测试
-│   └── fixtures/               # 测试数据
-│       ├── __init__.py
-│       └── sample_data.py
+│   │   └── test_smart_sql_agent.py
+│   └── test_integration.py     # 集成测试
 │
 ├── examples/                   # 示例代码
 │   ├── __init__.py
-│   ├── basic_usage.py          # 基础使用示例
+│   ├── basic_usage.py          # 基础示例
 │   ├── custom_tool.py          # 自定义工具示例
-│   └── advanced_agent.py       # 高级智能体示例
+│   └── batch_generation.py     # 批量生成示例
 │
 ├── scripts/                    # 脚本
 │   ├── setup_dev.sh           # 开发环境设置
@@ -132,154 +99,259 @@ semanticsql-agent/
 │   └── build_docker.sh        # 构建Docker镜像
 │
 └── docs/                      # 文档
-    ├── api/                   # API文档
-    ├── tutorials/             # 教程
-    └── deployment/            # 部署文档
+    ├── API.md                 # API文档
+    ├── CONTRIBUTING.md        # 贡献指南
+    └── CHANGELOG.md           # 变更日志
 ```
 
-## 2. 核心模块详细说明
+## 2. 模块说明
 
-### 2.1 配置模块 (config/)
-- **settings.py**: 统一的配置管理，支持YAML文件和环境变量
-- **database.py**: 数据库相关配置类
-- **example.yaml**: 配置文件示例，供用户参考
+### 2.1 核心模块 (core/)
 
-### 2.2 核心模块 (core/)
-- **models.py**: 所有Pydantic数据模型定义，包括：
-  - 输入模型（TaskRequest）
-  - 分析模型（SchemaAnalysis, DomainAnalysis等）
-  - 生成模型（QueryScenario, GeneratedQuestion, GeneratedSQL）
-  - 执行模型（AgentStep, AgentExecution）
-  - 输出模型（TrainingExample, TrainingDataset）
-- **exceptions.py**: 自定义异常类
-- **constants.py**: 系统常量定义
+#### models.py - 数据模型定义
+- `AgentStep`: 执行步骤模型
+- `AgentExecution`: 执行记录模型
+- `QueryScenario`: 查询场景模型
+- `GeneratedExample`: 生成样本模型
+- 其他业务相关模型
 
-### 2.3 智能体模块 (agent/)
-- **base_agent.py**: 实现ReAct模式的基础Agent类
-- **smart_sql_agent.py**: 专门用于NL2SQL数据生成的智能体
-- **executor.py**: 任务执行器，负责执行管理和轨迹记录
-- **context.py**: 执行上下文管理
+#### exceptions.py - 自定义异常
+```python
+class SemanticSQLError(Exception):
+    """基础异常类"""
+    pass
 
-### 2.4 工具模块 (tools/)
-工具按功能分为四大类：
+class ConfigurationError(SemanticSQLError):
+    """配置错误"""
+    pass
 
-#### 分析工具 (analysis/)
-- **schema_analyzer.py**: 分析数据库表结构
-- **domain_analyzer.py**: 识别业务领域
-- **field_classifier.py**: 对字段进行分类
-- **relationship_analyzer.py**: 分析表之间的关系
+class ToolExecutionError(SemanticSQLError):
+    """工具执行错误"""
+    pass
 
-#### 生成工具 (generation/)
-- **scenario_generator.py**: 基于规则生成业务场景
-- **question_generator.py**: 生成自然语言问题
-- **sql_generator.py**: 一步生成对应的SQL查询
+class DatabaseConnectionError(SemanticSQLError):
+    """数据库连接错误"""
+    pass
+```
 
-#### SQL工具 (sql/)
-- **sql_executor.py**: 执行SQL查询
-- **sql_validator.py**: 验证SQL语法
-- **sql_optimizer.py**: 提供SQL优化建议
+#### constants.py - 常量定义
+```python
+# 支持的数据库类型
+SUPPORTED_DATABASES = ["mysql", "postgresql", "sqlite"]
 
-#### 反思工具 (reflection/)
-- **execution_analyzer.py**: 分析SQL执行结果
-- **quality_improver.py**: 提供质量改进建议
+# 默认配置
+DEFAULT_MAX_STEPS = 30
+DEFAULT_TEMPERATURE = 0.7
 
-### 2.5 提示词管理 (prompts/)
-- **system.yaml**: 系统级提示词配置
-- **tools.yaml**: 各工具的提示词配置
-- **templates/**: Jinja2模板文件
-- **loader.py**: 提示词加载和管理器
+# SQL类型
+SQL_TYPES = {
+    "SELECT": "基础查询",
+    "JOIN": "关联查询",
+    "GROUP": "聚合查询",
+    "SUBQUERY": "子查询",
+    "WINDOW": "窗口函数"
+}
+```
 
-### 2.6 工具函数 (utils/)
-- **database.py**: 数据库连接和操作工具
-- **llm_client.py**: LLM客户端封装（支持Qwen）
-- **logger.py**: 日志配置和管理
-- **validators.py**: 数据验证函数
-- **helpers.py**: 通用辅助函数
+### 2.2 智能体模块 (agent/)
 
-### 2.7 输出处理 (output/)
-- **formatter.py**: 格式化输出结果
-- **exporter.py**: 导出为不同格式
-- **adapters/**: 特定格式的适配器
+#### base_agent.py
+- 实现 ReAct 模式的基础类
+- 提供工具注册和调用机制
+- 管理执行流程
 
-### 2.8 CLI接口 (cli/)
-- **cli.py**: 主命令行入口
-- **commands/**: 具体的命令实现
-- **utils.py**: CLI相关的工具函数
+#### smart_sql_agent.py
+- 继承自 BaseAgent
+- 专门用于 NL2SQL 数据生成
+- 注册所有必需的工具
 
-### 2.9 测试 (tests/)
-- **unit/**: 单元测试
-- **integration/**: 集成测试
-- **fixtures/**: 测试数据和夹具
+#### execution_tracker.py
+- 记录执行轨迹
+- 提供执行摘要
+- 支持调试和分析
 
-## 3. 关键设计特点
+### 2.3 工具模块 (tools/)
 
-### 3.1 基于智能体的架构
-- 采用ReAct（Reasoning + Acting）模式
-- 智能体自主决定执行步骤
-- 工具通过智能体协调工作
+#### 工具命名规范
+- 所有工具文件以 `_tool.py` 结尾
+- 工具类名以 `Tool` 结尾
+- 工具名称使用下划线命名法
 
-### 3.2 模块化设计
-- 清晰的模块边界
-- 高内聚低耦合
-- 易于扩展和维护
+#### 工具分类
 
-### 3.3 配置灵活性
-- 支持YAML配置文件
-- 支持环境变量
-- 配置优先级：命令行 > 环境变量 > 配置文件
+**分析工具 (analysis/)**
+- `schema_extraction_tool.py`: 提取数据库结构信息
+- `domain_analysis_tool.py`: 分析业务领域
+- `field_classification_tool.py`: 对字段进行分类
+- `er_analysis_tool.py`: 分析实体关系
 
-### 3.4 工具生态系统
-- 统一的工具基类
-- 标准化的接口
-- 支持Function Calling
+**生成工具 (generation/)**
+- `scenario_tool.py`: 基于规则生成业务场景
+- `operation_selection_tool.py`: 为场景选择SQL操作
+- `question_generation_tool.py`: 生成自然语言问题
+- `sql_generation_tool.py`: 生成SQL查询
 
-### 3.5 完整的数据流
-- 从输入到输出的完整数据模型
-- 类型安全（使用Pydantic）
-- 数据验证和转换
+**验证工具 (validation/)**
+- `sql_validation_tool.py`: 验证SQL语法
+- `sql_execution_tool.py`: 执行SQL测试
 
-## 4. 开发规范
+**反思工具 (reflection/)**
+- `sql_reflection_tool.py`: 分析执行结果并优化
 
-### 4.1 代码风格
-- 遵循PEP 8规范
-- 使用Black进行代码格式化
-- 使用mypy进行类型检查
+### 2.4 提示词管理 (prompts/)
 
-### 4.2 测试要求
-- 单元测试覆盖率 > 80%
-- 所有工具必须有对应的测试
-- 集成测试覆盖主要流程
+#### 文件结构
+- `system_prompt.yaml`: 系统级提示词配置
+- `tool_prompts.yaml`: 各工具的提示词
+- `prompt_manager.py`: 统一的提示词加载和管理
 
-### 4.3 文档规范
-- 所有模块和函数必须有docstring
-- README文档保持更新
-- API文档自动生成
+#### 提示词组织
+```yaml
+# system_prompt.yaml
+agent:
+  role: "你是一个智能的SQL训练数据生成专家"
+  instructions: |
+    使用ReAct模式工作：
+    - Thought: 分析当前状态
+    - Action: 选择工具执行
+    - Observation: 观察结果
 
-### 4.4 版本控制
-- 使用语义化版本号
-- 维护CHANGELOG
-- 标记重要的release
+# tool_prompts.yaml
+scenario_generator:
+  description: "基于数据库结构生成业务场景"
+  prompt_template: |
+    分析以下数据库结构：
+    {schema}
+    生成{count}个业务查询场景
+```
 
-## 5. 部署考虑
+### 2.5 工具函数 (utils/)
 
-### 5.1 依赖管理
-- 使用requirements.txt管理依赖
-- 区分开发依赖和生产依赖
-- 锁定关键依赖版本
+#### database.py
+- 数据库连接管理
+- 连接池配置
+- 查询执行工具
 
-### 5.2 配置管理
-- 敏感信息使用环境变量
-- 提供配置模板
-- 支持多环境配置
+#### llm_client.py
+- LLM客户端封装
+- 支持Qwen API
+- 错误重试机制
 
-### 5.3 日志和监控
-- 结构化日志
-- 不同级别的日志输出
-- 性能指标收集
+#### logger.py
+- 日志配置
+- 支持文件和控制台输出
+- 结构化日志格式
 
-### 5.4 错误处理
-- 优雅的错误处理
-- 详细的错误信息
-- 错误恢复机制
+#### output_handler.py
+- 结果格式化
+- 支持多种输出格式（JSON、JSONL、CSV）
+- 数据转换工具
 
-这个项目结构设计体现了现代Python项目的最佳实践，完全基于智能体架构，具有良好的可扩展性和可维护性。
+### 2.6 CLI模块 (cli/)
+
+#### 命令结构
+```bash
+semanticsql-agent
+├── generate        # 生成数据
+├── test-connection # 测试连接
+├── init           # 初始化配置
+└── version        # 显示版本
+```
+
+## 3. 配置文件
+
+### 3.1 环境变量 (.env)
+```bash
+# API配置
+DASHSCOPE_API_KEY=your_api_key
+
+# 数据库配置
+DB_PASSWORD=your_password
+
+# 日志配置
+LOG_LEVEL=INFO
+```
+
+### 3.2 配置文件 (config/config.yaml)
+```yaml
+database:
+  type: mysql
+  host: localhost
+  port: 3306
+  username: root
+  password: ${DB_PASSWORD}
+  database: your_db
+
+llm:
+  model: qwen-plus
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  api_key: ${DASHSCOPE_API_KEY}
+  
+agent:
+  max_steps: 30
+  enable_reflection: true
+```
+
+## 4. 测试结构
+
+### 4.1 单元测试
+- 每个工具都有对应的测试文件
+- 测试覆盖正常和异常情况
+- 使用 Mock 避免外部依赖
+
+### 4.2 集成测试
+- 测试完整的数据生成流程
+- 验证工具之间的协作
+- 检查最终输出质量
+
+### 4.3 测试数据
+- 使用 fixtures 提供测试数据
+- 支持多种数据库结构
+- 包含边界情况
+
+## 5. 开发流程
+
+### 5.1 添加新工具
+1. 在适当的工具目录创建 `*_tool.py` 文件
+2. 继承 `BaseTool` 类
+3. 实现必需的方法和属性
+4. 在智能体中注册工具
+5. 编写对应的测试
+
+### 5.2 扩展智能体
+1. 继承 `BaseAgent` 或 `SmartSQLAgent`
+2. 自定义系统提示词
+3. 添加特定的工具
+4. 实现自定义逻辑
+
+### 5.3 添加新的输出格式
+1. 在 `output_handler.py` 添加格式化函数
+2. 在 CLI 中添加格式选项
+3. 更新文档
+
+## 6. 部署结构
+
+### 6.1 Docker支持
+- Dockerfile 用于构建镜像
+- docker-compose.yml 用于编排服务
+- 支持环境变量配置
+
+### 6.2 脚本工具
+- `setup_dev.sh`: 设置开发环境
+- `run_tests.sh`: 运行所有测试
+- `build_docker.sh`: 构建Docker镜像
+
+## 7. 文档结构
+
+### 7.1 用户文档
+- README.md: 项目介绍和快速开始
+- docs/API.md: API参考文档
+
+### 7.2 开发文档
+- docs/CONTRIBUTING.md: 贡献指南
+- 代码中的docstring
+
+### 7.3 变更记录
+- docs/CHANGELOG.md: 版本变更历史
+
+这个项目结构设计遵循了Python项目的最佳实践，具有良好的模块化、可扩展性和可维护性。
