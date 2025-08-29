@@ -5,449 +5,555 @@
 ### 1.1 架构原则
 - **分析驱动**：以深度数据库分析为核心
 - **工具协同**：多个专业工具协同完成复杂任务
-- **数据质量**：生成高质量的NL2SQL训练数据
-- **可扩展性**：支持新领域和新数据库类型
+- **规则为主**：场景生成基于规则而非纯LLM
+- **质量优先**：确保生成的NL2SQL数据质量
 
 ### 1.2 技术栈
 - **编程语言**: Python 3.8+
-- **核心框架**:
+- **核心依赖**:
   - Click: CLI 命令行框架
-  - SQLAlchemy: 数据库元数据提取
+  - SQLAlchemy: 数据库连接和元数据提取
   - OpenAI SDK: LLM 调用（支持 Qwen）
   - PyYAML: 配置文件解析
-- **LLM支持**:
-  - Qwen 系列模型（通过 OpenAI 兼容 API）
-  - Function Calling 支持
+- **数据库支持**:
+  - MySQL (pymysql)
+  - PostgreSQL (psycopg2)
+  - SQLite (内置)
 
 ## 2. 分层架构详解
 
 ### 2.1 表示层 (CLI Layer)
 
-#### 核心命令
+#### CLI 命令结构
+```python
+cli.py
+├── @cli.group()           # 主命令组
+├── init                   # 初始化配置
+├── test                   # 测试数据库连接
+├── schema                 # 查看数据库结构
+├── run                    # 执行单次查询
+├── interactive            # 交互式模式
+└── smart-analyze          # 智能分析（核心）
+```
+
+#### smart-analyze 命令流程
 ```python
 @cli.command()
-@click.option('--save-result', '-s', help='保存分析结果的文件路径')
-@click.option('--stage-by-stage', is_flag=True, help='分阶段显示执行进度')
-def smart_analyze(request, config, save_result, verbose, stage_by_stage):
+def smart_analyze(ctx, request, config, save_result, verbose, stage_by_stage):
     """智能分析数据库 - 自动执行完整6步流程"""
-    # 1. 连接数据库
-    # 2. 分析数据库领域
-    # 3. 字段分类分析
-    # 4. 表结构分析
-    # 5. ER关系分析
-    # 6. 场景问题生成
+    # 1. 加载配置
+    # 2. 创建 SmartSQLAgent
+    # 3. 执行分析
+    # 4. 显示结果
+    # 5. 保存结果
 ```
 
 ### 2.2 业务逻辑层 (Agent Layer)
 
-#### SmartSQLAgent 架构
+#### BaseAgent - ReAct 模式实现
+```python
+class BaseAgent(ABC):
+    """ReAct 模式基础类"""
+    
+    def execute_sync(self, task: str) -> AgentExecution:
+        """同步执行任务"""
+        return self._execute_react_loop(task)
+    
+    def _execute_react_loop(self, task: str) -> Any:
+        """ReAct 循环实现"""
+        for step in range(self.max_steps):
+            # 1. Thought - 生成思考
+            response = self._generate_next_action()
+            
+            # 2. Action - 解析行动
+            thought, action, action_input = self._parse_response(response)
+            
+            # 3. Observation - 执行并观察
+            tool_output = self._execute_action(action, action_input)
+            
+            # 4. 记录步骤
+            self._add_step(step_type, content, tool_output)
+```
+
+#### SmartSQLAgent - 分析专用实现
 ```python
 class SmartSQLAgent(BaseAgent):
-    """数据生成专用智能体"""
+    """智能SQL分析Agent"""
     
-    def get_system_prompt(self) -> str:
-        """构建分析任务的系统提示词"""
-        return """你是一个专业的数据库分析专家..."""
+    def _initialize_tools(self):
+        """注册6步分析所需的工具"""
+        # 数据库连接工具
+        self.register_tool("connect_database", DatabaseConnectionTool)
+        # 领域分析工具  
+        self.register_tool("analyze_domain", DomainAnalysisTool)
+        # 模式分析工具
+        self.register_tool("analyze_schema", SchemaAnalysisTool)
+        # 更多工具...
     
-    def smart_analyze(self, user_request: str) -> Dict[str, Any]:
-        """执行完整的6步分析流程"""
-        execution = self.new_task(user_request)
+    def smart_analyze(self, request: str) -> Dict[str, Any]:
+        """执行6步智能分析"""
+        execution = self.new_task(request)
         return self._format_analysis_result(execution)
     
     def _generate_final_result(self) -> Dict[str, Any]:
-        """整合所有分析步骤的结果"""
-        # 收集各步骤的分析结果
-        # 生成最终的场景和SQL
-```
-
-#### ReAct 执行引擎
-```python
-class BaseAgent:
-    """ReAct 模式基础实现"""
-    
-    def _execute_react_loop(self, task: str) -> Any:
-        """执行 ReAct 循环"""
-        for step in range(self.max_steps):
-            # 1. 生成思考和行动
-            response = self._generate_next_action()
-            
-            # 2. 解析 LLM 响应
-            thought, action, action_input = self._parse_response(response)
-            
-            # 3. 执行工具调用
-            if action in self.available_tools:
-                result = self._execute_action(action, action_input)
-                
-            # 4. 观察结果并继续
+        """整合所有步骤的分析结果"""
+        # 收集6个步骤的输出
+        # 生成最终的场景数据
 ```
 
 ### 2.3 工具层 (Tools Layer)
 
-#### 工具体系结构
+#### 工具继承体系
 ```
-tools/
-├── trae_base_tool.py      # 工具基类
-├── sql_tools.py           # SQL相关工具
-│   ├── SchemaExtractionTool    # 模式提取
-│   ├── SQLGenerationTool       # SQL生成
-│   └── SQLExecutionTool        # SQL执行
-└── analysis_tools.py      # 分析工具
-    ├── DomainAnalysisTool      # 领域分析
-    ├── FieldClassificationTool  # 字段分类
-    ├── ERAnalysisTool          # 关系分析
-    └── SequentialThinkingTool  # 思考辅助
+TraeBaseTool (抽象基类)
+├── AgentTool (agent_tools.py)
+│   ├── DatabaseConnectionTool
+│   ├── SchemaAnalysisTool
+│   ├── QueryGenerationTool
+│   ├── QueryExecutionTool
+│   ├── DataAnalysisTool
+│   ├── ReasoningTool
+│   └── DomainAnalysisTool
+├── SyncTool (sql_tools.py)
+│   ├── SyncSchemaExtractionTool
+│   ├── SyncSQLGenerationTool
+│   ├── SyncSQLValidationTool
+│   └── SyncSQLExecutionTool
+└── AnalysisTool (analysis_tools.py)
+    ├── SyncDomainAnalysisTool
+    ├── SyncFieldClassificationTool
+    ├── SyncERAnalysisTool
+    └── SyncSequentialThinkingTool
 ```
 
-#### 工具协同机制
+#### 工具接口规范
 ```python
-# 工具之间通过上下文共享信息
-class AnalysisContext:
-    """分析上下文，在工具间共享"""
-    database_info: Dict         # 数据库基本信息
-    domain_result: Dict        # 领域分析结果
-    field_classification: Dict  # 字段分类结果
-    table_analysis: Dict       # 表分析结果
-    er_relationships: Dict     # ER关系
+class TraeBaseTool(ABC):
+    """工具基类"""
+    
+    @abstractmethod
+    def get_parameters(self) -> List[ToolParameter]:
+        """定义工具参数"""
+        pass
+    
+    @abstractmethod
+    def run(self, **kwargs) -> Dict[str, Any]:
+        """执行工具逻辑"""
+        pass
+    
+    def format_result(self, result: Any) -> Dict[str, Any]:
+        """统一结果格式"""
+        return {
+            "success": True,
+            "result": result,
+            "tool": self.name,
+            "timestamp": datetime.now()
+        }
 ```
 
 ### 2.4 基础设施层
 
-#### 配置管理
+#### 配置系统架构
 ```python
 @dataclass
 class TraeConfig:
     """统一配置管理"""
     app: AppConfig
-    database: DatabaseConfig
+    database: DatabaseConfig  
     llm: LLMConfig
     agent: AgentConfig
     
     @classmethod
     def load_config(cls, config_path: str) -> 'TraeConfig':
-        """加载并验证配置"""
-        # 支持 YAML 文件
-        # 支持环境变量覆盖
-        # 验证配置完整性
+        """配置加载流程"""
+        # 1. 加载YAML文件
+        # 2. 环境变量覆盖
+        # 3. 验证配置
+        # 4. 创建配置对象
 ```
 
-#### 数据库连接管理
+#### 数据库管理架构
 ```python
 class DatabaseManager:
-    """数据库连接和元数据管理"""
+    """数据库连接管理"""
     
-    def get_tables_info(self) -> Dict[str, Any]:
-        """获取所有表的元数据"""
-        # 表名、字段、类型、约束等
+    def __init__(self, config: DatabaseConfig):
+        self.engine = self._create_engine(config)
+        self.metadata = MetaData()
         
-    def get_relationships(self) -> List[Dict]:
-        """提取外键关系"""
-        # 分析表之间的关联
+    def get_tables_info(self) -> Dict[str, Any]:
+        """获取数据库元数据"""
+        # 表信息
+        # 字段信息
+        # 约束信息
+        
+    def execute_query(self, sql: str) -> List[Dict]:
+        """执行查询"""
+        # 安全检查
+        # 执行SQL
+        # 返回结果
 ```
 
-## 3. 核心分析流程
+## 3. 六步分析流程架构
 
-### 3.1 六步分析流程详解
+### 3.1 执行流程图
+```
+SmartSQLAgent.smart_analyze()
+    │
+    ├─> Step 1: 数据库连接
+    │   └─> DatabaseConnectionTool
+    │       └─> 获取基本信息
+    │
+    ├─> Step 2: 领域分析  
+    │   └─> DomainAnalysisTool
+    │       └─> 识别业务领域
+    │
+    ├─> Step 3: 字段分类
+    │   └─> FieldClassificationTool
+    │       └─> 分类所有字段
+    │
+    ├─> Step 4: 表结构分析
+    │   └─> SchemaAnalysisTool
+    │       └─> 深入分析表结构
+    │
+    ├─> Step 5: ER关系分析
+    │   └─> ERAnalysisTool
+    │       └─> 提取实体关系
+    │
+    └─> Step 6: 场景生成
+        └─> 基于前5步结果
+            └─> 应用规则生成场景
+```
 
-#### Step 1: 数据库连接
+### 3.2 工具执行细节
+
+#### Step 1: DatabaseConnectionTool
 ```python
-Tool: connect_database
 输入: 数据库配置
+处理: 
+  - 建立连接
+  - 获取表列表
+  - 统计基本信息
 输出: {
     "database": "testdb",
-    "type": "mysql",
-    "total_tables": 15,
-    "version": "8.0.23"
+    "type": "mysql", 
+    "tables": ["users", "orders", ...],
+    "total_tables": 12
 }
 ```
 
-#### Step 2: 领域分析
+#### Step 2: DomainAnalysisTool
 ```python
-Tool: analyze_domain
-输入: 数据库元信息
+输入: 表名列表、数据库信息
+处理:
+  - 分析表名模式
+  - 识别业务关键词
+  - 推断业务领域
 输出: {
     "domain": "电子商务",
     "confidence": 0.92,
-    "key_entities": ["用户", "商品", "订单", "支付"],
-    "domain_features": ["交易流程", "库存管理", "用户体系"]
+    "key_entities": ["用户", "商品", "订单"],
+    "domain_features": ["交易", "支付", "物流"]
 }
 ```
 
-#### Step 3: 字段分类
+#### Step 3: FieldClassificationTool
 ```python
-Tool: classify_fields
 输入: 所有表的字段信息
+处理:
+  - 按类型分类字段
+  - 识别业务含义
+  - 标记特殊字段
 输出: {
-    "identifiers": ["user_id", "order_id", "product_id"],
+    "identifiers": ["id", "user_id", "order_id"],
     "timestamps": ["created_at", "updated_at"],
-    "amounts": ["price", "total_amount", "discount"],
-    "status": ["order_status", "payment_status"],
-    "descriptive": ["product_name", "user_name", "address"]
+    "amounts": ["price", "total", "discount"],
+    "status": ["status", "state", "is_active"],
+    "descriptive": ["name", "description", "address"]
 }
 ```
 
-#### Step 4: 表结构分析
+#### Step 4: SchemaAnalysisTool
 ```python
-Tool: analyze_tables
-输入: 表结构和字段分类结果
+输入: 表结构信息
+处理:
+  - 识别核心业务表
+  - 分析表的作用
+  - 评估表的重要性
 输出: {
-    "core_tables": ["users", "orders", "products"],
-    "lookup_tables": ["categories", "payment_methods"],
-    "junction_tables": ["order_items"],
-    "table_purposes": {
+    "core_tables": {
         "users": "用户主表",
         "orders": "订单主表",
-        "order_items": "订单明细表"
+        "products": "商品主表"
+    },
+    "lookup_tables": {
+        "categories": "商品分类",
+        "payment_methods": "支付方式"
+    },
+    "junction_tables": {
+        "order_items": "订单明细"
     }
 }
 ```
 
-#### Step 5: ER关系分析
+#### Step 5: ERAnalysisTool
 ```python
-Tool: analyze_er
 输入: 表结构和外键信息
+处理:
+  - 分析外键关系
+  - 推断隐式关系
+  - 构建关系图
 输出: {
     "relationships": [
         {
-            "from": "orders.user_id",
-            "to": "users.id",
+            "from_table": "orders",
+            "from_field": "user_id",
+            "to_table": "users",
+            "to_field": "id",
             "type": "many-to-one",
             "description": "订单属于用户"
         }
     ],
-    "entity_graph": {...}
+    "relationship_graph": {...}
 }
 ```
 
-#### Step 6: 场景生成
+#### Step 6: 场景生成（基于规则）
 ```python
-Tool: generate_scenarios
-输入: 前5步的分析结果
+输入: 前5步的所有分析结果
+处理:
+  - 应用领域特定规则
+  - 基于表结构生成查询模板
+  - 组合生成多样化场景
 输出: {
-    "scenarios": [
+    "generated_scenarios": [
         {
+            "id": "S001",
             "category": "用户分析",
-            "question": "查询每个用户的订单总数和总金额",
-            "sql": "SELECT u.id, u.name, COUNT(o.id) as order_count, SUM(o.total_amount) as total_amount FROM users u LEFT JOIN orders o ON u.id = o.user_id GROUP BY u.id, u.name",
-            "difficulty": "medium",
-            "concepts": ["JOIN", "GROUP BY", "聚合函数"]
-        }
+            "question": "查询最近30天活跃用户数",
+            "sql": "SELECT COUNT(DISTINCT user_id) FROM orders WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)",
+            "difficulty": "easy",
+            "concepts": ["时间函数", "去重计数"]
+        },
+        // 更多场景...
     ]
 }
 ```
 
-### 3.2 数据生成策略
+### 3.3 场景生成规则引擎
 
-#### 场景分类
+#### 规则分类
 ```python
-SCENARIO_TEMPLATES = {
-    "basic_queries": [
-        "单表查询",
-        "条件筛选",
-        "排序和分页"
-    ],
-    "aggregations": [
-        "分组统计",
-        "聚合计算",
-        "Having筛选"
-    ],
-    "joins": [
-        "两表关联",
-        "多表关联",
-        "自连接"
-    ],
-    "advanced": [
-        "子查询",
-        "窗口函数",
-        "CTE查询"
-    ]
-}
-```
-
-#### 难度分级
-```python
-DIFFICULTY_LEVELS = {
-    "easy": {
-        "max_tables": 1,
-        "max_conditions": 2,
-        "allow_aggregation": False
+GENERATION_RULES = {
+    "电子商务": {
+        "用户分析": [
+            "活跃用户统计",
+            "用户价值分析",
+            "用户行为分析"
+        ],
+        "订单分析": [
+            "订单趋势分析",
+            "订单状态统计",
+            "支付方式分析"
+        ],
+        "商品分析": [
+            "热销商品排行",
+            "库存分析",
+            "价格分析"
+        ]
     },
-    "medium": {
-        "max_tables": 2,
-        "max_conditions": 3,
-        "allow_aggregation": True
-    },
-    "hard": {
-        "max_tables": 3,
-        "max_conditions": 5,
-        "allow_aggregation": True,
-        "allow_subquery": True
+    "教育系统": {
+        "学生分析": [...],
+        "课程分析": [...],
+        "成绩分析": [...]
     }
 }
 ```
 
-## 4. 数据模型
+#### 查询模板
+```python
+QUERY_TEMPLATES = {
+    "时间统计": {
+        "pattern": "查询{time_period}的{entity}{metric}",
+        "sql_template": "SELECT {agg_func}({column}) FROM {table} WHERE {time_column} >= {start_time}",
+        "variables": {
+            "time_period": ["最近7天", "本月", "今年"],
+            "entity": ["用户", "订单", "商品"],
+            "metric": ["数量", "总额", "平均值"]
+        }
+    },
+    "分组统计": {
+        "pattern": "按{group_by}统计{metric}",
+        "sql_template": "SELECT {group_column}, {agg_func}({value_column}) FROM {table} GROUP BY {group_column}",
+        "variables": {...}
+    }
+}
+```
 
-### 4.1 分析结果模型
+## 4. 数据模型架构
+
+### 4.1 执行状态模型
+```python
+@dataclass
+class AgentStep:
+    """单个执行步骤"""
+    step_type: AgentStepType  # OBSERVATION/THOUGHT/ACTION/REFLECTION
+    content: str
+    timestamp: datetime
+    tool_name: Optional[str]
+    tool_input: Optional[Dict]
+    tool_output: Optional[Any]
+    error: Optional[str]
+
+@dataclass
+class AgentExecution:
+    """完整执行记录"""
+    task: str
+    steps: List[AgentStep]
+    final_result: Optional[Any]
+    success: bool
+    total_steps: int
+    execution_time: float
+```
+
+### 4.2 分析结果模型
 ```python
 @dataclass
 class AnalysisResult:
-    """完整分析结果"""
-    database_info: DatabaseInfo
+    """6步分析的完整结果"""
+    database_connection: DatabaseInfo
     domain_analysis: DomainAnalysis
     field_classification: FieldClassification
-    table_analysis: TableAnalysis
-    er_relationships: ERRelationships
+    schema_analysis: SchemaAnalysis
+    er_analysis: ERAnalysis
     generated_scenarios: List[QueryScenario]
-    
+
 @dataclass
 class QueryScenario:
     """生成的查询场景"""
     id: str
-    category: str           # 查询类别
+    category: str          # 场景类别
     question: str          # 自然语言问题
-    sql: str              # 对应的SQL
-    difficulty: str       # 难度级别
-    concepts: List[str]   # 涉及的SQL概念
+    sql: str              # 对应SQL
+    difficulty: str       # 难度等级
+    concepts: List[str]   # SQL概念
     tables: List[str]     # 涉及的表
-    expected_rows: int    # 预期结果行数
 ```
 
-### 4.2 工具输入输出规范
-```python
-# 统一的工具输入格式
-ToolInput = {
-    "context": Dict,      # 共享上下文
-    "parameters": Dict,   # 工具特定参数
-    "options": Dict      # 可选配置
-}
+## 5. 关键实现细节
 
-# 统一的工具输出格式
-ToolOutput = {
-    "success": bool,
-    "result": Any,       # 工具特定结果
-    "metadata": Dict,    # 元数据
-    "error": Optional[str]
-}
+### 5.1 ReAct 响应解析
+```python
+def _parse_response(self, response: str) -> Tuple[Optional[str], Optional[str], Optional[Dict]]:
+    """解析LLM响应，提取思考、行动和输入"""
+    thought_match = re.search(r'Thought:\s*(.+?)(?=Action:|$)', response)
+    action_match = re.search(r'Action:\s*(\w+)', response)
+    input_match = re.search(r'Action Input:\s*({.+?})', response)
+    
+    thought = thought_match.group(1) if thought_match else None
+    action = action_match.group(1) if action_match else None
+    action_input = json.loads(input_match.group(1)) if input_match else {}
+    
+    return thought, action, action_input
 ```
 
-## 5. LLM 集成
-
-### 5.1 Function Calling 实现
+### 5.2 工具调用机制
 ```python
-def build_tool_functions() -> List[Dict]:
-    """构建 OpenAI Function Calling 格式的工具定义"""
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": "analyze_domain",
-                "description": "分析数据库的业务领域",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "table_names": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "数据库中的表名列表"
-                        }
-                    },
-                    "required": ["table_names"]
-                }
-            }
+def _execute_action(self, action: str, action_input: Dict) -> Any:
+    """执行工具调用"""
+    if action not in self.tools:
+        raise ValueError(f"未知的工具: {action}")
+    
+    tool = self.tools[action]
+    try:
+        result = tool.execute(**action_input)
+        return result
+    except Exception as e:
+        self.logger.error(f"工具执行失败: {e}")
+        return {"success": False, "error": str(e)}
+```
+
+### 5.3 上下文共享
+```python
+class AnalysisContext:
+    """分析上下文，在工具间共享"""
+    
+    def __init__(self):
+        self.database_info = None
+        self.domain_result = None
+        self.field_classification = None
+        self.schema_analysis = None
+        self.er_relationships = None
+    
+    def update(self, step_name: str, result: Any):
+        """更新特定步骤的结果"""
+        setattr(self, step_name, result)
+    
+    def get_all(self) -> Dict[str, Any]:
+        """获取所有分析结果"""
+        return {
+            k: v for k, v in self.__dict__.items() 
+            if v is not None
         }
-    ]
 ```
 
-### 5.2 Prompt 工程
-```python
-ANALYSIS_PROMPTS = {
-    "domain": """基于以下表名和字段，分析这个数据库属于什么业务领域：
-    {table_info}
-    
-    请识别：
-    1. 主要业务领域
-    2. 核心业务实体
-    3. 业务特征""",
-    
-    "scenario": """基于以下数据库分析结果，生成真实的查询场景：
-    领域：{domain}
-    核心表：{core_tables}
-    关系：{relationships}
-    
-    请生成5个不同难度的查询场景，包含问题和SQL。"""
-}
-```
+## 6. 扩展点架构
 
-## 6. 扩展点
-
-### 6.1 新增分析工具
+### 6.1 添加新工具
 ```python
-# 1. 继承 TraeBaseTool
-class DataQualityAnalysisTool(TraeBaseTool):
-    """数据质量分析工具"""
+# 1. 创建工具类
+class NewAnalysisTool(TraeBaseTool):
+    def __init__(self):
+        super().__init__(
+            name="new_analysis",
+            description="新的分析工具"
+        )
     
-    def run(self, **kwargs) -> Dict:
-        # 分析数据完整性
-        # 检查数据一致性
-        # 评估数据质量
+    def run(self, **kwargs) -> Dict[str, Any]:
+        # 实现分析逻辑
         pass
 
 # 2. 注册到工具映射
-TOOL_MAPPING["analyze_quality"] = DataQualityAnalysisTool
+TOOL_MAPPING["new_analysis"] = NewAnalysisTool
+
+# 3. 在Agent中使用
+self.register_tool("new_analysis", NewAnalysisTool())
 ```
 
-### 6.2 领域定制
+### 6.2 添加新领域
 ```python
-# 领域特定的场景模板
-DOMAIN_TEMPLATES = {
-    "e-commerce": {
-        "scenarios": [
-            "用户购买行为分析",
-            "商品销售统计",
-            "库存预警查询"
-        ]
-    },
-    "education": {
-        "scenarios": [
-            "学生成绩分析",
-            "课程选修统计",
-            "教师工作量查询"
-        ]
+# 在规则引擎中添加新领域
+DOMAIN_RULES["医疗系统"] = {
+    "患者分析": [
+        "患者统计",
+        "疾病分布",
+        "治疗效果"
+    ],
+    "医生分析": [...],
+    "药品分析": [...]
+}
+
+# 添加对应的查询模板
+MEDICAL_TEMPLATES = {
+    "患者查询": {
+        "pattern": "查询{condition}的患者{metric}",
+        "sql_template": "..."
     }
 }
 ```
 
 ## 7. 性能优化
 
-### 7.1 缓存策略
+### 7.1 缓存机制
 - 数据库元数据缓存
 - 分析结果缓存
-- LLM响应缓存（相同输入）
+- 工具执行结果缓存
 
 ### 7.2 并行处理
-- 字段分类可并行处理多表
+- 字段分类可并行分析多表
 - 场景生成可并行生成多个类别
 
-## 8. 质量控制
-
-### 8.1 SQL验证
-```python
-def validate_generated_sql(sql: str, schema: Dict) -> bool:
-    """验证生成的SQL"""
-    # 1. 语法检查
-    # 2. 表名字段验证
-    # 3. 执行可行性测试
-    pass
-```
-
-### 8.2 场景评分
-```python
-def score_scenario(scenario: QueryScenario) -> float:
-    """对生成的场景进行质量评分"""
-    # 考虑因素：
-    # - 问题的自然度
-    # - SQL的正确性
-    # - 难度的合理性
-    # - 业务相关性
-    pass
-```
+### 7.3 资源管理
+- 数据库连接池
+- LLM调用限流
+- 内存使用控制
