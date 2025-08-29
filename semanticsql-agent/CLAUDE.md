@@ -174,7 +174,7 @@ llm:
   base_url: "http://192.168.200.216:9009/v1"
   api_key: "not-needed"
   temperature: 0.1
-  max_tokens: 2000
+  max_tokens: 20000
   timeout: 30
 ```
 

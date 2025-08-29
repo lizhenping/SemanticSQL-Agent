@@ -88,10 +88,10 @@ class LLMConfig:
         """从环境变量创建配置"""
         return cls(
             model=os.getenv("LLM_MODEL", "Qwen3-14B"),
-            base_url=os.getenv("LLM_BASE_URL", "http://192.168.200.216:9009/v1"),
+            base_url=os.getenv("LLM_BASE_URL", "http://localhost:9009/v1"),
             api_key=os.getenv("LLM_API_KEY", "not-needed"),
             temperature=float(os.getenv("LLM_TEMPERATURE", "0.1")),
-            max_tokens=int(os.getenv("LLM_MAX_TOKENS", "2000")),
+            max_tokens=int(os.getenv("LLM_MAX_TOKENS", "20000")),
             timeout=int(os.getenv("LLM_TIMEOUT", "30")),
             max_retries=int(os.getenv("LLM_MAX_RETRIES", "3"))
         )
@@ -296,7 +296,7 @@ DEFAULT_CONFIG_TEMPLATE = {
         "base_url": "http://192.168.200.216:9009/v1",
         "api_key": "not-needed",
         "temperature": 0.1,
-        "max_tokens": 2000,
+        "max_tokens": 20000,
         "timeout": 30,
         "max_retries": 3
     },
