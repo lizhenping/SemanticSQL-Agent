@@ -1,0 +1,240 @@
+# 工具提示词配置
+
+# 分析工具提示词
+analysis:
+  schema_extraction:
+    description: "提取数据库的完整结构信息"
+    prompt_template: |
+      分析数据库结构，提取以下信息：
+      1. 所有表及其字段
+      2. 主键和外键关系
+      3. 索引信息
+      4. 数据类型和约束
+      
+      数据库类型：{db_type}
+      数据库名：{db_name}
+      
+      请提供详细的结构分析报告。
+  
+  domain_analysis:
+    description: "分析数据库的业务领域"
+    prompt_template: |
+      基于以下数据库结构信息，分析其业务领域：
+      
+      表结构：
+      {schema_info}
+      
+      请识别：
+      1. 主要业务领域（如电商、金融、医疗等）
+      2. 核心业务实体
+      3. 业务流程特征
+      4. 数据特点
+  
+  field_classification:
+    description: "对字段进行分类"
+    prompt_template: |
+      对以下字段进行分类：
+      
+      表名：{table_name}
+      字段列表：
+      {fields}
+      
+      分类类型：
+      - identifier：标识符字段
+      - timestamp：时间戳字段
+      - numeric：数值字段
+      - category：分类字段
+      - description：描述字段
+      
+      请为每个字段分配合适的类型。
+  
+  er_analysis:
+    description: "分析表之间的关系"
+    prompt_template: |
+      分析以下表之间的关系：
+      
+      表结构信息：
+      {schema_info}
+      
+      请识别：
+      1. 主外键关系
+      2. 关联类型（一对一、一对多、多对多）
+      3. 业务关联逻辑
+      4. 建议的JOIN条件
+
+# 生成工具提示词
+generation:
+  scenario:
+    description: "生成查询场景"
+    template_prompt: |
+      基于数据库结构生成{count}个业务查询场景。
+      
+      数据库信息：
+      {schema_info}
+      
+      领域：{domain}
+      难度分布：{difficulty_distribution}
+      
+      每个场景应包含：
+      1. 业务目的
+      2. 涉及的表
+      3. 查询复杂度
+      4. 适用的SQL操作
+  
+  question:
+    description: "生成自然语言问题"
+    formal_style: |
+      请生成一个正式、专业的查询问题。
+      场景：{scenario}
+      涉及表：{tables}
+      操作：{operations}
+      
+      要求：
+      - 使用专业术语
+      - 表述准确清晰
+      - 避免歧义
+    
+    casual_style: |
+      请生成一个口语化的查询问题。
+      场景：{scenario}
+      涉及表：{tables}
+      操作：{operations}
+      
+      要求：
+      - 使用日常用语
+      - 自然流畅
+      - 易于理解
+    
+    technical_style: |
+      请生成一个技术性的查询问题。
+      场景：{scenario}
+      涉及表：{tables}
+      操作：{operations}
+      
+      要求：
+      - 使用技术术语
+      - 精确描述需求
+      - 包含具体条件
+  
+  sql:
+    description: "生成SQL查询"
+    generation_prompt: |
+      将以下自然语言问题转换为SQL查询：
+      
+      问题：{question}
+      
+      数据库结构：
+      {schema_info}
+      
+      SQL方言：{dialect}
+      期望操作：{operations}
+      
+      要求：
+      1. SQL语法必须正确
+      2. 使用合适的表和字段
+      3. 考虑查询性能
+      4. 结果要符合问题需求
+      
+      生成的SQL：
+    
+    optimization_prompt: |
+      优化以下SQL查询：
+      
+      原始SQL：
+      {original_sql}
+      
+      优化目标：
+      - 提高查询性能
+      - 减少资源消耗
+      - 保持结果正确性
+      
+      优化后的SQL：
+
+# 验证工具提示词
+validation:
+  sql_validation:
+    description: "验证SQL语法"
+    prompt_template: |
+      验证以下SQL查询的语法：
+      
+      SQL：
+      {sql}
+      
+      数据库类型：{db_type}
+      
+      检查项：
+      1. 语法是否正确
+      2. 表和字段是否存在
+      3. 数据类型是否匹配
+      4. 函数使用是否恰当
+  
+  execution_test:
+    description: "测试SQL执行"
+    prompt_template: |
+      执行SQL查询并分析结果：
+      
+      SQL：
+      {sql}
+      
+      执行环境：{environment}
+      
+      分析内容：
+      1. 执行是否成功
+      2. 返回结果数量
+      3. 执行时间
+      4. 资源消耗
+
+# 反思工具提示词
+reflection:
+  quality_assessment:
+    description: "评估生成质量"
+    prompt_template: |
+      评估以下NL2SQL数据对的质量：
+      
+      问题：{question}
+      SQL：{sql}
+      执行结果：{execution_result}
+      
+      评估维度：
+      1. 语义匹配度（问题和SQL是否对应）
+      2. SQL正确性（语法和逻辑）
+      3. 结果合理性（返回数据是否合理）
+      4. 查询效率（性能考虑）
+      
+      请给出：
+      - 质量分数（0-100）
+      - 存在的问题
+      - 改进建议
+  
+  improvement_suggestion:
+    description: "提供改进建议"
+    prompt_template: |
+      基于以下分析结果，提供改进建议：
+      
+      当前问题：
+      {issues}
+      
+      生成数据：
+      {generated_data}
+      
+      请提供：
+      1. 具体的改进方案
+      2. 优化后的版本
+      3. 预期效果
+  
+  batch_analysis:
+    description: "批量数据分析"
+    prompt_template: |
+      分析批量生成的数据集：
+      
+      数据集大小：{size}
+      样本示例：
+      {samples}
+      
+      分析内容：
+      1. 数据多样性
+      2. 难度分布
+      3. 覆盖率
+      4. 质量一致性
+      
+      提供整体评估和建议。
