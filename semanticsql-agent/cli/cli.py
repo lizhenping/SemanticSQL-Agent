@@ -476,9 +476,8 @@ def generate(ctx, config: str, count: int, output: Optional[str], format: str,
                 if verbose:
                     click.echo(f"\n处理批次 {batch_idx + 1}/{batches} ({batch_count} 条)...")
                 
-                # 同步调用异步方法
-                import asyncio
-                examples = asyncio.run(agent.generate_training_data(batch_count))
+                # 调用同步方法
+                examples = agent.generate_training_data(batch_count)
                 
                 all_examples.extend(examples)
                 bar.update(batch_count)

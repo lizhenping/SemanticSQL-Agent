@@ -152,6 +152,51 @@ class BaseAgent(ABC):
             
         return self.current_execution
     
+    def call_tool(self, tool_name: str, **kwargs) -> Dict[str, Any]:
+        """
+        调用指定工具
+        
+        Args:
+            tool_name: 工具名称
+            **kwargs: 工具参数
+            
+        Returns:
+            工具执行结果
+        """
+        if tool_name not in self.tools:
+            return {
+                "success": False,
+                "error": f"工具 '{tool_name}' 不存在"
+            }
+        
+        tool = self.tools[tool_name]
+        
+        try:
+            # 执行工具
+            if hasattr(tool, 'execute'):
+                result = tool.execute(**kwargs)
+            elif hasattr(tool, 'run'):
+                result = tool.run(**kwargs)
+            else:
+                # 如果工具是函数
+                result = tool(**kwargs)
+            
+            # 确保返回格式统一
+            if isinstance(result, dict):
+                return result
+            else:
+                return {
+                    "success": True,
+                    "data": result
+                }
+                
+        except Exception as e:
+            self.logger.error(f"工具 '{tool_name}' 执行失败: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
     def _execute_react_loop(self, task: str) -> Any:
         """执行ReAct推理循环"""
         

@@ -131,7 +131,7 @@ class EnhancedSmartSQLAgent(BaseAgent):
                 self.execution_tracker.complete(error=str(e))
                 raise
     
-    async def generate_training_data(self, count: int = 10) -> List[GeneratedExample]:
+    def generate_training_data(self, count: int = 10) -> List[GeneratedExample]:
         """
         生成NL2SQL训练数据
         
@@ -153,11 +153,11 @@ class EnhancedSmartSQLAgent(BaseAgent):
             try:
                 # Step 1: 分析数据库
                 self.execution_tracker.record_thought("开始分析数据库结构")
-                await self._analyze_database()
+                self._analyze_database()
                 
                 # Step 2: 生成场景
                 self.execution_tracker.record_thought(f"生成{count}个查询场景")
-                scenarios = await self._generate_scenarios(count)
+                scenarios = self._generate_scenarios(count)
                 
                 # Step 3: 为每个场景生成数据
                 for i, scenario in enumerate(scenarios):
@@ -165,13 +165,13 @@ class EnhancedSmartSQLAgent(BaseAgent):
                         f"处理场景 {i+1}/{len(scenarios)}: {scenario.business_purpose}"
                     )
                     
-                    example = await self._generate_example_for_scenario(scenario)
+                    example = self._generate_example_for_scenario(scenario)
                     if example and example.is_valid():
                         self.generated_examples.append(example)
                 
                 # Step 4: 批量反思优化
                 self.execution_tracker.record_thought("对生成的数据进行反思和优化")
-                await self._reflect_on_batch()
+                self._reflect_on_batch()
                 
                 self.execution_tracker.complete(result={
                     "generated_count": len(self.generated_examples),
@@ -184,14 +184,14 @@ class EnhancedSmartSQLAgent(BaseAgent):
                 self.execution_tracker.complete(error=str(e))
                 raise AgentExecutionError("generate_training_data", str(e), e)
     
-    async def _analyze_database(self):
+    def _analyze_database(self):
         """分析数据库结构和领域"""
         # 提取数据库结构
         self.execution_tracker.record_action(
             "extract_schema", {}, "提取数据库结构"
         )
         
-        schema_result = await self.call_tool("extract_schema")
+        schema_result = self.call_tool("extract_schema")
         
         if schema_result["success"]:
             self.schema_info = schema_result["data"]
@@ -210,7 +210,7 @@ class EnhancedSmartSQLAgent(BaseAgent):
             "analyze_domain", {"scope": "all"}, "分析业务领域"
         )
         
-        domain_result = await self.call_tool("analyze_domain", scope="all")
+        domain_result = self.call_tool("analyze_domain", scope="all")
         
         if domain_result["success"]:
             self.domain_info = domain_result["data"]
@@ -219,7 +219,7 @@ class EnhancedSmartSQLAgent(BaseAgent):
                 "成功分析业务领域和表关系"
             )
     
-    async def _generate_scenarios(self, count: int) -> List[QueryScenario]:
+    def _generate_scenarios(self, count: int) -> List[QueryScenario]:
         """生成查询场景"""
         self.execution_tracker.record_action(
             "generate_scenario",
@@ -231,7 +231,7 @@ class EnhancedSmartSQLAgent(BaseAgent):
             f"生成{count}个查询场景"
         )
         
-        result = await self.call_tool(
+        result = self.call_tool(
             "generate_scenario",
             schema_info=self.schema_info,
             domain_info=self.domain_info,
@@ -254,11 +254,11 @@ class EnhancedSmartSQLAgent(BaseAgent):
             )
             return []
     
-    async def _generate_example_for_scenario(self, scenario: QueryScenario) -> Optional[GeneratedExample]:
+    def _generate_example_for_scenario(self, scenario: QueryScenario) -> Optional[GeneratedExample]:
         """为单个场景生成完整示例"""
         try:
             # 1. 选择操作
-            operations_result = await self.call_tool(
+            operations_result = self.call_tool(
                 "select_operations",
                 scenario=scenario.__dict__ if hasattr(scenario, '__dict__') else scenario,
                 schema_info=self.schema_info
@@ -270,7 +270,7 @@ class EnhancedSmartSQLAgent(BaseAgent):
             operations = operations_result["data"]["operations"]
             
             # 2. 生成问题
-            question_result = await self.call_tool(
+            question_result = self.call_tool(
                 "generate_question",
                 scenario=scenario.__dict__ if hasattr(scenario, '__dict__') else scenario,
                 operations=operations,
@@ -284,7 +284,7 @@ class EnhancedSmartSQLAgent(BaseAgent):
             question = question_result["data"]["question"]
             
             # 3. 生成SQL
-            sql_result = await self.call_tool(
+            sql_result = self.call_tool(
                 "generate_sql",
                 question=question,
                 schema_info=self.schema_info,
@@ -297,7 +297,7 @@ class EnhancedSmartSQLAgent(BaseAgent):
             sql = sql_result["data"]["sql"]
             
             # 4. 验证SQL
-            validation_result = await self.call_tool(
+            validation_result = self.call_tool(
                 "validate_sql",
                 sql=sql,
                 schema_info=self.schema_info
@@ -306,7 +306,7 @@ class EnhancedSmartSQLAgent(BaseAgent):
             # 5. 执行测试（可选）
             execution_result = {}
             if validation_result["success"] and validation_result["data"]["valid"]:
-                exec_result = await self.call_tool(
+                exec_result = self.call_tool(
                     "execute_sql",
                     sql=sql,
                     dry_run=True  # 使用干运行模式
@@ -325,7 +325,7 @@ class EnhancedSmartSQLAgent(BaseAgent):
             
             # 7. 单个反思
             if example.is_valid():
-                reflection_result = await self.call_tool(
+                reflection_result = self.call_tool(
                     "reflect_on_sql",
                     question=question,
                     sql=sql,
@@ -346,7 +346,7 @@ class EnhancedSmartSQLAgent(BaseAgent):
             self.logger.error(f"Failed to generate example for scenario: {e}")
             return None
     
-    async def _reflect_on_batch(self):
+    def _reflect_on_batch(self):
         """对批量生成的数据进行反思"""
         if not self.generated_examples:
             return
