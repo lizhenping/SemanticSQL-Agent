@@ -53,7 +53,7 @@ difficulty_distribution:
   easy: 30%    # 基础单表查询
   medium: 20%  # 关联和聚合查询
   hard: 30%    # 复杂查询和高级特性
-  expert: 20%    # 复杂查询和高级特性
+  expert: 20%    # 专家级别查询和高级特性
 ```
 
 #### 2.2.3 质量标准
