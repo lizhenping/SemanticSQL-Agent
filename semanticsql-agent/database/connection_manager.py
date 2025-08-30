@@ -158,6 +158,131 @@ class DatabaseManager:
         except Exception:
             return False
     
+    def execute_query(self, sql: str, params: Optional[Dict] = None, fetch: bool = True) -> Dict[str, Any]:
+        """
+        执行SQL查询
+        
+        Args:
+            sql: SQL查询语句
+            params: 查询参数
+            fetch: 是否获取结果
+            
+        Returns:
+            查询结果字典
+        """
+        try:
+            with self.engine.connect() as conn:
+                # 执行查询
+                if params:
+                    result = conn.execute(text(sql), params)
+                else:
+                    result = conn.execute(text(sql))
+                
+                if fetch and result.returns_rows:
+                    # 获取结果
+                    rows = result.fetchall()
+                    columns = result.keys()
+                    
+                    # 转换为字典列表
+                    data = []
+                    for row in rows:
+                        row_dict = {}
+                        for i, column in enumerate(columns):
+                            row_dict[column] = row[i]
+                        data.append(row_dict)
+                    
+                    return {
+                        "success": True,
+                        "data": data,
+                        "row_count": len(data),
+                        "columns": list(columns),
+                        "sql": sql
+                    }
+                else:
+                    # 对于非查询语句（INSERT, UPDATE, DELETE等）
+                    return {
+                        "success": True,
+                        "affected_rows": result.rowcount if hasattr(result, 'rowcount') else 0,
+                        "sql": sql
+                    }
+                    
+        except SQLAlchemyError as e:
+            self.logger.error(f"SQL执行失败: {sql}, 错误: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "error_type": "SQLAlchemyError",
+                "sql": sql
+            }
+        except Exception as e:
+            self.logger.error(f"查询执行失败: {sql}, 错误: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "sql": sql
+            }
+    
+    def execute_sql_safe(self, sql: str, dry_run: bool = False) -> Dict[str, Any]:
+        """
+        安全执行SQL（只允许SELECT查询）
+        
+        Args:
+            sql: SQL查询语句
+            dry_run: 是否为试运行
+            
+        Returns:
+            执行结果
+        """
+        # 清理SQL语句
+        sql_clean = sql.strip().rstrip(';')
+        sql_upper = sql_clean.upper()
+        
+        # 安全检查：只允许SELECT语句
+        if not sql_upper.startswith('SELECT'):
+            return {
+                "success": False,
+                "error": "为安全起见，只允许执行SELECT查询",
+                "error_type": "SecurityError",
+                "sql": sql
+            }
+        
+        # 检查是否包含危险操作
+        dangerous_keywords = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'CREATE', 'TRUNCATE']
+        for keyword in dangerous_keywords:
+            if keyword in sql_upper:
+                return {
+                    "success": False,
+                    "error": f"SQL包含危险关键字: {keyword}",
+                    "error_type": "SecurityError", 
+                    "sql": sql
+                }
+        
+        if dry_run:
+            # 试运行：使用EXPLAIN检查SQL语法
+            try:
+                explain_sql = f"EXPLAIN {sql_clean}"
+                result = self.execute_query(explain_sql, fetch=True)
+                if result["success"]:
+                    return {
+                        "success": True,
+                        "dry_run": True,
+                        "sql": sql,
+                        "message": "SQL语法检查通过"
+                    }
+                else:
+                    return result
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": f"SQL语法检查失败: {e}",
+                    "error_type": "SyntaxError",
+                    "sql": sql
+                }
+        else:
+            # 实际执行
+            return self.execute_query(sql)
+    
     def close(self):
         """关闭数据库连接"""
         if self.engine:
