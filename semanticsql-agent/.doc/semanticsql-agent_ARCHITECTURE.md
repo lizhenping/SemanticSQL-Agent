@@ -33,7 +33,7 @@ semanticsql-agent/
 │
 ├── tools/
 │   ├── __init__.py
-│   ├── base.py                  # 工具基类
+│   ├── base_tool.py                  # 工具基类
 │   │
 │   ├── analysis_tools/          # 分析工具（核心）
 │   │   ├── __init__.py
@@ -45,8 +45,9 @@ semanticsql-agent/
 │   ├── generation_tools/        # 生成工具
 │   │   ├── __init__.py
 │   │   ├── scenario_generation_tool.py  # 场景生成
-│   │   ├── sql_generation_tool.py       # SQL生成
-│   │   └── question_generation_tool.py  # 问题生成
+│   │   ├── operation_selection_tool.py  # 操作选择
+│   │   ├── question_generation_tool.py  # 问题生成
+│   │   └── sql_generation_tool.py       # SQL生成
 │   │
 │   ├── validation_tools/        # 验证工具
 │   │   ├── __init__.py
@@ -63,20 +64,22 @@ semanticsql-agent/
 │
 ├── prompts/
 │   ├── __init__.py
-│   ├── templates/               # Jinja2 模板
+│   ├── templates/              # Jinja2 模板
 │   │   ├── system/             # 系统提示词
 │   │   ├── tools/              # 工具描述
 │   │   └── analysis/           # 分析提示词
-│   └── manager.py               # 提示词管理器
+│   └── manager.py              # 提示词管理器
 │
 ├── agent/
 │   ├── __init__.py
-│   ├── sql_agent.py             # 主 SQL Agent
-│   └── callbacks.py             # 轨迹记录回调
+│   ├── base_agent.py           # 基础Agent（含执行记录）
+│   ├── smart_sql_agent.py      # 主 SQL Agent
+│   └── callbacks.py            # 轨迹记录回调
 │
 ├── utils/
 │   ├── __init__.py
 │   ├── database.py              # 数据库连接管理
+│   ├── llm_client.py            # LLM客户端（支持使用标准OpenAI库 调用 Qwen 和 tool）
 │   └── trajectory.py            # 轨迹记录
 │
 └── cli.py                       # 命令行接口

@@ -168,7 +168,7 @@ class SQLGenerationTool(BaseTool):
         for table_name, table_info in schema_info.get("tables", {}).items():
             prompt += f"\n表名：{table_name}\n字段：\n"
             for col in table_info.get("columns", [])[:15]:  # 限制字段数量
-                col_desc = f"  - {col['name']} ({col['data_type']})"
+                col_desc = f"  - {col['name']} ({col.get('type', col.get('data_type', 'unknown'))})"
                 if col.get("is_primary"):
                     col_desc += " PRIMARY KEY"
                 if col.get("is_foreign"):
