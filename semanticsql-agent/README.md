@@ -20,46 +20,137 @@
 ### 环境准备
 
 ```bash
-# 克隆项目
-git clone https://github.com/yourusername/semanticsql-agent.git
-cd semanticsql-agent
-
-# 创建虚拟环境（推荐使用conda）
-conda create -n semanticsql python=3.8
-conda activate semanticsql
-
-# 或使用已有环境
+# 激活conda环境
 source activate alphasql
 
-# 安装依赖
+# 进入项目目录
+cd /root/autodl-tmp/nl2sql/NL2SQL/trae-agent/semanticsql-agent
+
+# 安装依赖（如需要）
 pip install -r requirements.txt
 ```
 
-### 配置设置
+## 📋 完整命令参考
 
-1. 复制环境变量示例文件：
+### 1. 基础测试命令
+
+#### 测试数据库连接
 ```bash
-cp .env.example .env
+# 基础连接测试
+python main.py test --config configs/config.yaml
+
+# 详细连接信息
+python main.py test --config configs/config.yaml --verbose
 ```
 
-2. 编辑 `.env` 文件，配置数据库和 LLM：
+#### 查看数据库结构
 ```bash
-# LLM设置
-LLM_MODEL=Qwen3-14B
-LLM_BASE_URL=http://192.168.200.216:9009/v1
-LLM_API_KEY=not-needed
+# 查看所有表结构
+python main.py schema --config configs/config.yaml
 
-# 数据库设置
-DB_TYPE=mysql
-DB_HOST=192.168.200.216
-DB_PORT=13306
-DB_NAME=testdb
-DB_USER=testuser
-DB_PASSWORD=testpass
+# 查看特定表结构
+python main.py schema --config configs/config.yaml --table aid_info
 ```
 
-3. 初始化配置文件：
+#### 运行单个查询
 ```bash
+# 基础查询
+python main.py run "查询aid_info表的记录数量" --config configs/config.yaml
+
+# 详细输出模式
+python main.py run "查询aid_info表的记录数量" --config configs/config.yaml --verbose
+
+# 使用超时控制
+timeout 30 python main.py run "查询aid_info表的记录数量" --config configs/config.yaml
+```
+
+### 2. 训练数据生成命令
+
+#### 基础生成
+```bash
+# 生成少量数据（测试用）
+python main.py generate --count 2 --output test_output.json --config configs/config.yaml
+
+# 生成中等数量数据
+python main.py generate --count 20 --output training_data.json --config configs/config.yaml
+
+# 生成大量数据
+python main.py generate --count 100 --output large_dataset.json --config configs/config.yaml
+```
+
+#### 指定难度生成
+```bash
+# 生成简单查询
+python main.py generate --count 10 --difficulty easy --output easy_examples.json --config configs/config.yaml
+
+# 生成中等难度查询
+python main.py generate --count 10 --difficulty medium --output medium_examples.json --config configs/config.yaml
+
+# 生成复杂查询
+python main.py generate --count 10 --difficulty hard --output hard_examples.json --config configs/config.yaml
+
+# 混合难度（默认）
+python main.py generate --count 10 --difficulty mixed --output mixed_examples.json --config configs/config.yaml
+```
+
+#### 不同输出格式
+```bash
+# JSON格式（默认）
+python main.py generate --count 10 --output dataset.json --format json --config configs/config.yaml
+
+# JSONL格式
+python main.py generate --count 10 --output dataset.jsonl --format jsonl --config configs/config.yaml
+
+# CSV格式
+python main.py generate --count 10 --output dataset.csv --format csv --config configs/config.yaml
+
+# OpenAI格式
+python main.py generate --count 10 --output dataset_openai.json --format openai --config configs/config.yaml
+
+# HuggingFace格式
+python main.py generate --count 10 --output dataset_hf.json --format huggingface --config configs/config.yaml
+```
+
+#### 控制生成质量
+```bash
+# 指定最低质量分数
+python main.py generate --count 10 --min-quality 80 --output high_quality.json --config configs/config.yaml
+
+# 启用执行测试
+python main.py generate --count 5 --enable-execution --output tested_data.json --config configs/config.yaml
+
+# 批量大小控制
+python main.py generate --count 100 --batch-size 20 --output batched_data.json --config configs/config.yaml
+```
+
+### 3. 高级分析命令
+
+#### 智能分析模式
+```bash
+# 基础智能分析
+python main.py smart-analyze "分析数据库结构" --config configs/config.yaml
+
+# 详细智能分析
+python main.py smart-analyze "深度分析数据库并生成复杂查询示例" --config configs/config.yaml --verbose
+
+# 带超时的智能分析
+timeout 60 python main.py smart-analyze "全面分析数据库关系" --config configs/config.yaml
+```
+
+#### 交互式模式
+```bash
+# 启动交互式会话
+python main.py interactive --config configs/config.yaml
+
+# 启动详细交互模式
+python main.py interactive --config configs/config.yaml --verbose
+```
+
+### 4. 配置管理命令
+
+#### 初始化配置
+```bash
+# MySQL数据库配置
 python main.py init \
   --database-type mysql \
   --host 192.168.200.216 \
@@ -68,33 +159,133 @@ python main.py init \
   --username testuser \
   --password testpass \
   --model Qwen3-14B \
-  --base-url http://192.168.200.216:9009/v1
+  --base-url http://192.168.200.216:9009/v1 \
+  --api-key not-needed
+
+# PostgreSQL数据库配置
+python main.py init \
+  --database-type postgresql \
+  --host localhost \
+  --port 5432 \
+  --database mydb \
+  --username postgres \
+  --password mypass \
+  --model gpt-4 \
+  --base-url https://api.openai.com/v1 \
+  --api-key your-openai-key
+
+# SQLite数据库配置
+python main.py init \
+  --database-type sqlite \
+  --database ./data/mydb.sqlite \
+  --model gpt-3.5-turbo \
+  --base-url https://api.openai.com/v1 \
+  --api-key your-openai-key
 ```
 
-### 基本使用
+### 5. 开发和调试命令
 
-#### 1. 测试数据库连接
+#### 带超时控制的测试
 ```bash
-python main.py test --config configs/config.yaml
+# 15秒超时生成测试
+timeout 15 python main.py generate --count 2 --output test_output.json --config configs/config.yaml
+
+# 30秒超时运行查询
+timeout 30 python main.py run "查询aid_info表的记录数量" --config configs/config.yaml
+
+# 60秒超时智能分析
+timeout 60 python main.py smart-analyze "分析数据库" --config configs/config.yaml
 ```
 
-#### 2. 查看数据库结构
+#### 详细日志和调试
 ```bash
-python main.py schema --config configs/config.yaml
+# 启用详细输出
+python main.py generate --count 5 --output debug.json --config configs/config.yaml --verbose
+
+# 查看执行报告
+cat test_output_report.md
+
+# 检查生成的数据
+cat test_output.json | python -m json.tool
 ```
 
-#### 3. 生成 NL2SQL 训练数据
-```bash
-# 生成 100 条训练数据
-python main.py generate --count 100 --output dataset.json
+### 6. 生产环境命令
 
-# 使用智能分析模式
-python main.py smart-analyze "分析数据库并生成查询" --verbose
+#### 大规模数据生成
+```bash
+# 生成大型数据集（分批处理）
+python main.py generate \
+  --count 1000 \
+  --batch-size 50 \
+  --output large_dataset.json \
+  --config configs/config.yaml \
+  --min-quality 75
+
+# 高质量数据集生成
+python main.py generate \
+  --count 500 \
+  --difficulty mixed \
+  --min-quality 85 \
+  --enable-execution \
+  --output high_quality_dataset.json \
+  --config configs/config.yaml
 ```
 
-#### 4. 交互式查询
+#### 多格式批量导出
 ```bash
-python main.py interactive --config configs/config.yaml
+# 生成并导出为多种格式
+python main.py generate --count 100 --output dataset.json --format json --config configs/config.yaml
+python main.py generate --count 100 --output dataset.jsonl --format jsonl --config configs/config.yaml
+python main.py generate --count 100 --output dataset.csv --format csv --config configs/config.yaml
+python main.py generate --count 100 --output dataset_openai.json --format openai --config configs/config.yaml
+```
+
+### 7. 监控和维护命令
+
+#### 性能监控
+```bash
+# 带性能统计的生成
+time python main.py generate --count 50 --output perf_test.json --config configs/config.yaml
+
+# 监控数据库连接
+python main.py test --config configs/config.yaml && echo "数据库连接正常"
+```
+
+#### 系统状态检查
+```bash
+# 完整系统检查
+python main.py test --config configs/config.yaml && \
+python main.py schema --config configs/config.yaml && \
+python main.py generate --count 1 --output health_check.json --config configs/config.yaml && \
+echo "系统运行正常"
+```
+
+## 🔧 环境配置
+
+### 必需的环境设置
+```bash
+# 激活conda环境
+source activate alphasql
+
+# 设置工作目录
+cd /root/autodl-tmp/nl2sql/NL2SQL/trae-agent/semanticsql-agent
+```
+
+### 数据库配置示例
+```yaml
+# configs/config.yaml
+database:
+  type: mysql
+  host: 192.168.200.216
+  port: 13306
+  database: testdb
+  username: testuser
+  password: testpass
+
+llm:
+  model: Qwen3-14B
+  base_url: http://192.168.200.216:9009/v1
+  api_key: not-needed
 ```
 
 ## 📁 项目结构

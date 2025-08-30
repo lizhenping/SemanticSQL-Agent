@@ -56,7 +56,11 @@ class OperationSelectionTool(BaseTool):
         Returns:
             包含操作类型和理由的字典
         """
-        difficulty = DifficultyLevel[scenario.get("complexity", "MEDIUM").upper()]
+        complexity_val = scenario.get("complexity", "MEDIUM")
+        if isinstance(complexity_val, DifficultyLevel):
+            difficulty = complexity_val
+        else:
+            difficulty = DifficultyLevel[complexity_val.upper()]
         tables = scenario.get("applicable_tables", [])
         
         # 根据难度确定操作组合
