@@ -198,6 +198,20 @@ class BaseTool(ABC):
             )
         }
     
+    def execute(self, **kwargs) -> Dict[str, Any]:
+        """
+        执行工具的公共接口 - run方法的别名
+        
+        Returns:
+            {
+                "success": bool,
+                "data": Any,
+                "error": Optional[str],
+                "metadata": Optional[Dict]
+            }
+        """
+        return self.run(**kwargs)
+    
     def reset_stats(self):
         """重置统计信息"""
         self._execution_count = 0

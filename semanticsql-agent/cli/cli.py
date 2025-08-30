@@ -391,6 +391,185 @@ def test(ctx, config: str):
 
 
 @cli.command()
+@click.option('--config', '-c', default='configs/config.yaml', help='配置文件路径')
+@click.option('--count', '-n', default=100, type=int, help='生成数据条数')
+@click.option('--output', '-o', help='输出文件路径')
+@click.option('--format', '-f', default='json', 
+              type=click.Choice(['json', 'jsonl', 'csv', 'openai', 'huggingface']), 
+              help='输出格式')
+@click.option('--model', '-m', help='使用的LLM模型')
+@click.option('--base-url', help='模型API基础URL')
+@click.option('--api-key', help='模型API密钥')
+@click.option('--host', help='数据库主机')
+@click.option('--port', type=int, help='数据库端口')
+@click.option('--user', help='数据库用户名')
+@click.option('--password', help='数据库密码')
+@click.option('--database', '-d', help='数据库名称')
+@click.option('--verbose', '-v', is_flag=True, help='详细输出')
+@click.option('--batch-size', default=10, type=int, help='批处理大小')
+@click.option('--difficulty', default='mixed', 
+              type=click.Choice(['easy', 'medium', 'hard', 'mixed']), 
+              help='生成难度')
+@click.pass_context
+def generate(ctx, config: str, count: int, output: Optional[str], format: str,
+            model: Optional[str], base_url: Optional[str], api_key: Optional[str],
+            host: Optional[str], port: Optional[int], user: Optional[str],
+            password: Optional[str], database: Optional[str], verbose: bool,
+            batch_size: int, difficulty: str):
+    """生成NL2SQL训练数据"""
+    
+    click.echo(f"🚀 开始生成 {count} 条NL2SQL训练数据...")
+    click.echo("=" * 60)
+    
+    try:
+        # 加载配置
+        trae_config = TraeConfig.load_config(config)
+        
+        # 命令行参数覆盖配置
+        if model:
+            trae_config.llm.model = model
+        if base_url:
+            trae_config.llm.base_url = base_url
+        if api_key:
+            trae_config.llm.api_key = api_key
+        if host:
+            trae_config.database.host = host
+        if port:
+            trae_config.database.port = port
+        if user:
+            trae_config.database.username = user
+        if password:
+            trae_config.database.password = password
+        if database:
+            trae_config.database.database = database
+        if verbose:
+            trae_config.agent.verbose = True
+            logging.getLogger().setLevel(logging.DEBUG)
+        
+        # 显示配置信息
+        click.echo(f"📊 数据库: {trae_config.database.database}@{trae_config.database.host}:{trae_config.database.port}")
+        click.echo(f"🤖 模型: {trae_config.llm.model}")
+        click.echo(f"🎯 难度: {difficulty}")
+        click.echo(f"📦 批处理大小: {batch_size}")
+        click.echo()
+        
+        # 初始化数据库连接
+        db_manager = DatabaseManager(trae_config.database)
+        if not db_manager.initialize():
+            click.echo("❌ 数据库连接失败", err=True)
+            sys.exit(1)
+        
+        click.echo("✅ 数据库连接成功")
+        
+        # 使用增强版Agent生成数据
+        from agent.enhanced_smart_sql_agent import EnhancedSmartSQLAgent
+        agent = EnhancedSmartSQLAgent(trae_config)
+        
+        # 分批生成
+        all_examples = []
+        batches = (count + batch_size - 1) // batch_size  # 向上取整
+        
+        with click.progressbar(length=count, label='生成进度') as bar:
+            for batch_idx in range(batches):
+                batch_count = min(batch_size, count - batch_idx * batch_size)
+                
+                if verbose:
+                    click.echo(f"\n处理批次 {batch_idx + 1}/{batches} ({batch_count} 条)...")
+                
+                # 同步调用异步方法
+                import asyncio
+                examples = asyncio.run(agent.generate_training_data(batch_count))
+                
+                all_examples.extend(examples)
+                bar.update(batch_count)
+        
+        click.echo(f"\n✅ 生成完成! 成功生成 {len(all_examples)} 条数据")
+        
+        # 导出数据
+        if output:
+            # 设置导出的示例
+            agent.generated_examples = all_examples
+            
+            # 根据格式导出
+            if format == 'csv':
+                # CSV格式需要特殊处理
+                import csv
+                from pathlib import Path
+                
+                output_path = Path(output)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                with open(output_path, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.DictWriter(f, fieldnames=['question', 'sql', 'difficulty', 'quality_score'])
+                    writer.writeheader()
+                    for example in all_examples:
+                        writer.writerow({
+                            'question': example.question,
+                            'sql': example.sql,
+                            'difficulty': str(example.difficulty),
+                            'quality_score': example.quality_score
+                        })
+            else:
+                # 其他格式使用agent的导出方法
+                export_data = agent.export_training_data(format)
+                
+                from pathlib import Path
+                output_path = Path(output)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    f.write(export_data)
+            
+            click.echo(f"💾 数据已保存到: {output}")
+        else:
+            # 显示部分结果
+            click.echo("\n📋 生成样例:")
+            for i, example in enumerate(all_examples[:3], 1):
+                click.echo(f"\n示例 {i}:")
+                click.echo(f"  问题: {example.question}")
+                click.echo(f"  SQL: {example.sql}")
+                click.echo(f"  难度: {example.difficulty}")
+                click.echo(f"  质量分数: {example.quality_score}")
+            
+            if len(all_examples) > 3:
+                click.echo(f"\n... 还有 {len(all_examples) - 3} 条数据")
+        
+        # 显示统计信息
+        if all_examples:
+            avg_quality = sum(e.quality_score for e in all_examples) / len(all_examples)
+            click.echo(f"\n📊 统计信息:")
+            click.echo(f"  总数: {len(all_examples)}")
+            click.echo(f"  平均质量分数: {avg_quality:.2f}")
+            
+            # 难度分布
+            difficulty_dist = {}
+            for e in all_examples:
+                d = str(e.difficulty)
+                difficulty_dist[d] = difficulty_dist.get(d, 0) + 1
+            
+            click.echo(f"  难度分布:")
+            for d, c in difficulty_dist.items():
+                click.echo(f"    {d}: {c} ({c*100/len(all_examples):.1f}%)")
+        
+        # 获取执行报告
+        if verbose:
+            report = agent.get_execution_report()
+            report_file = output.replace('.json', '_report.md') if output else 'generation_report.md'
+            with open(report_file, 'w', encoding='utf-8') as f:
+                f.write(report)
+            click.echo(f"\n📄 执行报告已保存到: {report_file}")
+        
+        db_manager.close()
+        
+    except Exception as e:
+        click.echo(f"❌ 生成失败: {e}", err=True)
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+@cli.command()
 @click.argument("request", required=False, default="请分析这个数据库")
 @click.option('--config', '-c', default='configs/config.yaml', help='配置文件路径')
 @click.option('--save-result', '-s', help='保存结果到文件')
