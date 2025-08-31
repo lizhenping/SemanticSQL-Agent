@@ -105,21 +105,37 @@ graph TB
 ```
 
 **Agent的智能决策过程**：
+
 1. **初始思考**：使用sequential_thinking规划整体执行策略
-2. **一次性分析**：完整分析数据库，结果存入记忆供后续使用
-3. **场景批量生成**：
-   - scenario_generation基于预定义模板和数据库结构生成N个场景
-   - 场景包含：业务目的、适用表、复杂度等信息
+
+2. **一次性数据库分析**：
+   - 执行四个分析工具，获取完整的数据库理解
+   - 分析结果保存在记忆中，供全程使用
+   - 这些记忆是后续所有生成步骤的基础
+
+3. **基于预定义模板的场景生成**：
+   - scenario_generation使用预定义的业务场景模板
+   - 结合数据库结构生成具体场景实例
+   - 每批生成N个不同类型和复杂度的场景
+
 4. **循环处理每个场景**：
-   - operation_selection：根据场景复杂度选择合适的SQL操作组合
-   - question_generation：基于场景和操作生成自然语言问题
-   - sql_generation：将问题转换为SQL查询
-   - sql_validation + sql_execution：验证并执行SQL
-   - sql_reflection：评估执行结果质量
-5. **智能修正**：
-   - 反思发现问题时，调用sequential_thinking分析原因
-   - 精准回退到问题源头（操作选择/问题生成/SQL生成）
-   - 只修正当前场景，不影响已处理的其他场景
+   - **操作选择**：基于预定义规则，根据场景复杂度选择SQL操作组合
+   - **问题生成**：使用场景、操作和数据库记忆生成自然语言问题
+   - **SQL生成**：基于问题和数据库记忆生成SQL查询
+   - **验证执行**：确保SQL语法正确且可执行
+   - **综合反思**：评估整个生成链的质量
+
+5. **反思的多层次评估**：
+   - **执行层**：SQL是否成功执行，结果是否合理
+   - **语义层**：SQL是否准确实现了问题意图
+   - **质量层**：问题和SQL的质量是否达标
+   - **记忆层**：是否充分利用了数据库分析信息
+
+6. **智能修正机制**：
+   - 反思发现问题时，先用sequential_thinking深度分析
+   - 根据问题根源，精准回退到相应步骤
+   - 修正时仍然基于预定义规则和记忆信息
+   - 每个场景独立处理，互不影响
 
 **记忆机制**：
 - **数据库分析结果必须完整记忆**：一次性分析数据库，结果贯穿整个过程
@@ -132,23 +148,37 @@ graph TB
 
 **反思-修正循环机制**：
 ```
-数据库分析（只执行一次，结果记忆）
+数据库分析（只执行一次，结果作为记忆供全程使用）
     ↓
 场景批量生成（基于预定义模板）
     ↓
-对每个场景：
-    操作选择 → 问题生成 → SQL生成 → SQL执行 
-       ↑         ↑         ↑         ↓
-       ←─────────←─────────←──── SQL反思分析
-                                     ↓
-                               需要修正？
-                                     ├─ 否 → 保存数据，处理下一个场景
-                                     └─ 是 → 调用sequential_thinking
-                                             ↓
-                                       决定修正点：
-                                             ├─ 操作选择不当 → 重新选择操作
-                                             ├─ 问题表述不清 → 重新生成问题
-                                             └─ SQL生成错误 → 重新生成SQL
+对每个场景循环处理：
+    ↓
+操作选择（基于预定义规则，根据场景复杂度）
+    ↓
+问题生成（使用场景+操作+数据库记忆）
+    ↓
+SQL生成（使用问题+数据库记忆）
+    ↓
+SQL验证执行
+    ↓
+SQL反思分析
+    ├─ 反思内容：
+    │  1. SQL执行结果是否符合预期
+    │  2. SQL与问题的语义是否匹配
+    │  3. 问题描述是否清晰合理
+    │  4. 操作选择是否适合场景
+    │  5. 是否正确利用了数据库分析记忆
+    ↓
+需要修正？
+    ├─ 否 → 保存训练数据，继续下一个场景
+    └─ 是 → 调用sequential_thinking深度分析
+            ↓
+      确定问题根源和修正策略：
+            ├─ 数据库理解有偏差 → 局部重新分析特定表/关系
+            ├─ 操作选择不当 → 调整操作组合（仍基于预定义规则）
+            ├─ 问题生成不当 → 重新生成问题
+            └─ SQL生成错误 → 重新生成SQL
 ```
 
 **重要原则**：
@@ -163,11 +193,46 @@ graph TB
 - **优化决策**：当有多种可能的SQL实现方式时，评估最优方案
 - **跨步骤决策**：当需要决定是否回退到更早的步骤时
 
-**反思工具（sql_reflection）调用时机**：
-- **每次SQL执行后**：必须调用，评估执行结果
-- **质量检查**：检查SQL的正确性、效率、结果合理性
-- **问题诊断**：识别具体问题类型（语法错误、逻辑错误、性能问题等）
-- **修正建议**：提供具体的修正方向，指导Agent决定回退到哪个步骤
+**反思工具（sql_reflection）的综合评估**：
+
+1. **执行结果层面**：
+   - SQL是否成功执行
+   - 返回数据量是否合理
+   - 执行时间是否可接受
+   - 结果数据是否符合业务逻辑
+
+2. **语义匹配层面**：
+   - SQL是否准确实现了问题的意图
+   - 问题描述与SQL逻辑是否一致
+   - 是否遗漏或多余了查询条件
+
+3. **生成质量层面**：
+   - 问题的自然语言是否清晰、无歧义
+   - SQL是否符合最佳实践
+   - 是否充分利用了数据库结构信息
+
+4. **工具链合理性**：
+   - 场景→操作→问题→SQL的逻辑链是否连贯
+   - 操作选择是否适合当前场景的复杂度
+   - 是否正确使用了数据库分析记忆
+
+**反思后的决策流程**：
+```
+sql_reflection 发现问题
+    ↓
+分析问题类型和严重程度
+    ↓
+调用 sequential_thinking 深度分析
+    ├─ 输入：执行结果、生成历史、数据库记忆
+    ├─ 分析：问题根源定位
+    └─ 输出：修正策略
+        ↓
+执行修正策略
+    ├─ 轻微问题：仅重新生成SQL
+    ├─ 中等问题：从问题生成开始重新执行
+    ├─ 严重问题：重新选择操作或调整场景理解
+    └─ 记忆问题：局部补充分析特定数据库内容
+```
 
 **核心特点**：
 - **动态适应**：Agent根据数据库特征调整生成策略
@@ -200,38 +265,106 @@ graph TB
 3. 反思工具不会触发重新分析整个数据库
 4. 只有在反思发现需要时，才会局部重新分析特定内容
 
-**场景处理示例**：
-```python
-# 1. 场景批量生成（假设生成10个场景）
-scenarios = scenario_generation(schema_info=memory["schema_info"], count=10)
-# 返回: [场景1: 销售分析-简单, 场景2: 库存统计-中等, ...]
+**场景处理的详细流程**：
 
-# 2. 对每个场景循环处理
-for scenario in scenarios:
-    # 2.1 选择SQL操作
-    operations = operation_selection(scenario=scenario, schema_info=memory["schema_info"])
-    # 返回: {"operations": ["SELECT", "GROUP", "ORDER"], ...}
+1. **预定义的场景生成**：
+```python
+# scenario_generation 基于预定义模板生成场景
+scenarios = scenario_generation(
+    schema_info=memory["schema_info"],  # 使用数据库分析记忆
+    count=10
+)
+# 返回预定义场景类型，如：
+# - 基础查询场景（单表、简单条件）
+# - 统计分析场景（聚合、分组）
+# - 关联查询场景（多表JOIN）
+# - 时间序列场景（时间范围查询）
+```
+
+2. **预定义的操作选择**：
+```python
+# operation_selection 根据预定义规则选择操作
+operations = operation_selection(
+    scenario=scenario,
+    schema_info=memory["schema_info"]
+)
+# 基于场景复杂度的预定义规则：
+# - 简单场景 → ["SELECT", "WHERE"]
+# - 中等场景 → ["SELECT", "JOIN", "GROUP"]
+# - 复杂场景 → ["SELECT", "JOIN", "GROUP", "HAVING", "ORDER"]
+```
+
+3. **基于记忆的生成过程**：
+```python
+# 问题生成：结合场景、操作和数据库记忆
+question = question_generation(
+    scenario=scenario,
+    operations=operations,
+    schema_info=memory["schema_info"],      # 表结构
+    domain_info=memory["domain_analysis"],   # 业务领域理解
+    field_info=memory["field_classification"] # 字段语义
+)
+
+# SQL生成：使用问题和完整的数据库记忆
+sql = sql_generation(
+    question=question["text"],
+    schema_info=memory["schema_info"],
+    er_info=memory["er_analysis"]  # 表关系信息
+)
+```
+
+4. **综合反思评估**：
+```python
+# 反思不仅看执行结果，还要评估整个生成链
+reflection = sql_reflection(
+    sql=sql,
+    execution_result=execution,
+    question=question,
+    scenario=scenario,
+    operations=operations,
+    memory_usage={  # 评估是否正确使用了记忆
+        "schema": memory["schema_info"],
+        "domain": memory["domain_analysis"]
+    }
+)
+
+# 反思可能发现的问题类型：
+# - 执行错误：SQL语法错误或执行失败
+# - 语义不匹配：SQL没有正确实现问题意图
+# - 问题质量：问题描述不清或有歧义
+# - 操作不当：选择的操作不适合场景
+# - 记忆利用不足：没有充分使用数据库分析信息
+```
+
+5. **智能修正策略**：
+```python
+if reflection["needs_revision"]:
+    # 使用思考工具深度分析
+    fix_strategy = sequential_thinking(
+        problem=reflection["issues"],
+        context={
+            "scenario": scenario,
+            "operations": operations,
+            "question": question,
+            "sql": sql,
+            "execution": execution,
+            "memory": memory
+        }
+    )
     
-    # 2.2 生成问题
-    question = question_generation(scenario=scenario, operations=operations)
-    # 返回: {"question": "查询上个月各产品类别的销售总额并按金额排序"}
-    
-    # 2.3 生成SQL
-    sql = sql_generation(question=question, schema_info=memory["schema_info"])
-    # 返回: {"sql": "SELECT category, SUM(amount)..."}
-    
-    # 2.4 验证执行
-    validation = sql_validation(sql=sql)
-    execution = sql_execution(sql=sql)
-    
-    # 2.5 反思评估
-    reflection = sql_reflection(sql=sql, execution_result=execution, question=question)
-    
-    # 2.6 如果需要修正，只影响当前场景
-    if reflection["needs_revision"]:
-        # 分析问题并决定修正点
-        fix_strategy = sequential_thinking(problem="SQL执行结果不符合预期", context=...)
-        # 回退到适当步骤重新生成
+    # 根据分析结果执行修正
+    if fix_strategy["target"] == "operations":
+        # 重新选择操作（仍从预定义规则中选择）
+        operations = operation_selection(scenario, force_complexity="higher")
+    elif fix_strategy["target"] == "question":
+        # 重新生成问题
+        question = question_generation(...)
+    elif fix_strategy["target"] == "sql":
+        # 仅重新生成SQL
+        sql = sql_generation(...)
+    elif fix_strategy["target"] == "memory":
+        # 需要补充分析特定内容
+        additional_analysis = analyze_specific_tables(...)
 ```
 
 ### 2.2 数据生成规范
