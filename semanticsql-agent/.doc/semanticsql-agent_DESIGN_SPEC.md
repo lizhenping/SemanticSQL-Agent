@@ -30,11 +30,33 @@ SemanticSQL Agent 是一个基于 ReAct 智能体架构的 **NL2SQL 训练数据
 
 ### 2.1 核心功能
 
-#### 2.1.1 数据库分析
-- **结构提取**：获取表、列、索引、约束等信息
-- **领域识别**：基于表名和字段识别业务领域
-- **字段分类**：将字段分类为标识符、时间戳、数值、分类、描述等类型
-- **关系分析**：识别主外键关系，构建 ER 图
+#### 2.1.1 数据库分析（一次性执行，结果记忆）
+
+**执行时机**：任务开始时执行一次，结果保存在Agent记忆中供全程使用
+
+**分析工具链**：
+1. **extract_schema**：提取数据库物理结构
+   - 表结构、列信息、数据类型
+   - 主键、外键、索引信息
+   - 约束条件（唯一、非空等）
+
+2. **domain_analysis**：识别业务领域特征
+   - 基于表名和字段名的语义分析
+   - 识别业务实体（用户、订单、产品等）
+   - 推断业务流程和关系
+
+3. **field_classification**：字段语义分类
+   - 标识符字段（ID、编码）
+   - 时间戳字段（创建时间、更新时间）
+   - 数值字段（金额、数量、比率）
+   - 分类字段（状态、类型、级别）
+   - 描述字段（名称、备注、说明）
+
+4. **er_analysis**：实体关系分析
+   - 显式关系（外键约束）
+   - 隐式关系（命名规律推断）
+   - 关系类型（一对一、一对多、多对多）
+   - 实体重要性评估
 
 #### 2.1.2 智能体驱动的数据生成流程
 
@@ -44,35 +66,89 @@ SemanticSQL Agent 是一个基于 ReAct 智能体架构的 **NL2SQL 训练数据
 
 **ReAct 自主决策模式**：Agent通过思考-行动-观察循环，自主决定执行策略
 
+**完整执行流程图**：
+```mermaid
+graph TB
+    Start[开始任务] --> Think1[sequential_thinking<br/>思考整体策略]
+    Think1 --> Analyze[数据库分析阶段<br/>只执行一次]
+    
+    Analyze --> Schema[extract_schema<br/>提取数据库结构]
+    Schema --> Domain[domain_analysis<br/>识别业务领域]
+    Domain --> Field[field_classification<br/>字段语义分类]
+    Field --> ER[er_analysis<br/>分析表关系]
+    ER --> Memory[(记忆存储<br/>分析结果)]
+    
+    Memory --> GenLoop[生成循环开始]
+    GenLoop --> Scenario[scenario_generation<br/>生成查询场景]
+    Scenario --> Question[question_generation<br/>生成自然语言问题]
+    Question --> SQL[sql_generation<br/>生成SQL查询]
+    SQL --> Validate[sql_validation<br/>验证SQL语法]
+    Validate --> Execute[sql_execution<br/>执行SQL]
+    Execute --> Reflect[sql_reflection<br/>反思执行结果]
+    
+    Reflect --> Judge{需要修正?}
+    Judge -->|否| Save[保存训练数据]
+    Judge -->|是| ThinkFix[sequential_thinking<br/>分析修正策略]
+    
+    ThinkFix --> FixType{修正类型}
+    FixType -->|场景问题| Scenario
+    FixType -->|问题不清| Question
+    FixType -->|SQL错误| SQL
+    
+    Save --> CheckCount{达到目标数量?}
+    CheckCount -->|否| GenLoop
+    CheckCount -->|是| End[结束]
+```
+
 **Agent的智能决策过程**：
-1. **分析决策**：Agent根据任务需求，自主决定如何分析数据库
-2. **生成策略**：基于分析结果，Agent智能选择生成策略和场景
-3. **质量控制**：Agent自主决定何时执行SQL、何时反思、何时优化
-4. **输出管理**：Agent根据质量评估结果，决定数据的取舍和格式化
+1. **初始思考**：使用sequential_thinking规划整体执行策略
+2. **一次性分析**：完整分析数据库，结果存入记忆供后续使用
+3. **循环生成**：基于记忆中的分析结果，循环生成训练数据
+4. **质量控制**：每次SQL执行后必须反思，确保数据质量
+5. **智能修正**：发现问题时，通过思考工具分析后精准回退到问题源头
 
 **记忆机制**：
 - **数据库分析结果必须完整记忆**：一次性分析数据库，结果贯穿整个过程
 - **上下文保持**：Agent在整个执行过程中维护分析结果的记忆
 - **避免重复分析**：已分析的结构信息在后续步骤中直接使用
 
+**工具类型区分**：
+- **思考工具（sequential_thinking）**：用于深度分析和推理，在需要复杂决策时调用
+- **反思工具（sql_reflection）**：SQL执行后的质量评估和问题诊断
+
 **反思-修正循环机制**：
 ```
-SQL生成 → SQL执行 → 反思分析 → 发现问题？
-    ↑                              ↓ (是)
-    └─── 修正并重新生成 ←──── 决定修正步骤
+数据库分析（只执行一次，结果记忆）
+    ↓
+场景生成 → 问题生成 → SQL生成 → SQL执行 
+    ↑         ↑         ↑         ↓
+    ←─────────←─────────←──── SQL反思分析
+                                  ↓
+                            需要修正？
+                                  ├─ 否 → 继续下一个
+                                  └─ 是 → 决定修正阶段
+                                          ├─ 场景问题 → 重新生成场景
+                                          ├─ 问题表述 → 重新生成问题
+                                          └─ SQL错误 → 重新生成SQL
 ```
 
-当反思发现问题时，Agent能够：
-- **SQL错误** → 回到sql_generation重新生成
-- **问题不合理** → 回到question_generation重新生成  
-- **场景不适合** → 回到scenario_generation重新设计
-- **需要深度分析** → 调用sequential_thinking工具
+**重要原则**：
+1. **分析工具只执行一次**：数据库分析（schema_extraction、domain_analysis、field_classification、er_analysis）在开始时执行一次，结果保存在记忆中
+2. **生成和验证工具可多次执行**：根据反思结果，可能需要重新执行生成工具
+3. **反思只针对当前步骤**：sql_reflection只分析当前SQL的执行结果，不重新分析整个数据库
 
-**思考工具调用时机**：
-- **复杂业务场景分析**：当遇到复杂的表关系时
-- **SQL优化决策**：当需要在多种SQL写法中选择时
-- **错误诊断**：当SQL执行失败需要深度分析时
-- **质量评估**：当需要综合评估生成数据质量时
+**思考工具（sequential_thinking）调用时机**：
+- **初始规划**：开始任务时，思考整体执行策略
+- **复杂场景设计**：当需要设计涉及多表关联的复杂查询场景时
+- **错误诊断**：当SQL执行失败且原因不明时，进行深度分析
+- **优化决策**：当有多种可能的SQL实现方式时，评估最优方案
+- **跨步骤决策**：当需要决定是否回退到更早的步骤时
+
+**反思工具（sql_reflection）调用时机**：
+- **每次SQL执行后**：必须调用，评估执行结果
+- **质量检查**：检查SQL的正确性、效率、结果合理性
+- **问题诊断**：识别具体问题类型（语法错误、逻辑错误、性能问题等）
+- **修正建议**：提供具体的修正方向，指导Agent决定回退到哪个步骤
 
 **核心特点**：
 - **动态适应**：Agent根据数据库特征调整生成策略
@@ -84,6 +160,24 @@ SQL生成 → SQL执行 → 反思分析 → 发现问题？
 - **语法验证**：检查 SQL 语法正确性
 - **执行测试**：实际执行 SQL 验证可行性
 - **反思优化**：分析执行结果，提供优化建议
+
+#### 2.1.4 工具使用总结
+
+**工具分类及使用原则**：
+
+| 工具类别 | 工具名称 | 执行次数 | 使用时机 |
+|---------|---------|---------|---------|
+| 分析工具 | extract_schema<br>domain_analysis<br>field_classification<br>er_analysis | 一次 | 任务开始时 |
+| 生成工具 | scenario_generation<br>question_generation<br>sql_generation | 多次 | 每个训练数据 |
+| 验证工具 | sql_validation<br>sql_execution | 多次 | 每个SQL必须验证 |
+| 反思工具 | sql_reflection | 多次 | 每次SQL执行后 |
+| 思考工具 | sequential_thinking | 按需 | 复杂决策时 |
+
+**记忆机制核心要点**：
+1. 分析工具的输出必须保存在记忆中
+2. 生成工具自动从记忆中获取所需的分析结果
+3. 反思工具不会触发重新分析整个数据库
+4. 只有在反思发现需要时，才会局部重新分析特定内容
 
 ### 2.2 数据生成规范
 
@@ -196,17 +290,87 @@ Agent第一次调用extract_schema后：
 
 #### 3.1.3 反思-修正循环实现
 
-**执行后反思决策树**：
+**记忆管理策略**：
+```python
+class AgentMemory:
+    """Agent记忆管理"""
+    def __init__(self):
+        self.analysis_memory = {  # 分析结果记忆（只保存一份）
+            "schema_info": None,
+            "domain_analysis": None,
+            "field_classification": None,
+            "er_analysis": None
+        }
+        self.generation_memory = []  # 生成历史（可多份）
+        self.current_context = {}    # 当前执行上下文
+```
+
+**执行后反思决策流程**：
 ```
 SQL执行完成
-├─ 反思分析：执行时间、结果合理性、SQL质量
-├─ 发现问题？
-│  ├─ 是 → 决定修正策略：
-│  │  ├─ SQL语法错误 → 重新调用sql_generation
-│  │  ├─ 问题语义不清 → 重新调用question_generation
-│  │  ├─ 场景不合适 → 重新调用scenario_generation
-│  │  └─ 复杂分析需求 → 调用sequential_thinking
-│  └─ 否 → 接受数据，继续生成下一条
+    ↓
+sql_reflection工具分析
+    ├─ 评估维度：
+    │  ├─ SQL语法正确性
+    │  ├─ 执行时间合理性
+    │  ├─ 返回结果数量
+    │  ├─ 数据逻辑合理性
+    │  └─ 问题与SQL匹配度
+    ↓
+生成反思报告
+    ├─ quality_score: 0-100分
+    ├─ issues: [问题列表]
+    ├─ suggestions: [改进建议]
+    └─ needs_revision: true/false
+    ↓
+Agent根据反思报告决策
+    ├─ needs_revision = false → 保存数据，继续下一个
+    └─ needs_revision = true → 调用sequential_thinking分析修正策略
+                                    ↓
+                              确定修正目标
+                                    ├─ 场景设计问题 → 回到scenario_generation
+                                    ├─ 问题表述不清 → 回到question_generation  
+                                    ├─ SQL生成错误 → 回到sql_generation
+                                    └─ 需要调整分析 → 重新分析特定表（局部）
+```
+
+**关键实现细节**：
+
+1. **分析工具的记忆保持**：
+```python
+# 第一次执行分析工具时
+if tool_name == "extract_schema" and result["success"]:
+    self.memory.analysis_memory["schema_info"] = result["data"]
+    
+# 后续工具自动注入记忆
+if tool_name == "sql_generation":
+    tool_input["schema_info"] = self.memory.analysis_memory["schema_info"]
+```
+
+2. **反思工具的精准分析**：
+```python
+# sql_reflection只分析当前SQL
+reflection_input = {
+    "sql": current_sql,
+    "execution_result": execution_result,
+    "question": current_question,
+    "schema_context": self.memory.analysis_memory["schema_info"]
+}
+```
+
+3. **思考工具的决策支持**：
+```python
+# sequential_thinking用于复杂决策
+thinking_input = {
+    "problem": "SQL执行失败，需要分析原因",
+    "context": {
+        "error": execution_error,
+        "sql": failed_sql,
+        "schema": relevant_schema,
+        "history": recent_attempts
+    },
+    "thinking_steps": ["分析错误类型", "定位问题根源", "制定修正方案"]
+}
 ```
 
 ## 4. 接口规范
