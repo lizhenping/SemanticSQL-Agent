@@ -95,9 +95,12 @@ graph TB
     ThinkFix --> Analyze[分析每个步骤的执行结果<br/>定位问题出在哪一步]
     
     Analyze --> ReDo{重新执行出问题的步骤}
-    ReDo -->|问题表述不当| ReQuestion[重新执行question_generation<br/>确保正确使用数据库记忆]
-    ReDo -->|SQL生成错误| ReSQL[重新执行sql_generation<br/>确保正确使用数据库记忆]
+    ReDo -->|数据库分析有误| ReAnalysis[重新执行相应的分析工具]
+    ReDo -->|问题生成有误| ReQuestion[重新执行question_generation]
+    ReDo -->|SQL生成有误| ReSQL[重新执行sql_generation]
     
+    ReAnalysis --> UpdateMemory[更新记忆模块]
+    UpdateMemory --> Continue[继续当前场景的处理]
     ReQuestion --> SQL[使用新问题生成SQL]
     ReSQL --> Validate[验证新SQL]
     
@@ -152,21 +155,21 @@ graph TB
 
 **反思-修正循环机制**：
 ```
-数据库分析（只执行一次，结果作为记忆供全程使用）
-    ├─ extract_schema → 表结构信息
-    ├─ domain_analysis → 业务领域理解
-    ├─ field_classification → 字段语义分类
-    └─ er_analysis → 表关系信息
-            ↓ (保存到记忆)
-场景批量生成（基于预定义模板，不会出错）
+数据库分析（初始执行，结果保存到记忆模块）
+    ├─ extract_schema → 表结构信息 → 记忆模块
+    ├─ domain_analysis → 业务领域理解 → 记忆模块
+    ├─ field_classification → 字段语义分类 → 记忆模块
+    └─ er_analysis → 表关系信息 → 记忆模块
+            ↓
+场景批量生成（基于预定义模板）
     ↓
 对每个场景循环处理：
     ↓
-操作选择（基于预定义规则，不会出错）
+操作选择（基于预定义规则）
     ↓
-问题生成（使用场景+操作+数据库记忆）
+问题生成（使用场景+操作+记忆模块）
     ↓
-SQL生成（使用问题+数据库记忆）
+SQL生成（使用问题+记忆模块）
     ↓
 SQL验证执行
     ↓
@@ -176,29 +179,33 @@ SQL反思分析
     │  2. 执行结果是否合理
     │  3. SQL是否准确实现了问题意图
     │  4. 问题描述是否清晰准确
-    │  5. 是否充分利用了数据库分析记忆
+    │  5. 数据库分析是否有误或不足
     ↓
 需要修正？
     ├─ 否 → 保存训练数据，继续下一个场景
     └─ 是 → 调用sequential_thinking分析问题根源
             ↓
-      分析哪一步出了问题：
-            ├─ 问题生成步骤？
-            │  └─ 检查是否正确使用了数据库记忆
-            └─ SQL生成步骤？
-               └─ 检查是否正确理解问题和使用记忆
-                    ↓
-            只修正出问题的步骤：
-            ├─ 问题表述不当 → 重新执行question_generation
-            │  └─ 确保使用正确的数据库记忆
-            └─ SQL生成错误 → 重新执行sql_generation
-               └─ 确保正确理解问题并使用记忆
+      分析问题出在哪里：
+            ├─ 数据库分析有误？
+            │  ├─ schema理解错误 → 重新执行extract_schema
+            │  ├─ 领域理解偏差 → 重新执行domain_analysis
+            │  ├─ 字段分类错误 → 重新执行field_classification
+            │  └─ 关系分析不足 → 重新执行er_analysis
+            │           ↓
+            │      更新记忆模块中对应的分析结果
+            │
+            ├─ 问题生成有误？
+            │  └─ 重新执行question_generation（使用更新后的记忆）
+            │
+            └─ SQL生成有误？
+               └─ 重新执行sql_generation（使用更新后的记忆）
 ```
 
 **重要原则**：
-1. **分析工具只执行一次**：数据库分析（schema_extraction、domain_analysis、field_classification、er_analysis）在开始时执行一次，结果保存在记忆中
-2. **生成和验证工具可多次执行**：根据反思结果，可能需要重新执行生成工具
-3. **反思只针对当前步骤**：sql_reflection只分析当前SQL的执行结果，不重新分析整个数据库
+1. **分析工具初始执行一次**：数据库分析工具在开始时执行，结果保存在记忆模块中
+2. **分析工具可按需重新执行**：如果反思发现分析有误，可以重新执行特定的分析工具并更新记忆
+3. **记忆模块动态更新**：重新执行分析工具后，记忆模块中相应的内容会被更新
+4. **生成工具使用最新记忆**：问题生成和SQL生成始终使用记忆模块中的最新数据
 
 **思考工具（sequential_thinking）调用时机**：
 - **初始规划**：开始任务时，思考整体执行策略
@@ -445,31 +452,35 @@ if reflection["needs_revision"]:
         sql = new_sql  # 更新SQL
         # 重新验证和执行新SQL
         
-    elif fix_strategy["problem_step"] == "memory_usage":
-        # 不是记忆不足，而是没有正确使用已有的记忆
-        if fix_strategy["unused_memory"] == "er_analysis":
-            # 例如：SQL生成时没有考虑表关系，重新生成SQL
-            new_sql = sql_generation(
-                question=question["text"],
+    elif fix_strategy["problem_step"] == "database_analysis":
+        # 某个数据库分析有误，需要重新执行
+        if fix_strategy["analysis_type"] == "field_classification":
+            # 例如：字段分类有误导致SQL错误
+            new_field_analysis = field_classification_tool.run(
                 schema_info=memory["schema_info"],
-                er_info=memory["er_analysis"]  # 确保使用表关系信息
+                tables=fix_strategy["target_tables"]
             )
-            sql = new_sql
-        elif fix_strategy["unused_memory"] == "field_classification":
-            # 例如：问题生成时没有使用字段分类信息
-            new_question = question_generation(
-                scenario=scenario,
-                operations=operations,
+            # 更新记忆模块
+            memory["field_classification"] = new_field_analysis["data"]
+            
+        elif fix_strategy["analysis_type"] == "er_analysis":
+            # 例如：表关系分析不完整
+            new_er_analysis = er_analysis_tool.run(
                 schema_info=memory["schema_info"],
-                field_info=memory["field_classification"]  # 确保使用字段分类
+                focus_tables=fix_strategy["target_tables"]
             )
+            # 更新记忆模块
+            memory["er_analysis"] = new_er_analysis["data"]
+            
+        # 使用更新后的记忆重新执行后续步骤
 ```
 
 **修正原则**：
-- 只修正出问题的那一步，不影响之前的步骤
-- 修正后的结果用于继续执行流程
-- 数据库分析记忆是一次性获取的，不会重新分析
-- 如果是记忆使用问题，重新执行该步骤并确保正确使用已有记忆
+- 精准定位问题源头，只修正出问题的部分
+- 如果是数据库分析有误，重新执行特定的分析工具并更新记忆
+- 如果是生成步骤有误，重新执行该步骤（使用最新的记忆）
+- 记忆模块是动态的，可以被更新和改进
+- 所有后续步骤都使用记忆模块中的最新数据
 
 ### 2.2 数据生成规范
 
