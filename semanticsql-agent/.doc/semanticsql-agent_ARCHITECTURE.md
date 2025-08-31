@@ -35,19 +35,19 @@ semanticsql-agent/
 │   ├── __init__.py
 │   ├── base_tool.py                  # 工具基类
 │   │
-│   ├── analysis_tools/          # 分析工具（核心）
+│   ├── analysis_tools/          # 分析工具（可重新执行更新记忆）
 │   │   ├── __init__.py
 │   │   ├── schema_extraction_tool.py    # 数据库结构提取
-│   │   ├── domain_analysis_tool.py      # 领域分析
-│   │   ├── field_classification_tool.py # 字段分类
+│   │   ├── domain_analysis_tool.py      # 业务领域分析
+│   │   ├── field_classification_tool.py # 字段语义分类
 │   │   └── er_analysis_tool.py          # 实体关系分析
 │   │
 │   ├── generation_tools/        # 生成工具
 │   │   ├── __init__.py
-│   │   ├── scenario_generation_tool.py  # 场景生成
-│   │   ├── operation_selection_tool.py  # 操作选择
-│   │   ├── question_generation_tool.py  # 问题生成
-│   │   └── sql_generation_tool.py       # SQL生成
+│   │   ├── scenario_tool.py             # 场景生成（基于预定义模板）
+│   │   ├── operation_selection_tool.py  # 操作选择（基于预定义规则）
+│   │   ├── question_generation_tool.py  # 问题生成（使用场景+操作+记忆）
+│   │   └── sql_generation_tool.py       # SQL生成（使用问题+记忆）
 │   │
 │   ├── validation_tools/        # 验证工具
 │   │   ├── __init__.py
@@ -56,11 +56,11 @@ semanticsql-agent/
 │   │
 │   ├── reflection_tools/        # 反思工具
 │   │   ├── __init__.py
-│   │   └── sql_reflection_tool.py       # SQL执行反思
+│   │   └── sql_reflection_tool.py       # SQL执行反思（评估质量和问题诊断）
 │   │
-│   └── thinking_tools/          # 思考工具（可选）
+│   └── thinking_tools/          # 思考工具
 │       ├── __init__.py
-│       └── sequential_thinking_tool.py   # 深度思考
+│       └── sequential_thinking_tool.py   # 深度思考（分析问题源头和修正策略）
 │
 ├── prompts/
 │   ├── __init__.py
@@ -72,15 +72,16 @@ semanticsql-agent/
 │
 ├── agent/
 │   ├── __init__.py
-│   ├── base_agent.py           # 基础Agent（含执行记录）
-│   ├── smart_sql_agent.py      # 主 SQL Agent
-│   └── callbacks.py            # 轨迹记录回调
+│   ├── base_agent.py           # 基础Agent（含执行记录和记忆管理）
+│   ├── smart_sql_agent.py      # 主SQL Agent（用于SQL查询生成）
+│   ├── data_generation_agent.py # 数据生成Agent（用于批量生成训练数据）
+│   └── callbacks.py            # 执行回调（轨迹记录等）
 │
 ├── utils/
 │   ├── __init__.py
 │   ├── database.py              # 数据库连接管理
-│   ├── llm_client.py            # LLM客户端（支持使用标准OpenAI库 调用 Qwen 和 tool）
-│   └── trajectory.py            # 轨迹记录
+│   ├── llm_client.py            # LLM客户端（支持使用标准OpenAI库调用Qwen）
+│   └── trajectory.py            # 执行轨迹记录（保存每次执行的完整过程）
 │
 └── cli.py                       # 命令行接口
 ```
