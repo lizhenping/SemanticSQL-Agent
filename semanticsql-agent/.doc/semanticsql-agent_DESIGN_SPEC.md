@@ -95,20 +95,11 @@ graph TB
     ThinkFix --> Analyze[分析每个步骤的执行结果<br/>定位问题出在哪一步]
     
     Analyze --> ReDo{重新执行出问题的步骤}
-    ReDo -->|操作选择有误| ReOperation[重新执行operation_selection]
-    ReDo -->|问题表述不当| ReQuestion[重新执行question_generation]
-    ReDo -->|SQL生成错误| ReSQL[重新执行sql_generation]
-    ReDo -->|记忆使用不当| ReMemory[重新执行当前步骤<br/>正确使用数据库分析记忆]
+    ReDo -->|问题表述不当| ReQuestion[重新执行question_generation<br/>确保正确使用数据库记忆]
+    ReDo -->|SQL生成错误| ReSQL[重新执行sql_generation<br/>确保正确使用数据库记忆]
     
-    ReOperation --> Continue1[使用新操作继续流程]
-    ReQuestion --> Continue2[使用新问题继续流程]
-    ReSQL --> Continue3[使用新SQL继续流程]
-    ReMemory --> Continue4[使用改进结果继续流程]
-    
-    Continue1 --> Question
-    Continue2 --> SQL
-    Continue3 --> Validate
-    Continue4 --> NextStep[继续下一步]
+    ReQuestion --> SQL[使用新问题生成SQL]
+    ReSQL --> Validate[验证新SQL]
     
     Save --> NextScenario{还有场景?}
     NextScenario -->|是| ScenarioLoop
@@ -162,12 +153,16 @@ graph TB
 **反思-修正循环机制**：
 ```
 数据库分析（只执行一次，结果作为记忆供全程使用）
-    ↓
-场景批量生成（基于预定义模板）
+    ├─ extract_schema → 表结构信息
+    ├─ domain_analysis → 业务领域理解
+    ├─ field_classification → 字段语义分类
+    └─ er_analysis → 表关系信息
+            ↓ (保存到记忆)
+场景批量生成（基于预定义模板，不会出错）
     ↓
 对每个场景循环处理：
     ↓
-操作选择（基于预定义规则，根据场景复杂度）
+操作选择（基于预定义规则，不会出错）
     ↓
 问题生成（使用场景+操作+数据库记忆）
     ↓
@@ -176,36 +171,28 @@ SQL生成（使用问题+数据库记忆）
 SQL验证执行
     ↓
 SQL反思分析
-    ├─ 反思内容：
-    │  1. SQL执行结果是否符合预期
-    │  2. SQL与问题的语义是否匹配
-    │  3. 问题描述是否清晰合理
-    │  4. 操作选择是否适合场景
-    │  5. 是否正确利用了数据库分析记忆
+    ├─ 评估内容：
+    │  1. SQL执行是否成功
+    │  2. 执行结果是否合理
+    │  3. SQL是否准确实现了问题意图
+    │  4. 问题描述是否清晰准确
+    │  5. 是否充分利用了数据库分析记忆
     ↓
 需要修正？
     ├─ 否 → 保存训练数据，继续下一个场景
-    └─ 是 → 调用sequential_thinking深度分析
+    └─ 是 → 调用sequential_thinking分析问题根源
             ↓
-      分析问题出现在哪个步骤：
-            ├─ 分析每个步骤的输入输出
-            ├─ 定位错误产生的源头
-            └─ 确定需要回退到哪一步
+      分析哪一步出了问题：
+            ├─ 问题生成步骤？
+            │  └─ 检查是否正确使用了数据库记忆
+            └─ SQL生成步骤？
+               └─ 检查是否正确理解问题和使用记忆
                     ↓
-            只重新执行出问题的那一步：
-            ├─ 如果是操作选择问题 → 只重新执行操作选择
-            ├─ 如果是问题表述问题 → 只重新生成问题  
-            ├─ 如果是SQL生成问题 → 只重新生成SQL
-            └─ 如果是记忆使用问题 → 重新执行当前步骤，正确引用数据库分析记忆
-                    ↓
-            注意：不是重新执行数据库分析工具
-            而是确保当前步骤正确使用了已有的分析结果：
-            - schema_info（来自extract_schema）
-            - domain_analysis（来自domain_analysis）  
-            - field_classification（来自field_classification）
-            - er_analysis（来自er_analysis）
-                    ↓
-            使用新结果继续后续步骤
+            只修正出问题的步骤：
+            ├─ 问题表述不当 → 重新执行question_generation
+            │  └─ 确保使用正确的数据库记忆
+            └─ SQL生成错误 → 重新执行sql_generation
+               └─ 确保正确理解问题并使用记忆
 ```
 
 **重要原则**：
@@ -249,32 +236,24 @@ sql_reflection 发现问题
     ↓
 调用 sequential_thinking 深度分析
     ↓
-分析每个步骤的执行情况：
-    1. 场景理解是否正确？
-       - 输入：预定义场景模板
-       - 输出：具体场景实例
-       - 检查：是否正确理解了业务意图
-    
-    2. 操作选择是否合理？
-       - 输入：场景复杂度
-       - 输出：SQL操作组合
-       - 检查：操作是否匹配场景需求
-    
-    3. 问题生成是否准确？
+分析生成步骤的执行情况：
+    1. 问题生成是否准确？
        - 输入：场景+操作+数据库记忆
        - 输出：自然语言问题
        - 检查：问题是否清晰、完整、无歧义
+       - 检查：是否正确使用了数据库记忆
     
-    4. SQL生成是否正确？
+    2. SQL生成是否正确？
        - 输入：问题+数据库记忆
        - 输出：SQL查询
        - 检查：SQL是否准确实现问题意图
+       - 检查：是否正确使用了数据库记忆
     
-    5. 是否充分利用了数据库分析记忆？
-       - 检查：是否正确使用了schema_info中的表结构
-       - 检查：是否利用了field_classification的字段分类
-       - 检查：是否考虑了er_analysis中的表关系
-       - 检查：是否参考了domain_analysis的业务理解
+    3. 数据库记忆的使用情况：
+       - schema_info：是否使用了正确的表名和字段名
+       - field_classification：是否理解了字段的实际含义和类型
+       - er_analysis：是否正确处理了表之间的关系
+       - domain_analysis：是否符合业务领域的惯例
     ↓
 定位问题源头步骤
     ↓
