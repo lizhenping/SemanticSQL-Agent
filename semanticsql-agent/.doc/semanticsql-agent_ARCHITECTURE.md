@@ -11,12 +11,12 @@
 ### 1.2 技术栈
 - **编程语言**: Python 3.8+
 - **核心框架**:
-  - LangChain: Agent 框架
+  - LangChain: Agent 框架、记忆管理、工具集成、LLM 调用
   - SQLAlchemy: 数据库操作
   - Pydantic: 数据模型验证
   - Jinja2: 提示词模板
   - Click: CLI 框架
-- **LLM支持**: Qwen (OpenAI 兼容 API)
+- **LLM支持**: Qwen (通过 LangChain 的 OpenAI 兼容接口)
 
 ## 2. 项目结构设计
 
@@ -104,12 +104,13 @@ semanticsql-agent/
 
 ### 3.2 工具系统 (tools/)
 
-#### 3.2.1 基础设计
-- **BaseTool**: 所有工具的基类
-  - 统一的 `run()` 接口
-  - 自动参数验证
-  - 执行计时和错误处理
-  - 标准返回格式：`{"success": bool, "data": Any, "error": str}`
+#### 3.2.1 基础设计（基于 LangChain）
+- **BaseTool**: 继承自 `langchain.tools.BaseTool`
+  - 统一的 `_run()` 接口实现
+  - 利用 LangChain 的参数验证机制
+  - 自动的错误处理和日志
+  - 与 LangChain Agent 无缝集成
+  - 支持同步和异步执行
 
 #### 3.2.2 工具分类
 
@@ -141,48 +142,76 @@ semanticsql-agent/
 
 ### 3.3 智能体系统 (agent/)
 
-#### base_agent.py
-- 实现 ReAct 模式的核心循环
-- 工具注册和调用机制
-- 执行步骤记录
-- 与记忆模块和轨迹系统的集成
+#### base_agent.py（基于 LangChain AgentExecutor）
+- 使用 `langchain.agents.AgentExecutor` 实现 ReAct 模式
+- 利用 `langchain.agents.create_react_agent` 创建智能体
+- 集成 LangChain 的工具管理机制
+- 使用 `langchain.callbacks` 进行执行跟踪
+- 支持自定义的 OutputParser 处理响应
 
 #### sql_agent.py
-- 继承 BaseAgent
+- 继承 BaseAgent，配置专门的 SQL 生成 Chain
+- 使用 `langchain.chains.LLMChain` 管理提示词
 - 支持两种模式：
-  - **查询模式**: 用户问题 → SQL生成 → 执行结果
-  - **批量生成模式**: 场景批量生成 → 循环处理 → 训练数据
-- 管理工具调用顺序
-- 实现反思-修正循环
+  - **查询模式**: 单个 Chain 执行
+  - **批量生成模式**: 使用 `langchain.chains.SequentialChain`
+- 集成 LangChain 的错误处理和重试机制
 
-### 3.4 记忆管理 (utils/memory.py)
+### 3.4 记忆管理（基于 LangChain Memory）
 
-存储和管理数据库分析结果：
+#### 使用 LangChain 的记忆组件
+- **ConversationSummaryMemory**: 存储数据库分析摘要
+- **VectorStoreMemory**: 存储和检索相关的表结构信息
+- **自定义 AnalysisMemory**: 继承 `BaseMemory`，专门管理分析结果
+
 ```python
-memory = {
-    "schema_info": {},           # 数据库结构
-    "domain_analysis": {},       # 领域分析
-    "field_classification": {},  # 字段分类
-    "column_meanings": {},       # 列业务含义
-    "table_meanings": {},        # 表业务含义
-    "er_analysis": {}           # 关系分析
-}
+from langchain.memory import BaseMemory
+
+class DatabaseAnalysisMemory(BaseMemory):
+    """专门用于存储数据库分析结果的记忆"""
+    memory_variables = ["schema_info", "domain_analysis", 
+                       "field_classification", "column_meanings",
+                       "table_meanings", "er_analysis"]
+    
+    def load_memory_variables(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """加载相关的分析结果"""
+        # 返回与当前任务相关的记忆内容
+    
+    def save_context(self, inputs: Dict[str, Any], outputs: Dict[str, Any]) -> None:
+        """保存或更新分析结果"""
+        # 更新记忆中的分析内容
 ```
-- 初始执行时填充
-- 可根据反思结果更新
-- 为所有生成工具提供数据支持
 
-### 3.5 提示词管理 (prompts/)
+- 与 LangChain Agent 自动集成
+- 支持持久化到文件或数据库
+- 可以使用 LangChain 的记忆链功能
 
-#### 模板组织
-- `templates/system/`: Agent 系统提示词
-- `templates/tools/`: 各工具的使用说明
-- `templates/analysis/`: 数据分析提示词
+### 3.5 提示词管理（集成 LangChain）
 
-#### manager.py
-- Jinja2 模板渲染
-- 变量注入
-- 提示词版本管理
+#### 使用 LangChain 的提示词组件
+- **PromptTemplate**: 基础提示词模板
+- **ChatPromptTemplate**: 对话式提示词
+- **FewShotPromptTemplate**: 少样本学习提示词
+- **SystemMessagePromptTemplate**: 系统消息模板
+
+```python
+from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
+
+# 系统提示词
+system_prompt = SystemMessagePromptTemplate.from_template(
+    "你是一个SQL生成专家，负责分析数据库并生成高质量的训练数据..."
+)
+
+# 工具使用提示词
+tool_prompt = ChatPromptTemplate.from_template(
+    "使用 {tool_name} 工具来 {task_description}"
+)
+```
+
+#### 提示词管理器
+- 继承 LangChain 的 `BasePromptTemplate`
+- 支持动态变量注入
+- 与 LangChain Chain 无缝集成
 
 ### 3.6 工具类 (utils/)
 
@@ -191,33 +220,70 @@ memory = {
 - 连接池管理
 - 安全的SQL执行
 
-#### llm_client.py
-- 封装 OpenAI API 调用
-- 支持 Qwen 等兼容模型
+#### llm_client.py（基于 LangChain LLM）
+- 使用 `langchain.chat_models.ChatOpenAI` 
+- 配置 Qwen 的 API endpoint
+- 利用 LangChain 的重试和错误处理机制
+- 支持流式输出和回调
 
-#### trajectory.py
-- 记录完整的执行历史
-- JSON 格式持久化
-- 用于调试和分析
-- 自动清理旧记录
+```python
+from langchain.chat_models import ChatOpenAI
 
-#### callbacks.py
-- 执行过程回调
-- 与轨迹系统集成
-- 支持进度通知
+llm = ChatOpenAI(
+    model_name="Qwen",
+    openai_api_base="http://localhost:9991/v1",
+    temperature=0.7
+)
+```
+
+#### trajectory.py（集成 LangChain Callbacks）
+- 实现 `langchain.callbacks.BaseCallbackHandler`
+- 自动记录 Agent 的思考和行动
+- 支持导出为 LangSmith 格式
+- 与 LangChain 的调试工具集成
+
+#### callbacks.py（基于 LangChain Callbacks）
+- 继承 `AsyncCallbackHandler` 支持异步操作
+- 实现 `on_tool_start`, `on_tool_end` 等钩子
+- 与 LangChain 的事件系统集成
+- 支持自定义的进度通知
 ```
 
 ## 4. 执行流程
 
-### 4.1 初始化流程
+### 4.1 初始化流程（LangChain 集成）
 ```
 1. 加载配置 (Settings)
 2. 初始化数据库连接 (DatabaseManager)
-3. 初始化 LLM 客户端
-4. 创建 Agent 实例
-5. 注册所有工具
-6. 初始化记忆模块
-7. 设置轨迹记录
+3. 创建 LangChain LLM 实例 (ChatOpenAI)
+4. 初始化 LangChain Memory (DatabaseAnalysisMemory)
+5. 创建 LangChain Tools 列表
+6. 使用 create_react_agent 创建 Agent
+7. 配置 AgentExecutor 与 Callbacks
+```
+
+```python
+# 示例代码
+from langchain.agents import create_react_agent, AgentExecutor
+from langchain.chat_models import ChatOpenAI
+
+# 初始化 LLM
+llm = ChatOpenAI(openai_api_base=config.llm_base_url)
+
+# 初始化记忆
+memory = DatabaseAnalysisMemory()
+
+# 创建工具列表
+tools = [SchemaExtractionTool(), DomainAnalysisTool(), ...]
+
+# 创建 Agent
+agent = create_react_agent(llm, tools, prompt)
+agent_executor = AgentExecutor(
+    agent=agent,
+    tools=tools,
+    memory=memory,
+    callbacks=[TrajectoryCallback()]
+)
 ```
 
 ### 4.2 数据库分析阶段（只执行一次）
@@ -302,25 +368,53 @@ sql_reflection 评估：
 
 
 
-## 5. 核心特性
+## 5. LangChain 集成优势
 
-### 5.1 记忆模块
+### 5.1 使用 LangChain 的好处
+- **统一的 Agent 框架**：利用成熟的 ReAct 实现，减少自定义代码
+- **强大的记忆管理**：多种记忆类型，支持向量存储和持久化
+- **丰富的工具生态**：可以轻松集成 LangChain 社区的工具
+- **完善的回调系统**：内置的执行跟踪和调试功能
+- **错误处理机制**：自动重试、超时控制、错误恢复
+- **提示词工程**：结构化的提示词模板和管理
+- **LLM 抽象**：轻松切换不同的 LLM 提供商
+
+### 5.2 LangChain 组件映射
+| 我们的组件 | LangChain 组件 | 说明 |
+|---------|--------------|------|
+| BaseTool | langchain.tools.BaseTool | 工具基类 |
+| BaseAgent | langchain.agents.AgentExecutor | Agent 执行器 |
+| Memory | langchain.memory.BaseMemory | 记忆基类 |
+| LLMClient | langchain.chat_models.ChatOpenAI | LLM 客户端 |
+| Callbacks | langchain.callbacks.BaseCallbackHandler | 回调处理器 |
+| PromptManager | langchain.prompts.BasePromptTemplate | 提示词模板 |
+
+### 5.3 自定义扩展
+虽然使用 LangChain，但我们仍需要自定义：
+- **DatabaseAnalysisMemory**: 专门管理数据库分析结果
+- **SQL 专用工具**: 针对 SQL 生成的特定工具
+- **批量生成 Chain**: 处理大规模数据生成的流程
+- **质量评估组件**: SQL 质量评分和优化建议
+
+## 6. 核心特性
+
+### 6.1 记忆模块
 - 存储数据库分析结果供后续使用
 - 支持动态更新（根据反思结果）
 - 跨工具共享上下文
 
-### 5.2 反思-修正循环
+### 6.2 反思-修正循环
 - 自动评估生成质量
 - 精确定位问题源头
 - 只重新执行出错步骤
 - 支持分析工具重新执行
 
-### 5.3 执行轨迹
+### 6.3 执行轨迹
 - 记录完整的执行历史
 - 支持调试和分析
 - JSON格式持久化
 
-### 5.4 工具设计原则
+### 6.4 工具设计原则
 - 单一职责：每个工具只做一件事
 - 标准接口：统一的输入输出格式
 - 错误处理：优雅的错误处理机制
@@ -328,9 +422,9 @@ sql_reflection 评估：
 
 
 
-## 6. 部署和运行
+## 7. 部署和运行
 
-### 6.1 环境准备
+### 7.1 环境准备
 ```bash
 # 安装依赖
 pip install -r requirements.txt
@@ -340,7 +434,7 @@ cp .env.example .env
 # 编辑 .env 设置数据库和LLM连接信息
 ```
 
-### 6.2 命令行使用
+### 7.2 命令行使用
 ```bash
 # 生成训练数据
 python cli.py generate --count 100 --output data.json
@@ -352,42 +446,51 @@ python cli.py query --question "查询所有订单的总金额"
 python cli.py trajectory --latest
 ```
 
-### 6.3 API使用
+### 7.3 API使用（基于 LangChain）
 ```python
 from semanticsql_agent import SQLAgent
+from langchain.callbacks import StdOutCallbackHandler
 from config import Settings, DatabaseConfig
 
 # 初始化
 settings = Settings()
 db_config = DatabaseConfig.from_env()
-agent = SQLAgent(settings)
 
-# 生成训练数据
+# 创建 Agent（内部使用 LangChain）
+agent = SQLAgent(
+    settings=settings,
+    callbacks=[StdOutCallbackHandler()]  # LangChain 回调
+)
+
+# 生成训练数据（使用 AgentExecutor）
 result = agent.generate_training_data(
     count=100,
     output_file="training_data.json"
 )
 
-# 单次查询
+# 单次查询（使用 LLMChain）
 response = agent.query("查询最近一周的销售额")
 print(response.sql)
+
+# 获取执行轨迹（通过 LangChain Callbacks）
+trajectory = agent.get_trajectory()
 ```
 
-## 7. 最佳实践
+## 8. 最佳实践
 
-### 7.1 Agent设计原则
+### 8.1 Agent设计原则
 - **提示词驱动**：通过提示词引导行为，避免硬编码流程
 - **自主决策**：让Agent根据上下文自主选择工具
 - **记忆机制**：利用记忆模块在工具间共享上下文
 - **反思循环**：执行后评估质量，必要时自动修正
 
-### 7.2 工具开发指南
+### 8.2 工具开发指南
 - **单一职责**：每个工具专注一个任务
 - **标准接口**：统一的输入输出格式
 - **错误处理**：提供清晰的错误信息
 - **可测试性**：便于单元测试和集成测试
 
-### 7.3 性能优化
+### 8.3 性能优化
 - **批量处理**：场景批量生成，减少LLM调用
 - **记忆复用**：数据库分析结果缓存复用
 - **并行执行**：独立的SQL可并行验证

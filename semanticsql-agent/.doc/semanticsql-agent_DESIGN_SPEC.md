@@ -602,51 +602,126 @@ difficulty_distribution:
 - SQL 与问题语义匹配
 - 执行结果合理有效
 
-## 3. 实现规范
+## 3. 实现规范（基于 LangChain 框架）
 
-### 3.1 Agent实现规范
+### 3.1 LangChain 集成策略
 
-#### 3.1.1 DataGenerationAgent设计要求
+#### 3.1.1 核心组件映射
+
+**使用 LangChain 实现的组件**：
+1. **Agent 框架**：
+   - 使用 `langchain.agents.create_react_agent` 实现 ReAct 模式
+   - 使用 `AgentExecutor` 管理执行流程
+   - 利用 LangChain 的工具调用机制
+
+2. **记忆管理**：
+   - 基于 `langchain.memory.BaseMemory` 实现自定义记忆
+   - 可选使用 `ConversationSummaryMemory` 存储摘要
+   - 支持 `VectorStoreMemory` 进行相似性检索
+
+3. **LLM 调用**：
+   - 使用 `langchain.chat_models.ChatOpenAI` 连接 Qwen
+   - 自动的重试和错误处理
+   - 支持流式输出（如需要）
+
+4. **工具系统**：
+   - 继承 `langchain.tools.BaseTool`
+   - 自动的参数验证和序列化
+   - 与 Agent 的无缝集成
+
+5. **提示词管理**：
+   - 使用 `langchain.prompts` 模块
+   - 结构化的提示词模板
+   - 支持 Few-shot 学习
+
+6. **回调系统**：
+   - 基于 `langchain.callbacks`
+   - 自动的执行跟踪
+   - 支持自定义回调
+
+### 3.2 Agent实现规范
+
+#### 3.2.1 DataGenerationAgent设计要求
 
 **核心实现原则**：
 ```python
-# ✅ 正确实现：提示词驱动的Agent
+# ✅ 正确实现：基于 LangChain 的提示词驱动 Agent
+from langchain.agents import create_react_agent, AgentExecutor
+from langchain.memory import BaseMemory
+from langchain.chat_models import ChatOpenAI
+
 class DataGenerationAgent(BaseAgent):
     """
-    完整的训练数据生成Agent
-    - 拥有完整工具链：分析、生成、验证、反思、思考
-    - 通过提示词引导完整流程
-    - 自主决策工具调用顺序
-    - 实现反思-修正循环
+    基于 LangChain 的训练数据生成 Agent
+    - 使用 LangChain AgentExecutor 管理执行流程
+    - 自定义 DatabaseAnalysisMemory 存储分析结果
+    - 所有工具继承自 langchain.tools.BaseTool
+    - 利用 LangChain 回调系统记录轨迹
     """
     
-    def _initialize_tools(self):
-        """必须注册完整工具链"""
-        # 分析工具
-        self.register_tool("extract_schema", SchemaExtractionTool(...))
-        self.register_tool("domain_analysis", DomainAnalysisTool(...))
-        self.register_tool("field_classification", FieldClassificationTool(...))
-        self.register_tool("er_analysis", ERAnalysisTool(...))
+    def _initialize_langchain_tools(self):
+        """创建 LangChain 工具列表"""
+        # 所有工具都继承自 langchain.tools.BaseTool
+        tools = [
+            # 分析工具
+            SchemaExtractionTool(),
+            DomainAnalysisTool(),
+            FieldClassificationTool(),
+            ColumnMeaningTool(),      # 新增
+            TableMeaningTool(),       # 新增
+            ERAnalysisTool(),
+            
+            # 生成工具
+            ScenarioGenerationTool(),
+            OperationSelectionTool(),
+            QuestionGenerationTool(),
+            SQLGenerationTool(),
+            
+            # 验证和反思工具
+            SQLValidationTool(),
+            SQLExecutionTool(),
+            SQLReflectionTool(),
+            SequentialThinkingTool()
+        ]
+        return tools
+    
+    def __init__(self, config):
+        """初始化 LangChain 组件"""
+        # LLM
+        self.llm = ChatOpenAI(
+            openai_api_base=config.llm_base_url,
+            model_name=config.llm_model,
+            temperature=0.7
+        )
         
-        # 生成工具
-        self.register_tool("scenario_generation", ScenarioGenerationTool(...))
-        self.register_tool("question_generation", QuestionGenerationTool(...))
-        self.register_tool("sql_generation", SQLGenerationTool(...))
+        # Memory
+        self.memory = DatabaseAnalysisMemory()
         
-        # 验证工具
-        self.register_tool("sql_execution", SQLExecutionTool(...))
-        self.register_tool("sql_reflection", SQLReflectionTool(...))
+        # Tools
+        self.tools = self._initialize_langchain_tools()
         
-        # 思考工具
-        self.register_tool("sequential_thinking", SequentialThinkingTool(...))
+        # Agent
+        prompt = self._get_react_prompt()
+        self.agent = create_react_agent(self.llm, self.tools, prompt)
+        
+        # Executor
+        self.agent_executor = AgentExecutor(
+            agent=self.agent,
+            tools=self.tools,
+            memory=self.memory,
+            verbose=True,
+            callbacks=[TrajectoryCallback()]
+        )
     
     def generate_training_data(self, count: int, output_file: str):
         """
-        ✅ 正确：完全由Agent自主执行，无硬编码步骤
+        ✅ 正确：使用 LangChain AgentExecutor 执行任务
         """
         task = f"生成{count}条高质量NL2SQL训练数据"
-        execution = self.new_task(task)  # 进入ReAct循环
-        return self._extract_results(execution)
+        
+        # 通过 AgentExecutor 运行
+        result = self.agent_executor.run(input=task)
+        return self._extract_results(result)
     
     def get_system_prompt(self) -> str:
         """
@@ -669,7 +744,7 @@ def generate_training_data(self):
     # ... 更多硬编码步骤
 ```
 
-#### 3.1.2 提示词系统设计
+#### 3.2.2 提示词系统设计（LangChain PromptTemplate）
 
 **完整系统提示词必须包含**：
 1. **数据库分析指导**：如何完整分析并记忆数据库结构
@@ -678,16 +753,89 @@ def generate_training_data(self):
 4. **反思修正指导**：如何根据执行结果决定是否回退
 5. **思考工具指导**：何时调用sequential_thinking进行深度分析
 
-**记忆机制实现**：
-```
-Agent第一次调用extract_schema后：
-├─ 记忆：数据库有5个表，主要是合同和援助业务
-├─ 后续调用sql_generation时：
-│  └─ 提示词引导：使用已记忆的数据库结构信息
-└─ 无需重复调用extract_schema
+**使用 LangChain PromptTemplate**：
+```python
+from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
+
+# 系统提示词模板
+system_prompt = SystemMessagePromptTemplate.from_template("""
+你是一个专业的SQL训练数据生成专家。你的任务是生成高质量的NL2SQL训练数据。
+
+工作流程：
+1. 首先分析数据库（按顺序）：
+   - extract_schema：提取表结构
+   - domain_analysis：识别业务领域
+   - field_classification：字段分类
+   - column_meaning：分析列含义
+   - table_meaning：分析表职责
+   - er_analysis：分析表关系
+   
+2. 基于分析结果生成数据：
+   - scenario_generation：生成场景（批量）
+   - 对每个场景：
+     - operation_selection：选择SQL操作
+     - question_generation：生成问题
+     - sql_generation：生成SQL
+     - sql_validation：验证语法
+     - sql_execution：执行测试
+     - sql_reflection：反思质量
+
+3. 反思后的处理：
+   - 如果质量不达标，使用sequential_thinking分析问题
+   - 精确定位问题步骤并重新执行
+
+记住：数据库分析结果要保存在记忆中，后续步骤直接使用记忆！
+
+当前数据库：{database_name}
+已分析的信息：{memory_summary}
+""")
+
+# 创建完整的提示词
+prompt = ChatPromptTemplate.from_messages([
+    system_prompt,
+    ("user", "{input}"),
+    ("assistant", "{agent_scratchpad}")
+])
 ```
 
-#### 3.1.3 反思-修正循环实现
+**记忆机制实现（LangChain Memory）**：
+```python
+from langchain.memory import BaseMemory
+
+class DatabaseAnalysisMemory(BaseMemory):
+    """专门管理数据库分析结果的记忆"""
+    
+    def __init__(self):
+        self.analysis_results = {
+            "schema_info": None,
+            "domain_analysis": None,
+            "field_classification": None,
+            "column_meanings": None,
+            "table_meanings": None,
+            "er_analysis": None
+        }
+    
+    @property
+    def memory_variables(self) -> List[str]:
+        return ["memory_summary", "schema_info", "domain_info"]
+    
+    def load_memory_variables(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """加载相关的分析结果供Agent使用"""
+        return {
+            "memory_summary": self._get_summary(),
+            "schema_info": self.analysis_results.get("schema_info", {}),
+            "domain_info": self.analysis_results.get("domain_analysis", {})
+        }
+    
+    def save_context(self, inputs: Dict[str, Any], outputs: Dict[str, Any]) -> None:
+        """保存工具执行结果到记忆"""
+        # 识别是哪个分析工具的输出
+        if "schema_extraction" in str(outputs):
+            self.analysis_results["schema_info"] = outputs
+        # ... 其他工具的保存逻辑
+```
+
+#### 3.2.3 反思-修正循环实现（基于 LangChain）
 
 **记忆管理策略**：
 ```python
@@ -774,11 +922,14 @@ thinking_input = {
 
 ## 4. 接口规范
 
-### 3.1 工具接口
+### 4.1 工具接口（基于 LangChain）
 
 ```python
-class BaseTool(ABC):
-    """工具基类接口规范"""
+from langchain.tools import BaseTool as LangChainBaseTool
+from langchain.pydantic_v1 import BaseModel, Field
+
+class BaseTool(LangChainBaseTool):
+    """继承 LangChain 的工具基类"""
     
     @property
     @abstractmethod
@@ -806,9 +957,37 @@ class BaseTool(ABC):
         }
         """
         pass
+
+# 示例：基于 LangChain 的工具实现
+class SchemaExtractionTool(BaseTool):
+    """数据库结构提取工具"""
+    name = "extract_schema"
+    description = "提取数据库的表结构、列信息、约束等"
+    
+    # 定义输入参数
+    class InputSchema(BaseModel):
+        database_name: str = Field(description="要分析的数据库名称")
+    
+    args_schema = InputSchema
+    
+    def _run(self, database_name: str) -> dict:
+        """同步执行"""
+        # 连接数据库
+        # 提取结构信息
+        # 返回结果
+        return {
+            "tables": [...],
+            "columns": [...],
+            "constraints": [...]
+        }
+    
+    async def _arun(self, database_name: str) -> dict:
+        """异步执行（可选）"""
+        # 异步实现
+        pass
 ```
 
-### 3.2 智能体接口
+### 4.2 智能体接口
 
 ```python
 class BaseAgent(ABC):
@@ -829,7 +1008,7 @@ class BaseAgent(ABC):
         pass
 ```
 
-### 3.3 命令行接口
+### 4.3 命令行接口
 
 ```bash
 # 基础生成命令
