@@ -179,11 +179,13 @@ SQL反思分析
             ├─ 定位错误产生的源头
             └─ 确定需要回退到哪一步
                     ↓
-            从问题源头步骤重新执行：
-            ├─ 如果是数据库理解问题 → 补充分析特定内容
-            ├─ 如果是操作选择问题 → 从操作选择步骤重新开始
-            ├─ 如果是问题表述问题 → 从问题生成步骤重新开始
-            └─ 如果仅是SQL问题 → 只重新生成SQL
+            只重新执行出问题的那一步：
+            ├─ 如果是数据库记忆不足 → 补充分析特定内容，更新记忆
+            ├─ 如果是操作选择问题 → 只重新执行操作选择
+            ├─ 如果是问题表述问题 → 只重新生成问题
+            └─ 如果是SQL生成问题 → 只重新生成SQL
+                    ↓
+            使用新结果继续后续步骤
 ```
 
 **重要原则**：
@@ -254,7 +256,7 @@ sql_reflection 发现问题
     ↓
 定位问题源头步骤
     ↓
-从该步骤重新执行（包括后续所有步骤）
+只重新执行该步骤，保持其他步骤结果不变
 ```
 
 **问题源头分析示例**：
@@ -390,20 +392,44 @@ if reflection["needs_revision"]:
         }
     )
     
-    # 根据分析结果执行修正
-    if fix_strategy["target"] == "operations":
-        # 重新选择操作（仍从预定义规则中选择）
-        operations = operation_selection(scenario, force_complexity="higher")
-    elif fix_strategy["target"] == "question":
-        # 重新生成问题
-        question = question_generation(...)
-    elif fix_strategy["target"] == "sql":
-        # 仅重新生成SQL
-        sql = sql_generation(...)
-    elif fix_strategy["target"] == "memory":
-        # 需要补充分析特定内容
-        additional_analysis = analyze_specific_tables(...)
+    # 只修正出问题的步骤
+    if fix_strategy["problem_step"] == "operations":
+        # 只重新选择操作，保留场景
+        new_operations = operation_selection(scenario, schema_info=memory["schema_info"])
+        operations = new_operations  # 更新操作
+        # 继续使用新操作执行后续步骤
+        
+    elif fix_strategy["problem_step"] == "question":
+        # 只重新生成问题，保留场景和操作
+        new_question = question_generation(
+            scenario=scenario,
+            operations=operations,
+            schema_info=memory["schema_info"]
+        )
+        question = new_question  # 更新问题
+        # 继续使用新问题执行后续步骤
+        
+    elif fix_strategy["problem_step"] == "sql":
+        # 只重新生成SQL，保留前面所有步骤
+        new_sql = sql_generation(
+            question=question["text"],
+            schema_info=memory["schema_info"]
+        )
+        sql = new_sql  # 更新SQL
+        # 重新验证和执行新SQL
+        
+    elif fix_strategy["problem_step"] == "memory":
+        # 补充分析特定内容，更新记忆
+        if fix_strategy["missing_info"] == "table_relationship":
+            additional_er = analyze_specific_tables(tables=fix_strategy["tables"])
+            memory["er_analysis"].update(additional_er)  # 更新记忆
+        # 使用更新后的记忆重新执行出问题的步骤
 ```
+
+**修正原则**：
+- 只修正出问题的那一步，不影响之前的步骤
+- 修正后的结果用于继续执行流程
+- 如果是记忆问题，更新记忆后重新执行受影响的步骤
 
 ### 2.2 数据生成规范
 
