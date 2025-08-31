@@ -71,37 +71,41 @@ def __init__(self, config: DatabaseConfig)
 }
 ```
 
-### `execute_query(sql: str, params: Dict[str, Any] = None) -> List[Dict[str, Any]]`
-执行 SELECT 查询。
+### `execute_sql_safe(sql: str, dry_run: bool = False) -> Dict[str, Any]`
+安全执行 SQL 查询（仅支持 SELECT）。
 
 **参数：**
 - `sql` (str): SQL 查询语句
-- `params` (Dict[str, Any]): 查询参数（可选）
+- `dry_run` (bool): 是否为模拟运行
 
 **返回：**
-- `List[Dict[str, Any]]`: 查询结果列表
+- `Dict[str, Any]`: 执行结果，包含：
+  - `success` (bool): 是否成功
+  - `data` (List[Dict]): 查询结果数据（成功时）
+  - `row_count` (int): 返回行数（成功时）
+  - `execution_time_ms` (int): 执行时间毫秒（成功时）
+  - `error` (str): 错误信息（失败时）
+  - `error_type` (str): 错误类型（失败时）
+
+**安全限制：**
+- 仅允许 SELECT 语句
+- 禁止危险关键词（DROP、DELETE、UPDATE 等）
+- 自动添加结果限制（默认 1000 行）
 
 **示例：**
 ```python
-# 无参数查询
-results = db_manager.execute_query("SELECT * FROM users LIMIT 10")
+# 执行查询
+result = db_manager.execute_sql_safe("SELECT * FROM users WHERE age > 18")
 
-# 参数化查询
-results = db_manager.execute_query(
-    "SELECT * FROM users WHERE age > :age",
-    params={"age": 18}
-)
+if result["success"]:
+    print(f"返回 {result['row_count']} 行")
+    for row in result["data"]:
+        print(row)
+else:
+    print(f"错误: {result['error']}")
 ```
 
-### `execute_command(sql: str, params: Dict[str, Any] = None) -> int`
-执行非查询命令（INSERT、UPDATE、DELETE）。
 
-**参数：**
-- `sql` (str): SQL 命令
-- `params` (Dict[str, Any]): 命令参数（可选）
-
-**返回：**
-- `int`: 影响的行数
 
 ### `test_connection() -> bool`
 测试数据库连接。
@@ -200,10 +204,11 @@ if db_manager.initialize():
         print(f"\n表 {table} 有 {len(info['columns'])} 列")
     
     # 执行查询
-    results = db_manager.execute_query(
+    result = db_manager.execute_sql_safe(
         "SELECT COUNT(*) as count FROM users"
     )
-    print(f"用户总数: {results[0]['count']}")
+    if result["success"]:
+        print(f"用户总数: {result['data'][0]['count']}")
     
     # 关闭连接
     db_manager.close()
@@ -258,12 +263,14 @@ with db_manager.session() as session:
 ### 错误处理示例
 ```python
 try:
-    results = db_manager.execute_query("SELECT * FROM users")
-except SQLAlchemyError as e:
-    logger.error(f"查询失败: {e}")
-    # 尝试重新连接
-    if not db_manager.test_connection():
-        db_manager.initialize()
+    result = db_manager.execute_sql_safe("SELECT * FROM users")
+    if not result["success"]:
+        logger.error(f"查询失败: {result['error']}")
+        # 尝试重新连接
+        if not db_manager.test_connection():
+            db_manager.initialize()
+except Exception as e:
+    logger.error(f"执行失败: {e}")
 ```
 
 ## 性能优化
@@ -281,12 +288,12 @@ config = DatabaseConfig(
 ### 2. 查询优化
 ```python
 # 使用 LIMIT 限制结果集
-results = db_manager.execute_query(
+result = db_manager.execute_sql_safe(
     "SELECT * FROM large_table LIMIT 1000"
 )
 
 # 只选择需要的列
-results = db_manager.execute_query(
+result = db_manager.execute_sql_safe(
     "SELECT id, name FROM users WHERE active = true"
 )
 ```
@@ -306,13 +313,11 @@ with db_manager.transaction() as conn:
 始终使用参数化查询防止 SQL 注入：
 ```python
 # 正确方式
-db_manager.execute_query(
-    "SELECT * FROM users WHERE id = :id",
-    params={"id": user_id}
-)
+sql = "SELECT * FROM users WHERE id = %s"  # 注意：execute_sql_safe 不支持参数化查询
+# 需要自行处理参数安全性
 
 # 错误方式（不要这样做）
-# db_manager.execute_query(f"SELECT * FROM users WHERE id = {user_id}")
+# db_manager.execute_sql_safe(f"SELECT * FROM users WHERE id = {user_id}")
 ```
 
 ### 2. 权限控制

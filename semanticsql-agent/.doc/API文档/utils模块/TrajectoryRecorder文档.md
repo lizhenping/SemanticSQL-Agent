@@ -80,66 +80,33 @@ def __init__(self, output_dir: str = "trajectories", max_trajectories: int = 100
 **返回：**
 - `Optional[AgentExecution]`: 执行记录对象，加载失败返回 None
 
-### `list_trajectories() -> List[Dict[str, Any]]`
-列出所有保存的轨迹。
-
-**返回：**
-```python
-[
-    {
-        "filename": "execution_20240101_100000_12345678.json",
-        "filepath": "/path/to/file",
-        "task_id": "12345678...",
-        "task": "任务描述",
-        "started_at": "2024-01-01T10:00:00",
-        "status": "completed",
-        "duration": 300.5
-    },
-    ...
-]
-```
-
-### `get_statistics() -> Dict[str, Any]`
-获取轨迹统计信息。
-
-**返回：**
-```python
-{
-    "total_trajectories": 50,
-    "successful_executions": 45,
-    "failed_executions": 5,
-    "average_duration": 150.3,
-    "average_steps": 8.5,
-    "most_used_tools": [
-        {"tool": "sql_generation", "count": 120},
-        {"tool": "sql_validation", "count": 100}
-    ],
-    "common_errors": [
-        {"error": "SQL syntax error", "count": 3}
-    ]
-}
-```
-
-### `search_trajectories(query: str = None, status: str = None, ...) -> List[Dict[str, Any]]`
-搜索轨迹。
+### `get_trajectories(limit: Optional[int] = None) -> List[str]`
+获取轨迹文件路径列表。
 
 **参数：**
-- `query` (str): 在任务描述中搜索的关键词
-- `status` (str): 按状态筛选（completed/failed）
-- `start_date` (datetime): 开始日期
-- `end_date` (datetime): 结束日期
+- `limit` (Optional[int]): 返回的最大数量
 
 **返回：**
-- 符合条件的轨迹列表
+- `List[str]`: 轨迹文件路径列表
 
-### `cleanup_old_trajectories(keep_days: int = 30) -> int`
-清理旧轨迹文件。
+### `get_trajectory_summary(filepath: str) -> Optional[Dict[str, Any]]`
+获取轨迹摘要信息。
 
 **参数：**
-- `keep_days` (int): 保留最近多少天的轨迹
+- `filepath` (str): 轨迹文件路径
 
 **返回：**
-- `int`: 删除的文件数量
+- `Optional[Dict[str, Any]]`: 轨迹摘要，失败返回 None
+
+### `export_trajectories(output_file: str, format: str = "json") -> bool`
+导出轨迹数据。
+
+**参数：**
+- `output_file` (str): 输出文件路径
+- `format` (str): 导出格式（目前仅支持 "json"）
+
+**返回：**
+- `bool`: 导出是否成功
 
 ## 内部方法
 
@@ -187,36 +154,24 @@ if loaded_execution:
 
 ### 轨迹分析
 ```python
-# 列出所有轨迹
-trajectories = recorder.list_trajectories()
-print(f"共有 {len(trajectories)} 个轨迹")
+# 获取轨迹列表
+trajectories = recorder.get_trajectories(limit=10)
+print(f"最近 {len(trajectories)} 个轨迹")
 
-# 获取统计信息
-stats = recorder.get_statistics()
-print(f"成功率: {stats['successful_executions'] / stats['total_trajectories']:.2%}")
-print(f"平均执行时间: {stats['average_duration']}秒")
+# 查看轨迹摘要
+for filepath in trajectories[:5]:
+    summary = recorder.get_trajectory_summary(filepath)
+    if summary:
+        print(f"任务: {summary.get('task', 'N/A')}")
+        print(f"状态: {summary.get('status', 'N/A')}")
 
-# 查看最常用的工具
-for tool_stat in stats['most_used_tools'][:5]:
-    print(f"{tool_stat['tool']}: {tool_stat['count']}次")
+# 导出轨迹
+success = recorder.export_trajectories("all_trajectories.json")
+if success:
+    print("轨迹导出成功")
 ```
 
-### 搜索和筛选
-```python
-from datetime import datetime, timedelta
 
-# 搜索包含特定关键词的轨迹
-sales_trajectories = recorder.search_trajectories(query="销售")
-
-# 查找失败的执行
-failed_trajectories = recorder.search_trajectories(status="failed")
-
-# 查找最近一周的轨迹
-recent_trajectories = recorder.search_trajectories(
-    start_date=datetime.now() - timedelta(days=7),
-    end_date=datetime.now()
-)
-```
 
 ### 轨迹回放
 ```python
@@ -288,17 +243,7 @@ prod_recorder = TrajectoryRecorder(
 )
 ```
 
-### 定期清理
-```python
-# 设置定期清理任务
-import schedule
 
-def cleanup_task():
-    deleted = recorder.cleanup_old_trajectories(keep_days=7)
-    logger.info(f"清理了 {deleted} 个旧轨迹")
-
-schedule.every().day.at("02:00").do(cleanup_task)
-```
 
 ## 性能考虑
 

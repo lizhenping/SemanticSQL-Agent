@@ -123,10 +123,7 @@ functions = [{
 - `assistant_prompt` (str): 助手提示（可选）
 - `history` (List[Dict]): 历史消息（可选）
 
-### `count_tokens(text: str) -> int`
-估算文本的 token 数。
 
-**注意：** 这是一个近似估算，实际 token 数可能有差异。
 
 ### `get_model_info() -> Dict[str, Any]`
 获取模型信息。
@@ -280,13 +277,13 @@ except Exception as e:
 
 ### 1. Token 管理
 ```python
-# 检查 token 数量
+# 注意：当前版本不包含 token 计数功能
+# 需要通过其他方式管理文本长度
 text = "很长的文本..."
-token_count = client.count_tokens(text)
 
-if token_count > 3000:
-    # 截断或总结文本
-    text = text[:3000]  # 简单截断
+# 简单的长度控制
+if len(text) > 10000:  # 字符数限制
+    text = text[:10000]
 ```
 
 ### 2. 缓存响应
