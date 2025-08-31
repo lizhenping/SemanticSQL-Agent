@@ -187,16 +187,13 @@ memory = {
 ### 3.6 工具类 (utils/)
 
 #### database.py
-- DatabaseManager: 统一的数据库访问接口
-- 支持多种数据库
+- DatabaseManager: MySQL 数据库访问接口
 - 连接池管理
 - 安全的SQL执行
 
 #### llm_client.py
 - 封装 OpenAI API 调用
 - 支持 Qwen 等兼容模型
-- 重试机制
-- 流式输出支持
 
 #### trajectory.py
 - 记录完整的执行历史
