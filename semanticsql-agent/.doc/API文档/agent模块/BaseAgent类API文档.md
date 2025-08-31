@@ -145,6 +145,30 @@ class BaseAgent(ABC):
 **返回：**
 - `Any`: 最终执行结果
 
+### `_debug_object_for_slices(self, obj: Any, path: str = "") -> None`
+调试对象切片（内部方法）。
+
+**参数：**
+- `obj` (Any): 要调试的对象
+- `path` (str): 对象路径
+
+**功能：**
+- 检查对象是否包含切片
+- 用于轨迹序列化调试
+
+### `_serialize_for_storage(self, obj: Any) -> Any`
+序列化对象用于存储（内部方法）。
+
+**参数：**
+- `obj` (Any): 要序列化的对象
+
+**返回：**
+- `Any`: 序列化后的对象
+
+**功能：**
+- 处理复杂对象的序列化
+- 确保可以JSON序列化
+
 ## 使用示例
 
 ```python

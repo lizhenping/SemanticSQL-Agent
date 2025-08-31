@@ -34,7 +34,9 @@ class SQLValidationTool(BaseTool):
     "valid": bool,               # 是否有效
     "errors": List[str],         # 错误列表
     "warnings": List[str],       # 警告列表
-    "suggestions": List[str]     # 改进建议
+    "suggestions": List[str],    # 改进建议
+    "formatted_sql": str,        # 格式化后的SQL
+    "metadata": Dict[str, Any]   # SQL元数据信息
 }
 ```
 
