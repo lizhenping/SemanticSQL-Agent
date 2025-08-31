@@ -75,7 +75,7 @@ semanticsql-agent/
 ├── agent/
 │   ├── __init__.py
 │   ├── base_agent.py           # 基础Agent（含执行流程控制和ReAct循环）
-│   └── sql_agent.py            # SQL智能体（支持单次查询和批量生成两种模式）
+│   └── sql_agent.py            # SQL智能体（单次查询生成）
 │
 ├── utils/
 │   ├── __init__.py
@@ -152,10 +152,8 @@ semanticsql-agent/
 #### sql_agent.py
 - 继承 BaseAgent，配置专门的 SQL 生成 Chain
 - 使用 `langchain.chains.LLMChain` 管理提示词
-- 支持两种模式：
-  - **查询模式**: 单个 Chain 执行
-  - **批量生成模式**: 使用 `langchain.chains.SequentialChain`
-- 集成 LangChain 的错误处理和重试机制
+- 使用单个 Chain 执行查询任务
+- 集成 LangChain 的错误处理机制
 
 ### 3.4 记忆管理（基于 LangChain Memory）
 

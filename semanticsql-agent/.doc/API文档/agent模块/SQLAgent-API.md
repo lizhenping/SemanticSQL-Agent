@@ -1,6 +1,6 @@
 # SQLAgent API 文档
 
-继承自 BaseAgent 的 SQL 生成智能体，支持单次查询和批量训练数据生成。
+继承自 BaseAgent 的 SQL 查询智能体，根据自然语言问题生成 SQL。
 
 ## 类定义
 
@@ -11,16 +11,13 @@ from semanticsql_agent.models import SQLQueryResult, TrainingDataResult
 
 class SQLAgent(BaseAgent):
     """
-    SQL 生成智能体
+    SQL 查询智能体
     
-    支持两种模式：
-    1. 查询模式：生成单个 SQL 查询
-    2. 批量生成模式：生成大量训练数据
+    根据自然语言问题生成对应的 SQL 查询。
     
     Attributes:
-        mode: 当前运行模式 ('query' 或 'batch')
         analysis_completed: 数据库分析是否完成
-        current_scenario: 当前处理的场景
+        memory: LangChain 记忆组件
     """
 ```
 
@@ -31,8 +28,7 @@ def __init__(
     self,
     config: Settings,
     db_config: DatabaseConfig,
-    callbacks: Optional[List[BaseCallbackHandler]] = None,
-    mode: str = "query"
+    callbacks: Optional[List[BaseCallbackHandler]] = None
 ):
     """
     初始化 SQL Agent
@@ -41,20 +37,21 @@ def __init__(
         config: 系统配置
         db_config: 数据库配置
         callbacks: 回调处理器列表
-        mode: 运行模式，'query' 或 'batch'
     
     Example:
         ```python
-        # 查询模式
-        agent = SQLAgent(config, db_config, mode="query")
+        from semanticsql_agent.agent import SQLAgent
+        from semanticsql_agent.config import Settings, DatabaseConfig
         
-        # 批量生成模式
-        agent = SQLAgent(
-            config, 
-            db_config, 
-            mode="batch",
-            callbacks=[ProgressCallback()]
+        config = Settings()
+        db_config = DatabaseConfig(
+            host="localhost",
+            database="test_db",
+            username="root",
+            password="password"
         )
+        
+        agent = SQLAgent(config, db_config)
         ```
     """
 ```
@@ -91,48 +88,7 @@ def query(self, question: str) -> SQLQueryResult:
     """
 ```
 
-### generate_training_data
 
-```python
-def generate_training_data(
-    self,
-    count: int,
-    output_file: str,
-    scenarios_per_batch: int = 10,
-    include_failed: bool = False
-) -> TrainingDataResult:
-    """
-    批量生成训练数据
-    
-    生成指定数量的 NL2SQL 训练样本。
-    
-    Args:
-        count: 生成数据条数
-        output_file: 输出文件路径（支持 .json, .jsonl）
-        scenarios_per_batch: 每批生成的场景数量
-        include_failed: 是否包含验证失败的样本
-    
-    Returns:
-        TrainingDataResult: 生成结果统计
-    
-    Raises:
-        InvalidConfigError: 配置无效
-        GenerationError: 生成过程失败
-    
-    Example:
-        ```python
-        result = agent.generate_training_data(
-            count=1000,
-            output_file="training_data.jsonl",
-            scenarios_per_batch=20
-        )
-        
-        print(f"Generated: {result.success_count}")
-        print(f"Failed: {result.failed_count}")
-        print(f"Total time: {result.total_time}s")
-        ```
-    """
-```
 
 ### _analyze_database
 
@@ -148,9 +104,7 @@ def _analyze_database(self) -> None:
     """
 ```
 
-## 模式特定方法
-
-### 查询模式方法
+## 辅助方法
 
 ```python
 def explain_sql(self, sql: str) -> str:
@@ -166,47 +120,17 @@ def explain_sql(self, sql: str) -> str:
         str: 自然语言解释
     """
 
-def optimize_sql(self, sql: str) -> str:
+def validate_sql(self, sql: str) -> Dict[str, Any]:
     """
-    优化 SQL 查询
+    验证 SQL 查询
     
-    分析并优化给定的 SQL 查询。
+    检查 SQL 语法和可执行性。
     
     Args:
-        sql: 原始 SQL 查询
+        sql: SQL 查询语句
     
     Returns:
-        str: 优化后的 SQL
-    """
-```
-
-### 批量生成模式方法
-
-```python
-def set_scenario_filter(self, filter_func: Callable[[QueryScenario], bool]) -> None:
-    """
-    设置场景过滤器
-    
-    只生成满足条件的场景数据。
-    
-    Args:
-        filter_func: 场景过滤函数
-    
-    Example:
-        ```python
-        # 只生成中等难度以上的场景
-        agent.set_scenario_filter(
-            lambda s: s.difficulty in ['medium', 'hard']
-        )
-        ```
-    """
-
-def get_generation_stats(self) -> Dict[str, Any]:
-    """
-    获取生成统计信息
-    
-    Returns:
-        Dict[str, Any]: 包含各类统计数据
+        Dict[str, Any]: 验证结果
     """
 ```
 
@@ -219,9 +143,7 @@ def get_system_prompt(self) -> str:
     """
     返回 SQL Agent 的系统提示词
     
-    根据运行模式返回不同的提示词：
-    - query 模式：专注于单个查询的准确性
-    - batch 模式：强调批量生成的多样性和质量
+    提示词专注于准确理解用户意图并生成正确的 SQL 查询。
     """
 ```
 
@@ -296,53 +218,20 @@ else:
     print(f"Results: {result.result}")
 ```
 
-### 批量生成
 
-```python
-# 创建批量生成 Agent
-agent = SQLAgent(config, db_config, mode="batch")
-
-# 自定义回调
-class GenerationProgress(BaseCallbackHandler):
-    def __init__(self):
-        self.count = 0
-    
-    def on_tool_end(self, output, **kwargs):
-        if "sql_generation" in str(output):
-            self.count += 1
-            if self.count % 10 == 0:
-                print(f"Generated {self.count} examples...")
-
-# 生成数据
-result = agent.generate_training_data(
-    count=500,
-    output_file="nl2sql_train.jsonl",
-    scenarios_per_batch=25
-)
-
-# 查看统计
-stats = agent.get_generation_stats()
-print(f"Difficulty distribution: {stats['difficulty_dist']}")
-print(f"Table coverage: {stats['table_coverage']}")
-```
 
 ### 高级用法
 
 ```python
-# 1. 自定义场景生成
-agent.set_scenario_filter(
-    lambda s: s.category in ['sales', 'customer'] and s.difficulty != 'easy'
-)
-
-# 2. 使用不同的 LLM 参数
+# 1. 使用不同的 LLM 参数
 agent.llm.temperature = 0.5  # 更确定的输出
 
-# 3. 访问记忆内容
+# 2. 访问记忆内容
 memory = agent.get_memory_state()
 schema = memory.get('schema_info')
 domain = memory.get('domain_analysis')
 
-# 4. 导出执行轨迹
+# 3. 导出执行轨迹
 trajectory = agent.agent_executor.memory.chat_memory.messages
 with open("execution_trace.json", "w") as f:
     json.dump([msg.dict() for msg in trajectory], f)
@@ -350,34 +239,28 @@ with open("execution_trace.json", "w") as f:
 
 ## 配置优化
 
-### 查询模式优化
+### 查询优化
 
 ```python
-# 优化单次查询
+# 优化查询性能
 agent = SQLAgent(
     config=Settings(
         llm_temperature=0.3,  # 低温度，更确定
         max_iterations=10,    # 减少迭代
         enable_reflection=False  # 关闭反思（提高速度）
     ),
-    db_config=db_config,
-    mode="query"
+    db_config=db_config
 )
-```
 
-### 批量生成优化
-
-```python
-# 优化批量生成
+# 或者启用反思以提高准确性
 agent = SQLAgent(
     config=Settings(
-        llm_temperature=0.7,  # 较高温度，增加多样性
-        max_iterations=20,    # 允许更多迭代
+        llm_temperature=0.5,
+        max_iterations=15,
         enable_reflection=True,  # 启用反思
         enable_thinking_tool=True  # 启用深度思考
     ),
-    db_config=db_config,
-    mode="batch"
+    db_config=db_config
 )
 ```
 
@@ -401,16 +284,15 @@ except SQLExecutionError as e:
 ## 性能考虑
 
 1. **记忆管理**：数据库分析结果自动保存在记忆中
-2. **批次大小**：合理设置 `scenarios_per_batch` 避免内存溢出
-3. **错误处理**：合理处理各种异常情况
+2. **错误处理**：合理处理各种异常情况
+3. **执行效率**：可通过关闭反思机制提高执行速度
 
 ## 注意事项
 
-1. 首次使用必须先调用 `analyze_database()`
-2. 批量生成模式下会自动管理记忆防止溢出
-3. 输出文件支持 `.json` 和 `.jsonl` 格式
-4. 生成的 SQL 都会经过验证和执行测试
-5. 支持中途恢复（通过轨迹文件）
+1. 首次查询会自动触发数据库分析
+2. 数据库分析结果会缓存在记忆中
+3. 生成的 SQL 都会经过验证
+4. 支持通过轨迹文件追踪执行过程
 
 ---
 
