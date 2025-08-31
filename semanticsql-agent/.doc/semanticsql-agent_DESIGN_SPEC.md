@@ -90,12 +90,25 @@ graph TB
     
     Reflect --> Judge{需要修正?}
     Judge -->|否| Save[保存训练数据]
-    Judge -->|是| ThinkFix[sequential_thinking<br/>分析修正策略]
+    Judge -->|是| ThinkFix[sequential_thinking<br/>分析问题源头]
     
-    ThinkFix --> FixType{修正类型}
-    FixType -->|操作选择问题| Operation
-    FixType -->|问题不清| Question
-    FixType -->|SQL错误| SQL
+    ThinkFix --> Analyze[分析每个步骤的执行结果<br/>定位问题出在哪一步]
+    
+    Analyze --> ReDo{重新执行出问题的步骤}
+    ReDo -->|操作选择有误| ReOperation[重新执行operation_selection]
+    ReDo -->|问题表述不当| ReQuestion[重新执行question_generation]
+    ReDo -->|SQL生成错误| ReSQL[重新执行sql_generation]
+    ReDo -->|记忆使用不当| ReMemory[重新执行该步骤<br/>确保使用正确的记忆]
+    
+    ReOperation --> Continue1[使用新操作继续流程]
+    ReQuestion --> Continue2[使用新问题继续流程]
+    ReSQL --> Continue3[使用新SQL继续流程]
+    ReMemory --> Continue4[使用改进结果继续流程]
+    
+    Continue1 --> Question
+    Continue2 --> SQL
+    Continue3 --> Validate
+    Continue4 --> NextStep[继续下一步]
     
     Save --> NextScenario{还有场景?}
     NextScenario -->|是| ScenarioLoop
