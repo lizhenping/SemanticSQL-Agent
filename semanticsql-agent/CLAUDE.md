@@ -8,7 +8,7 @@ SemanticSQL Agent is a natural language to SQL query system built with Python, r
 模型数据库配置是
 --model "Qwen3-14B"
 --api-key "not-needed"
---base-url "http://192.168.200.216:9009/v1"
+--base-url "http://192.168.200.216:9991/v1"
 --host "192.168.200.216" --port "13306" --user "testuser"
 --password "testpass" --database "testdb"
 generate --count "20" --output "test_ddd.json"
@@ -37,7 +37,7 @@ generate --count "20" --output "test_ddd.json"
 ### Database Management (`database/`)
 - **ConnectionManager**: Async database connection handling
 - Connection pooling and lifecycle management
-- Multi-database support (MySQL, PostgreSQL, SQLite)
+- Database support (MySQL)
 
 ## Development Commands
 
@@ -133,14 +133,12 @@ TraeConfig (root)
 
 ### Database Configuration
 - **MySQL**: `mysql+aiomysql://user:pass@host:port/db`
-- **PostgreSQL**: `postgresql+asyncpg://user:pass@host:port/db` 
-- **SQLite**: `sqlite+aiosqlite:///path/to/db`
 
 ### Environment Variables
 ```bash
 # LLM Settings
 LLM_MODEL=Qwen3-14B
-LLM_BASE_URL=http://192.168.200.216:9009/v1
+LLM_BASE_URL=http://192.168.200.216:9991/v1
 LLM_API_KEY=not-needed
 
 # Database Settings  
@@ -171,7 +169,7 @@ database:
 
 llm:
   model: "Qwen3-14B"
-  base_url: "http://192.168.200.216:9009/v1"
+  base_url: "http://192.168.200.216:9991/v1"
   api_key: "not-needed"
   temperature: 0.1
   max_tokens: 20000

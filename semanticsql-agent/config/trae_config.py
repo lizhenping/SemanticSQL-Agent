@@ -49,6 +49,20 @@ class DatabaseConfig:
         filtered_data = {k: v for k, v in data.items() if k in valid_fields}
         return cls(**filtered_data)
     
+    @classmethod
+    def from_env(cls) -> "DatabaseConfig":
+        """从环境变量创建配置"""
+        return cls(
+            type=os.getenv("DB_TYPE", "mysql"),
+            host=os.getenv("DB_HOST", "192.168.200.216"),
+            port=int(os.getenv("DB_PORT", "13306")),
+            database=os.getenv("DB_NAME", "testdb"),
+            username=os.getenv("DB_USER", "testuser"),
+            password=os.getenv("DB_PASSWORD", "testpass"),
+            connection_timeout=int(os.getenv("DB_CONNECTION_TIMEOUT", "30")),
+            pool_size=int(os.getenv("DB_POOL_SIZE", "5"))
+        )
+    
     def to_connection_string(self) -> str:
         """生成数据库连接字符串"""
         if self.type == DatabaseType.MYSQL.value:
@@ -67,12 +81,19 @@ class DatabaseConfig:
 class LLMConfig:
     """LLM配置"""
     model: str = "Qwen3-14B"
-    base_url: str = "http://localhost:9009/v1"
+    base_url: str = "http://localhost:9991/v1"
     api_key: str = "not-needed"
     temperature: float = 0.1
     max_tokens: int = 6000
     timeout: int = 30
     max_retries: int = 3
+    
+    # 额外的LLM参数
+    top_p: float = 0.9
+    frequency_penalty: float = 0.0
+    presence_penalty: float = 0.0
+    retry_times: int = 3
+    retry_delay: int = 1
     
     # OpenAI特定配置
     organization: Optional[str] = None
@@ -81,14 +102,17 @@ class LLMConfig:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "LLMConfig":
         """从字典创建配置"""
-        return cls(**data)
+        # 过滤掉dataclass中不存在的字段
+        valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        filtered_data = {k: v for k, v in data.items() if k in valid_fields}
+        return cls(**filtered_data)
     
     @classmethod
     def from_env(cls) -> "LLMConfig":
         """从环境变量创建配置"""
         return cls(
             model=os.getenv("LLM_MODEL", "Qwen3-14B"),
-            base_url=os.getenv("LLM_BASE_URL", "http://localhost:9009/v1"),
+            base_url=os.getenv("LLM_BASE_URL", "http://localhost:9991/v1"),
             api_key=os.getenv("LLM_API_KEY", "not-needed"),
             temperature=float(os.getenv("LLM_TEMPERATURE", "0.1")),
             max_tokens=int(os.getenv("LLM_MAX_TOKENS", "20000")),
@@ -125,7 +149,10 @@ class AgentConfig:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "AgentConfig":
         """从字典创建配置"""
-        return cls(**data)
+        # 过滤掉dataclass中不存在的字段
+        valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        filtered_data = {k: v for k, v in data.items() if k in valid_fields}
+        return cls(**filtered_data)
 
 
 @dataclass
@@ -140,7 +167,10 @@ class LoggingConfig:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "LoggingConfig":
         """从字典创建配置"""
-        return cls(**data)
+        # 过滤掉dataclass中不存在的字段
+        valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        filtered_data = {k: v for k, v in data.items() if k in valid_fields}
+        return cls(**filtered_data)
 
 
 @dataclass
@@ -156,7 +186,10 @@ class TrajectoryConfig:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "TrajectoryConfig":
         """从字典创建配置"""
-        return cls(**data)
+        # 过滤掉dataclass中不存在的字段
+        valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        filtered_data = {k: v for k, v in data.items() if k in valid_fields}
+        return cls(**filtered_data)
 
 
 @dataclass
@@ -209,7 +242,40 @@ class TraeConfig:
         """从YAML文件创建配置"""
         with open(yaml_path, 'r', encoding='utf-8') as f:
             data = yaml.safe_load(f) or {}
+        
+        # 处理环境变量替换
+        data = cls._replace_env_vars(data)
+        
+        # 处理app级别配置
+        if "app" in data:
+            app_config = data.pop("app")
+            data["app_name"] = app_config.get("name", "SemanticSQLAgent")
+            data["app_version"] = app_config.get("version", "2.0.0")
+            data["environment"] = app_config.get("environment", "development")
+        
         return cls.from_dict(data)
+    
+    @staticmethod
+    def _replace_env_vars(data: Any) -> Any:
+        """递归替换环境变量"""
+        import re
+        if isinstance(data, dict):
+            return {k: TraeConfig._replace_env_vars(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [TraeConfig._replace_env_vars(v) for v in data]
+        elif isinstance(data, str):
+            # 支持 ${VAR_NAME:-default_value} 格式
+            pattern = r'\$\{([^}]+)\}'
+            def replacer(match):
+                var_expr = match.group(1)
+                if ':-' in var_expr:
+                    var_name, default_value = var_expr.split(':-', 1)
+                    return os.getenv(var_name, default_value)
+                else:
+                    return os.getenv(var_expr, match.group(0))
+            return re.sub(pattern, replacer, data)
+        else:
+            return data
     
     @classmethod
     def from_env(cls) -> "TraeConfig":
@@ -249,7 +315,7 @@ class TraeConfig:
         """转换为字典"""
         return {
             "llm": self.llm.__dict__,
-            "database": self.database.to_dict(),
+            "database": self.database.__dict__,
             "agent": self.agent.__dict__,
             "logging": self.logging.__dict__,
             "trajectory": self.trajectory.__dict__,
@@ -285,7 +351,8 @@ class TraeConfig:
             return True
             
         except Exception as e:
-            self.logger.error(f"配置验证失败: {e}")
+            import logging
+            logging.error(f"配置验证失败: {e}")
             return False
 
 
@@ -293,7 +360,7 @@ class TraeConfig:
 DEFAULT_CONFIG_TEMPLATE = {
     "llm": {
         "model": "Qwen3-14B",
-        "base_url": "http://192.168.200.216:9009/v1",
+        "base_url": "http://192.168.200.216:9991/v1",
         "api_key": "not-needed",
         "temperature": 0.1,
         "max_tokens": 20000,

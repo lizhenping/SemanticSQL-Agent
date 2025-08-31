@@ -175,7 +175,7 @@ class SemanticSQLAgent:
 model:
   name: "Qwen3-14B"
   provider: "openai"
-  base_url: "http://192.168.200.216:9009/v1"
+  base_url: "http://192.168.200.216:9991/v1"
   temperature: 0.1
 
 database:

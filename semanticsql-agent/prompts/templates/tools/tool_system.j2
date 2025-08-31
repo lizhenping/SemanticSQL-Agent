@@ -1,0 +1,35 @@
+# Tool System Prompt for {{ tool_name }}
+
+## Tool: {{ tool_name }}
+**Description**: {{ tool_description }}
+
+## Purpose
+{{ tool_purpose }}
+
+## Input Parameters
+{% for param in parameters %}
+- **{{ param.name }}** ({{ param.type }}): {{ param.description }}
+  {% if param.required %}*Required*{% else %}*Optional*{% endif %}
+  {% if param.default %}Default: {{ param.default }}{% endif %}
+{% endfor %}
+
+## Output Format
+```json
+{
+  "success": boolean,
+  "data": {{ output_schema }},
+  "error": "string (if failed)",
+  "metadata": {}
+}
+```
+
+## Guidelines
+{% for guideline in guidelines %}
+- {{ guideline }}
+{% endfor %}
+
+## Example Usage
+```
+Input: {{ example_input }}
+Output: {{ example_output }}
+```

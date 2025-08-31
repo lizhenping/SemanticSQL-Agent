@@ -32,7 +32,7 @@ touch semanticsql-agent/{__init__.py,cli.py}
 model:
   name: "Qwen3-14B"
   provider: "openai"
-  base_url: "http://192.168.200.216:9009/v1"
+  base_url: "http://192.168.200.216:9991/v1"
   api_key: "not-needed"  # vLLM 不需要 API key
   temperature: 0.1
   max_tokens: 2000
@@ -827,7 +827,7 @@ python cli.py -c custom_config.yaml
 python -m vllm.entrypoints.openai.api_server \
     --model Qwen/Qwen3-14B \
     --host 0.0.0.0 \
-    --port 9009
+    --port 9991
 ```
 
 ### 5.2 数据库权限
