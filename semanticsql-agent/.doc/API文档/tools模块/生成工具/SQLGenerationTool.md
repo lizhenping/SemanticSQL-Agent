@@ -82,18 +82,12 @@ def _run(
         ```python
         {
             "sql": "SELECT COUNT(*) FROM orders WHERE status = 'completed'",
-            "confidence": 0.95,
+            "dialect": "mysql",
             "tables_used": ["orders"],
-            "columns_used": ["status"],
-            "sql_type": "SELECT",
-            "complexity": "simple",
-            "explanation": "统计已完成订单的数量",
-            "alternatives": [  # 可选的替代 SQL
-                {
-                    "sql": "SELECT COUNT(id) FROM orders WHERE status = 'completed'",
-                    "reason": "明确指定计数列可能更高效"
-                }
-            ]
+            "operations_used": ["SELECT", "WHERE", "COUNT"],
+            "has_aggregation": true,
+            "has_join": false,
+            "complexity": "simple"
         }
         ```
     """

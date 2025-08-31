@@ -134,32 +134,17 @@ def generate_training_data(
     """
 ```
 
-### analyze_database
+### _analyze_database
 
 ```python
-def analyze_database(self, force: bool = False) -> Dict[str, Any]:
+def _analyze_database(self) -> None:
     """
-    分析数据库
+    内部方法：分析数据库
     
     执行完整的数据库分析流程，结果保存在记忆中。
-    
-    Args:
-        force: 是否强制重新分析（忽略已有分析结果）
-    
-    Returns:
-        Dict[str, Any]: 分析结果摘要
-    
-    Example:
-        ```python
-        # 首次分析
-        analysis = agent.analyze_database()
-        
-        # 强制重新分析
-        analysis = agent.analyze_database(force=True)
-        
-        print(f"Tables: {len(analysis['tables'])}")
-        print(f"Domain: {analysis['domain']}")
-        ```
+    该方法在第一次 query 或 generate_training_data 时自动调用。
+
+
     """
 ```
 
@@ -415,10 +400,9 @@ except SQLExecutionError as e:
 
 ## 性能考虑
 
-1. **缓存分析结果**：数据库分析结果自动缓存在记忆中
+1. **记忆管理**：数据库分析结果自动保存在记忆中
 2. **批次大小**：合理设置 `scenarios_per_batch` 避免内存溢出
-3. **并行处理**：批量生成时可并行验证多个 SQL
-4. **LLM 缓存**：启用 LangChain 缓存减少重复调用
+3. **错误处理**：合理处理各种异常情况
 
 ## 注意事项
 
