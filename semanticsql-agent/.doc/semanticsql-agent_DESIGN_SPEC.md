@@ -98,7 +98,7 @@ graph TB
     ReDo -->|操作选择有误| ReOperation[重新执行operation_selection]
     ReDo -->|问题表述不当| ReQuestion[重新执行question_generation]
     ReDo -->|SQL生成错误| ReSQL[重新执行sql_generation]
-    ReDo -->|记忆使用不当| ReMemory[重新执行该步骤<br/>确保使用正确的记忆]
+    ReDo -->|记忆使用不当| ReMemory[重新执行当前步骤<br/>正确使用数据库分析记忆]
     
     ReOperation --> Continue1[使用新操作继续流程]
     ReQuestion --> Continue2[使用新问题继续流程]
@@ -196,7 +196,14 @@ SQL反思分析
             ├─ 如果是操作选择问题 → 只重新执行操作选择
             ├─ 如果是问题表述问题 → 只重新生成问题  
             ├─ 如果是SQL生成问题 → 只重新生成SQL
-            └─ 如果是记忆使用问题 → 重新执行该步骤，更好地利用已有记忆
+            └─ 如果是记忆使用问题 → 重新执行当前步骤，正确引用数据库分析记忆
+                    ↓
+            注意：不是重新执行数据库分析工具
+            而是确保当前步骤正确使用了已有的分析结果：
+            - schema_info（来自extract_schema）
+            - domain_analysis（来自domain_analysis）  
+            - field_classification（来自field_classification）
+            - er_analysis（来自er_analysis）
                     ↓
             使用新结果继续后续步骤
 ```
@@ -275,18 +282,44 @@ sql_reflection 发现问题
 ```
 
 **问题源头分析示例**：
+
+示例1 - SQL生成错误：
 ```python
-# SQL执行失败，反思分析过程
 reflection_analysis = {
     "执行错误": "Table 'orders' doesn't exist",
     "步骤分析": {
         "SQL生成": "使用了orders表，但schema中只有order_info表",
         "问题生成": "问题中提到'订单'，正确",
-        "数据库记忆": "schema中确实没有orders表，只有order_info"
+        "记忆检查": "memory['schema_info']中确实只有order_info表"
     },
-    "问题源头": "SQL生成步骤 - 表名映射错误",
-    "修正方案": "重新执行SQL生成，正确使用order_info表名"
+    "问题源头": "SQL生成步骤 - 没有正确使用schema_info",
+    "修正方案": "重新执行sql_generation，确保使用memory['schema_info']中的正确表名"
 }
+```
+
+示例2 - 记忆使用不当：
+```python
+reflection_analysis = {
+    "执行结果": "SQL执行成功但结果不合理",
+    "步骤分析": {
+        "SQL": "SELECT * FROM users WHERE status = 'active'",
+        "问题": "查询所有有效用户",
+        "记忆检查": {
+            "field_classification": "status字段被分类为'状态码'，值为0/1",
+            "domain_analysis": "该系统使用数字表示状态"
+        }
+    },
+    "问题源头": "SQL生成时没有参考field_classification的字段类型信息",
+    "修正方案": "重新执行sql_generation，使用field_classification理解status字段"
+}
+
+# 修正执行
+new_sql = sql_generation(
+    question="查询所有有效用户",
+    schema_info=memory["schema_info"],
+    field_info=memory["field_classification"]  # 确保使用字段分类信息
+)
+# 结果：SELECT * FROM users WHERE status = 1
 ```
 
 **核心特点**：
