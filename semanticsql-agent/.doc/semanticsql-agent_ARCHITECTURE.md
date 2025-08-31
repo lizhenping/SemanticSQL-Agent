@@ -40,6 +40,8 @@ semanticsql-agent/
 │   │   ├── schema_extraction_tool.py    # 数据库结构提取
 │   │   ├── domain_analysis_tool.py      # 业务领域分析
 │   │   ├── field_classification_tool.py # 字段语义分类
+│   │   ├── column_meaning_tool.py       # 列业务含义分析
+│   │   ├── table_meaning_tool.py        # 表业务含义分析
 │   │   └── er_analysis_tool.py          # 实体关系分析
 │   │
 │   ├── generation_tools/        # 生成工具
@@ -96,9 +98,9 @@ semanticsql-agent/
 - 支持多环境配置（开发、测试、生产）
 
 #### database.py
-- 数据库连接配置，支持 MySQL、PostgreSQL、SQLite
+- 数据库连接配置，专注于 MySQL
 - 连接池管理
-- 统一的数据库类型枚举
+- 数据库连接参数管理
 
 ### 3.2 工具系统 (tools/)
 
@@ -113,8 +115,10 @@ semanticsql-agent/
 
 **分析工具** (analysis_tools/)
 - **schema_extraction_tool**: 提取表结构、列信息、约束
-- **domain_analysis_tool**: 识别业务领域特征
-- **field_classification_tool**: 字段语义分类（ID、时间、金额等）
+- **domain_analysis_tool**: 识别业务领域特征（电商、金融、医疗等）
+- **field_classification_tool**: 字段语义分类（ID、时间、金额、状态等）
+- **column_meaning_tool**: 分析列的业务含义和用途
+- **table_meaning_tool**: 分析表的业务含义和职责
 - **er_analysis_tool**: 分析表关系（主外键、隐式关联）
 - 特点：可重新执行，结果更新到记忆模块
 
@@ -156,10 +160,12 @@ semanticsql-agent/
 存储和管理数据库分析结果：
 ```python
 memory = {
-    "schema_info": {},        # 数据库结构
-    "domain_analysis": {},    # 领域分析
-    "field_classification": {}, # 字段分类
-    "er_analysis": {}         # 关系分析
+    "schema_info": {},           # 数据库结构
+    "domain_analysis": {},       # 领域分析
+    "field_classification": {},  # 字段分类
+    "column_meanings": {},       # 列业务含义
+    "table_meanings": {},        # 表业务含义
+    "er_analysis": {}           # 关系分析
 }
 ```
 - 初始执行时填充
@@ -223,11 +229,13 @@ memory = {
     ↓
 sequential_thinking（规划执行策略）
     ↓
-执行四个分析工具：
-├─ extract_schema → 记忆模块
-├─ domain_analysis → 记忆模块
-├─ field_classification → 记忆模块
-└─ er_analysis → 记忆模块
+按顺序执行分析工具：
+1. extract_schema → 记忆模块（提取基础结构）
+2. domain_analysis → 记忆模块（识别业务领域）
+3. field_classification → 记忆模块（字段语义分类）
+4. column_meaning → 记忆模块（分析列业务含义）
+5. table_meaning → 记忆模块（分析表业务职责）
+6. er_analysis → 记忆模块（分析表间关系）
 ```
 
 ### 4.3 批量生成流程
@@ -248,6 +256,11 @@ scenario_tool（批量生成N个场景）
             ↓
        定位问题源头：
        ├─ 数据库分析有误 → 重新执行相应分析工具 → 更新记忆
+       │   ├─ 领域理解错误 → 重新执行 domain_analysis
+       │   ├─ 字段分类错误 → 重新执行 field_classification
+       │   ├─ 列含义错误 → 重新执行 column_meaning
+       │   ├─ 表含义错误 → 重新执行 table_meaning
+       │   └─ 关系理解错误 → 重新执行 er_analysis
        ├─ 问题生成有误 → 重新执行 question_generation
        └─ SQL生成有误 → 重新执行 sql_generation
 ```

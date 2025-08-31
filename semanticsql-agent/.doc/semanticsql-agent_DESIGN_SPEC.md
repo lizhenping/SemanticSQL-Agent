@@ -34,7 +34,7 @@ SemanticSQL Agent 是一个基于 ReAct 智能体架构的 **NL2SQL 训练数据
 
 **执行时机**：任务开始时执行一次，结果保存在Agent记忆中供全程使用
 
-**分析工具链**：
+**分析工具链（按推荐执行顺序）**：
 1. **extract_schema**：提取数据库物理结构
    - 表结构、列信息、数据类型
    - 主键、外键、索引信息
@@ -52,7 +52,17 @@ SemanticSQL Agent 是一个基于 ReAct 智能体架构的 **NL2SQL 训练数据
    - 分类字段（状态、类型、级别）
    - 描述字段（名称、备注、说明）
 
-4. **er_analysis**：实体关系分析
+4. **column_meaning**：列业务含义分析
+   - 分析每个列在业务中的具体作用
+   - 识别关键业务字段（如订单金额、用户等级）
+   - 理解列值的业务规则和约束
+
+5. **table_meaning**：表业务含义分析
+   - 分析每个表的业务职责和功能
+   - 识别核心业务表（如用户表、订单表）
+   - 理解表在业务流程中的位置
+
+6. **er_analysis**：实体关系分析
    - 显式关系（外键约束）
    - 隐式关系（命名规律推断）
    - 关系类型（一对一、一对多、多对多）
@@ -75,7 +85,9 @@ graph TB
     Analyze --> Schema[extract_schema<br/>提取数据库结构]
     Schema --> Domain[domain_analysis<br/>识别业务领域]
     Domain --> Field[field_classification<br/>字段语义分类]
-    Field --> ER[er_analysis<br/>分析表关系]
+    Field --> ColMean[column_meaning<br/>分析列业务含义]
+    ColMean --> TabMean[table_meaning<br/>分析表业务职责]
+    TabMean --> ER[er_analysis<br/>分析表关系]
     ER --> Memory[(记忆存储<br/>分析结果)]
     
     Memory --> ScenarioBatch[scenario_generation<br/>批量生成N个场景<br/>基于预定义模板]
@@ -159,6 +171,8 @@ graph TB
     ├─ extract_schema → 表结构信息 → 记忆模块
     ├─ domain_analysis → 业务领域理解 → 记忆模块
     ├─ field_classification → 字段语义分类 → 记忆模块
+    ├─ column_meaning → 列业务含义 → 记忆模块
+    ├─ table_meaning → 表业务职责 → 记忆模块
     └─ er_analysis → 表关系信息 → 记忆模块
             ↓
 场景批量生成（基于预定义模板）
@@ -190,6 +204,8 @@ SQL反思分析
             │  ├─ schema理解错误 → 重新执行extract_schema
             │  ├─ 领域理解偏差 → 重新执行domain_analysis
             │  ├─ 字段分类错误 → 重新执行field_classification
+            │  ├─ 列含义理解错误 → 重新执行column_meaning
+            │  ├─ 表职责理解错误 → 重新执行table_meaning
             │  └─ 关系分析不足 → 重新执行er_analysis
             │           ↓
             │      更新记忆模块中对应的分析结果
@@ -325,7 +341,7 @@ new_sql = sql_generation(
 
 | 工具类别 | 工具名称 | 执行次数 | 使用时机 | 说明 |
 |---------|---------|---------|---------|------|
-| 分析工具 | extract_schema<br>domain_analysis<br>field_classification<br>er_analysis | 一次 | 任务开始时 | 结果保存在记忆中 |
+| 分析工具 | extract_schema<br>domain_analysis<br>field_classification<br>column_meaning<br>table_meaning<br>er_analysis | 初始一次 | 任务开始时 | 结果保存在记忆中，必要时可重新执行 |
 | 生成工具 | scenario_generation | 多批次 | 每批生成N个场景 | 基于预定义模板批量生成 |
 | 生成工具 | operation_selection | 每场景一次 | 为每个场景选择SQL操作 | 根据场景复杂度选择 |
 | 生成工具 | question_generation<br>sql_generation | 每场景多次 | 基于场景和操作生成 | 可能因反思而重新生成 |
@@ -463,10 +479,32 @@ if reflection["needs_revision"]:
             # 更新记忆模块
             memory["field_classification"] = new_field_analysis["data"]
             
+        elif fix_strategy["analysis_type"] == "column_meaning":
+            # 例如：列业务含义理解错误
+            new_column_meaning = column_meaning_tool.run(
+                schema_info=memory["schema_info"],
+                domain_info=memory["domain_analysis"],
+                focus_columns=fix_strategy["target_columns"]
+            )
+            # 更新记忆模块
+            memory["column_meanings"] = new_column_meaning["data"]
+            
+        elif fix_strategy["analysis_type"] == "table_meaning":
+            # 例如：表业务职责理解错误
+            new_table_meaning = table_meaning_tool.run(
+                schema_info=memory["schema_info"],
+                domain_info=memory["domain_analysis"],
+                column_meanings=memory["column_meanings"],
+                focus_tables=fix_strategy["target_tables"]
+            )
+            # 更新记忆模块
+            memory["table_meanings"] = new_table_meaning["data"]
+            
         elif fix_strategy["analysis_type"] == "er_analysis":
             # 例如：表关系分析不完整
             new_er_analysis = er_analysis_tool.run(
                 schema_info=memory["schema_info"],
+                table_meanings=memory["table_meanings"],
                 focus_tables=fix_strategy["target_tables"]
             )
             # 更新记忆模块
@@ -482,16 +520,74 @@ if reflection["needs_revision"]:
 - 记忆模块是动态的，可以被更新和改进
 - 所有后续步骤都使用记忆模块中的最新数据
 
-### 2.2 数据生成规范
+### 2.2 分析工具详细说明
 
-#### 2.2.1 场景类型
+#### 2.2.1 列业务含义分析工具（column_meaning）
+
+**功能定位**：
+- 深入理解每个列在业务中的具体含义和作用
+- 识别列的业务规则、取值范围、业务约束
+- 为后续的问题生成和SQL生成提供列级别的业务理解
+
+**输入依赖**：
+- `schema_info`：基础的表结构信息
+- `domain_analysis`：业务领域信息，帮助理解业务上下文
+- `field_classification`：字段分类结果，了解字段的基本类型
+
+**分析内容**：
+1. **业务含义识别**：
+   - 订单金额列 → 记录每笔订单的总金额，包含税费
+   - 用户等级列 → 表示用户的会员等级（普通/银牌/金牌/钻石）
+   - 创建时间列 → 记录数据首次创建的时间戳
+
+2. **业务规则推断**：
+   - 状态列的有效值（如：待支付/已支付/已取消/已退款）
+   - 金额列的取值范围（如：必须大于0）
+   - 日期列的有效范围（如：不能早于系统上线日期）
+
+3. **列间关系理解**：
+   - 订单总额 = 商品金额 + 运费 - 优惠金额
+   - 更新时间必须晚于或等于创建时间
+
+#### 2.2.2 表业务含义分析工具（table_meaning）
+
+**功能定位**：
+- 理解每个表在整个业务系统中的职责和定位
+- 识别核心业务表、辅助表、字典表等不同类型
+- 为场景生成提供表级别的业务理解
+
+**输入依赖**：
+- `schema_info`：基础的表结构信息
+- `domain_analysis`：业务领域信息
+- `column_meanings`：列的业务含义，帮助理解表的整体职责
+
+**分析内容**：
+1. **表职责识别**：
+   - 用户表：存储系统所有注册用户的基本信息和状态
+   - 订单表：记录所有交易订单的详细信息
+   - 商品表：维护商品目录和库存信息
+
+2. **表类型分类**：
+   - 核心业务表：用户表、订单表、商品表
+   - 关系表：用户收藏表、购物车表
+   - 字典表：地区表、分类表、配置表
+   - 日志表：操作日志表、登录日志表
+
+3. **表在业务流程中的位置**：
+   - 上游表：基础数据表（用户、商品）
+   - 中游表：交易过程表（购物车、订单）
+   - 下游表：结果数据表（评价、售后）
+
+### 2.3 数据生成规范
+
+#### 2.3.1 场景类型
 - **基础查询**：单表查询、条件筛选
 - **关联查询**：多表 JOIN、子查询
 - **聚合统计**：GROUP BY、聚合函数
 - **时间分析**：时间范围、趋势分析
 - **复杂查询**：窗口函数、CTE、复杂条件
 
-#### 2.2.2 难度分布
+#### 2.3.2 难度分布
 ```yaml
 difficulty_distribution:
   easy: 30%    # 基础单表查询
@@ -500,7 +596,7 @@ difficulty_distribution:
   expert: 20%    # 专家级别查询和高级特性
 ```
 
-#### 2.2.3 质量标准
+#### 2.3.3 质量标准
 - SQL 语法必须正确
 - 问题表述自然流畅
 - SQL 与问题语义匹配
@@ -742,7 +838,7 @@ semanticsql-agent generate [OPTIONS]
 Options:
   --config PATH           配置文件路径
   --count INTEGER        生成数据条数 [default: 100]
-  --db-type TEXT         数据库类型 [mysql|postgresql|sqlite]
+  --db-type TEXT         数据库类型 [mysql]
   --host TEXT            数据库主机
   --port INTEGER         数据库端口
   --database TEXT        数据库名称
