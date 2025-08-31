@@ -101,7 +101,7 @@ class Settings(BaseSettings):
     
     # LLM配置
     llm_model: str = "Qwen3-14B"
-    llm_base_url: str = "http://localhost:9009/v1"
+    llm_base_url: str = "http://localhost:9991/v1"
     llm_api_key: str = "not-needed"
     llm_temperature: float = 0.7
     
@@ -119,7 +119,7 @@ from pydantic import BaseModel
 
 class DatabaseConfig(BaseModel):
     """数据库配置"""
-    type: str  # mysql/postgresql/sqlite
+    type: str  # mysql
     host: str
     port: int
     database: str
@@ -565,62 +565,287 @@ class SQLAgent:
 
 ## 4. 执行流程
 
-### 4.1 完整流程图
+### 4.1 智能体驱动流程图
 ```
-数据库连接
+用户任务："生成N条训练数据"
     ↓
-┌─────────────────────────┐
-│      分析阶段           │
-├─────────────────────────┤
-│ 1. 结构提取             │
-│ 2. 领域分析             │
-│ 3. 字段分类             │
-│ 4. 关系分析             │
-└───────────┬─────────────┘
-            ↓
-┌─────────────────────────┐
-│      生成阶段           │
-├─────────────────────────┤
-│ 5. 场景生成             │
-│ 6. 问题生成             │
-│ 7. SQL生成(一步)        │
-└───────────┬─────────────┘
-            ↓
-┌─────────────────────────┐
-│    验证反思阶段         │
-├─────────────────────────┤
-│ 8. SQL验证              │
-│ 9. SQL执行              │
-│ 10. 执行反思            │
-│ 11. SQL优化             │
-└───────────┬─────────────┘
-            ↓
-        输出训练数据
+┌─────────────────────────────────────┐
+│          ReAct 智能决策循环          │
+├─────────────────────────────────────┤
+│ Agent Thought: "我需要先了解数据库"  │
+│ Agent Action: extract_schema        │
+│ Agent Observation: [数据库结构]     │
+│ ├─────────────────────────────────  │
+│ Agent Thought: "分析业务领域特征"   │
+│ Agent Action: domain_analysis       │
+│ Agent Observation: [领域信息]       │
+│ ├─────────────────────────────────  │
+│ Agent Thought: "现在生成查询场景"   │
+│ Agent Action: scenario_generation   │
+│ Agent Observation: [业务场景]       │
+│ ├─────────────────────────────────  │
+│ Agent Thought: "为场景生成问题"     │
+│ Agent Action: question_generation   │
+│ Agent Observation: [自然语言问题]   │
+│ ├─────────────────────────────────  │
+│ Agent Thought: "生成对应的SQL"      │
+│ Agent Action: sql_generation        │
+│ Agent Observation: [SQL查询]        │
+│ ├─────────────────────────────────  │
+│ Agent Thought: "执行SQL验证"        │
+│ Agent Action: sql_execution         │
+│ Agent Observation: [执行结果]       │
+│ ├─────────────────────────────────  │
+│ Agent Thought: "反思结果质量"       │
+│ Agent Action: sql_reflection        │
+│ Agent Observation: [反思分析]       │
+│ ├─────────────────────────────────  │
+│ Agent Thought: "继续生成更多..."    │
+│ [重复上述循环直到完成N条数据]        │
+│ ├─────────────────────────────────  │
+│ Agent Thought: "任务完成，输出数据" │
+│ Agent Action: finish                │
+└─────────────────────────────────────┘
+                ↓
+        输出训练数据文件
 ```
 
-### 4.2 工具调用顺序
+### 4.2 智能体自主决策特点
+
+#### 动态策略调整
+- **数据库复杂度适应**：Agent根据表的数量和复杂度调整生成策略
+- **领域特征识别**：自动识别业务特征，生成相关场景
+- **质量反馈循环**：根据执行结果自主决定是否重新生成
+
+#### 智能工具协调
+```
+Agent思考："这个数据库是电商领域的，我应该生成订单、用户、商品相关的查询场景"
+↓
+Agent行动：scenario_generation(domain="ecommerce", focus="orders,users,products")
+↓
+Agent观察：生成了10个电商场景
+↓
+Agent思考："现在为每个场景生成多样化的问题"
+↓
+Agent行动：question_generation(scenarios=scenarios, variety=high)
+...
+```
+
+#### 执行后反思机制
+```
+Agent执行SQL → 获得结果 → 自主分析：
+- 执行时间是否合理？
+- 结果集大小是否适中？
+- SQL复杂度是否匹配问题？
+- 是否需要优化或重新生成？
+```
+
+### 4.2 执行流程详解
+
+#### 阶段一：数据库智能分析（1-4步）
+**目标**：全面理解数据库结构和业务特征
+
+1. **extract_schema**：提取完整的数据库结构
+   - 表信息：表名、列定义、主键、外键、索引
+   - 约束信息：NOT NULL、UNIQUE、CHECK约束
+   - 统计信息：表行数、列分布、数据类型分布
+
+2. **domain_analysis**：识别业务领域
+   - 基于表名模式识别（如：user_*, order_*, product_*）
+   - 基于字段名语义识别（如：price → 电商，patient_id → 医疗）
+   - 返回领域标签和置信度
+
+3. **field_classification**：字段语义分类
+   - 标识符字段：ID、编号、代码类
+   - 时间字段：创建时间、更新时间、业务时间
+   - 数值字段：金额、数量、得分、比率
+   - 分类字段：状态、类型、级别
+   - 描述字段：名称、描述、备注
+
+4. **er_analysis**：实体关系分析
+   - 显式关系：基于外键约束
+   - 隐式关系：基于命名模式推断
+   - 关系类型：一对一、一对多、多对多
+   - 关系强度：强关系、弱关系
+
+#### 阶段二：场景化数据生成（5-8步）
+**目标**：基于分析结果生成多样化的查询场景和问题
+
+5. **scenario_generation**：业务场景生成
+   - 基于领域选择场景模板
+   - 根据表关系生成关联场景
+   - 按难度分布生成不同复杂度场景
+
+6. **operation_selection**：SQL操作类型选择
+   - 基础查询：SELECT、WHERE、ORDER BY
+   - 关联查询：JOIN、子查询
+   - 聚合查询：GROUP BY、聚合函数
+   - 高级查询：窗口函数、CTE、UNION
+
+7. **question_generation**：自然语言问题生成
+   - 基于场景模板生成问题变体
+   - 确保问题表述自然流畅
+   - 涵盖不同问题类型和表达方式
+
+8. **sql_generation**：对应SQL查询生成
+   - 一步到位生成完整SQL
+   - 确保SQL与问题语义完全匹配
+   - 考虑数据库特定语法
+
+#### 阶段三：质量验证与优化（9-12步）
+**目标**：确保生成数据的正确性和高质量
+
+9. **sql_validation**：SQL语法和逻辑验证
+   - 语法正确性检查
+   - 表名和字段名验证
+   - 约束条件合理性检查
+
+10. **sql_execution**：实际执行测试
+    - 连接数据库执行SQL
+    - 记录执行时间和资源消耗
+    - 获取结果集信息
+
+11. **sql_reflection**：执行结果智能反思
+    - 性能分析：执行时间、资源使用
+    - 结果分析：行数、数据分布
+    - 质量评估：SQL复杂度、可读性
+    - 改进建议：索引优化、查询重写
+
+12. **quality_assessment**：综合质量评分
+    - 语法正确性权重：30%
+    - 执行成功率权重：25%
+    - 语义匹配度权重：25%
+    - 性能表现权重：20%
+
+#### 阶段四：数据输出与格式化（13-15步）
+**目标**：输出标准化的训练数据集
+
+13. **数据清洗和去重**：移除低质量和重复样本
+14. **格式化为训练数据集**：转换为标准training format
+15. **输出文件**：保存为JSON/JSONL/CSV格式
+
+**❌ 错误做法**：硬编码执行步骤
+
+以下是**错误的硬编码实现方式**，违背了Agent自主决策原则：
+
 ```python
-# 分析阶段
-schema = schema_extraction_tool.run(db_config)
-domain = domain_analysis_tool.run(schema)
-fields = field_classification_tool.run(schema)
-er = er_analysis_tool.run(schema)
+# ❌ 错误：硬编码的固定流程
+def generate_training_data(self):
+    schema = self.call_tool('extract_schema')    # 硬编码顺序
+    domain = self.call_tool('domain_analysis')   # 硬编码顺序
+    # ... 更多硬编码步骤
+```
 
-# 生成阶段
-scenarios = scenario_generation_tool.run(
-    AnalysisResults(domain, fields, er)
-)
-questions = question_generation_tool.run(scenarios)
-sql_queries = sql_generation_tool.run(questions, schema)
+**✅ 正确做法**：提示词引导Agent自主决策
 
-# 验证反思阶段
-for sql in sql_queries:
-    valid = sql_validation_tool.run(sql)
-    if valid:
-        result = sql_execution_tool.run(sql)
-        reflection = sql_reflection_tool.run(sql, result)
-        if reflection.improved_sql:
-            sql = reflection.improved_sql
+```python
+class DataGenerationAgent(BaseAgent):
+    """
+    数据生成Agent - 完全依赖提示词引导的自主决策
+    
+    核心特点：
+    1. 提示词引导：通过精心设计的提示词引导Agent步骤
+    2. 自主决策：Agent根据情况自主决定工具调用顺序
+    3. 反思循环：执行后反思，发现问题时自主回退修正
+    4. 记忆机制：数据库分析结果贯穿整个过程
+    """
+    
+    def __init__(self, settings, db_config):
+        # 初始化所有必要的工具
+        self._initialize_complete_toolchain()
+        # 初始化分析结果记忆
+        self.analysis_memory = {}
+    
+    def _initialize_complete_toolchain(self):
+        """初始化完整工具链"""
+        # 分析工具
+        self.register_tool("extract_schema", ...)
+        self.register_tool("domain_analysis", ...)
+        self.register_tool("field_classification", ...)
+        self.register_tool("er_analysis", ...)
+        
+        # 生成工具（基于提示词规则）
+        self.register_tool("scenario_generation", ...)
+        self.register_tool("question_generation", ...)
+        self.register_tool("sql_generation", ...)
+        
+        # 验证工具
+        self.register_tool("sql_execution", ...)
+        self.register_tool("sql_reflection", ...)
+        
+        # 思考工具
+        self.register_tool("sequential_thinking", ...)
+    
+    def generate_training_data(self, count: int, output_file: str):
+        """
+        完全由Agent根据提示词自主执行，无硬编码流程
+        """
+        task = f"生成{count}条NL2SQL训练数据"
+        execution = self.new_task(task)  # 进入ReAct循环
+        return self._extract_results(execution)
+    
+    def get_system_prompt(self) -> str:
+        """
+        关键：通过提示词引导Agent执行完整流程
+        """
+        return """
+        你是NL2SQL训练数据生成专家。必须按以下原则工作：
+        
+        🎯 执行原则：
+        1. 首先必须完整分析数据库并记忆结果（analysis阶段）
+        2. 生成SQL后必须执行验证（execution阶段）
+        3. 执行后必须反思分析（reflection阶段）
+        4. 反思发现问题时回到相应步骤修正
+        5. 复杂情况下调用thinking工具深度分析
+        
+        📋 可用工具：
+        - extract_schema: 提取数据库结构
+        - domain_analysis: 分析业务领域
+        - field_classification: 字段语义分类
+        - er_analysis: 实体关系分析
+        - scenario_generation: 场景生成（基于提示词规则）
+        - question_generation: 问题生成（基于提示词规则）
+        - sql_generation: SQL生成
+        - sql_execution: SQL执行验证
+        - sql_reflection: 执行结果反思
+        - sequential_thinking: 深度思考分析
+        
+        🔄 反思后修正指导：
+        - SQL错误 → 回到sql_generation重新生成
+        - 问题不合理 → 回到question_generation重新生成
+        - 场景不适合 → 回到scenario_generation重新设计
+        - 需要深度分析 → 调用sequential_thinking
+        
+        记住：数据库分析结果要记忆并在后续步骤中使用！
+        """
+```
+
+### 4.3 Agent设计指导原则
+
+#### 关键设计原则
+```python
+# ✅ 正确的Agent设计
+class DataGenerationAgent(BaseAgent):
+    """
+    核心原则：
+    1. 提示词驱动：所有步骤由提示词引导，不硬编码
+    2. 自主决策：Agent根据情况自主决定工具调用
+    3. 记忆机制：分析结果存储在上下文中贯穿使用
+    4. 反思循环：执行后必须反思，发现问题主动修正
+    5. 思考工具：复杂情况下调用深度思考
+    """
+    
+    def get_system_prompt(self):
+        # 返回完整的引导提示词
+        # 包含：流程指导、工具使用、反思修正、思考时机
+    
+    def generate_training_data(self, count, output_file):
+        # 只调用 self.new_task() 进入ReAct循环
+        # 所有具体步骤由Agent根据提示词自主决定
+        
+class SmartSQLAgent(BaseAgent):
+    """保留用于单次查询和调试"""
+    # 简化的查询功能
 ```
 
 ## 5. 配置示例
@@ -641,7 +866,7 @@ DB_PASSWORD=password
 
 # LLM配置
 LLM_MODEL=Qwen3-14B
-LLM_BASE_URL=http://localhost:9009/v1
+LLM_BASE_URL=http://localhost:9991/v1
 LLM_API_KEY=not-needed
 LLM_TEMPERATURE=0.7
 

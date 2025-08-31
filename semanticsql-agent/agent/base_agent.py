@@ -1,6 +1,6 @@
 """
-BaseAgent - trae_agent风格的智能体基础类
-实现ReAct (Reasoning + Acting) 模式
+BaseAgent - ReAct pattern implementation
+Based on the design specification - implements ReAct (Reasoning + Acting) pattern
 """
 
 import json
@@ -8,100 +8,62 @@ import logging
 import re
 from abc import ABC, abstractmethod
 from typing import Dict, Any, List, Optional, Tuple
-from enum import Enum
 from datetime import datetime
-from dataclasses import dataclass
 
 import openai
-from config.trae_config import TraeConfig
+from config.settings import Settings
+from config.database import DatabaseConfig
+from models.schemas import AgentExecution, AgentStep, AgentStepType
+from agent.callbacks import ExecutionCallback
+from utils.trajectory import TrajectoryRecorder
 
 
-class AgentStepType(Enum):
-    """智能体步骤类型"""
-    OBSERVATION = "observation"
-    THOUGHT = "thought" 
-    ACTION = "action"
-    REFLECTION = "reflection"
-
-
-@dataclass
-class AgentStep:
-    """智能体执行步骤"""
-    step_type: AgentStepType
-    content: str
-    timestamp: datetime
-    tool_name: Optional[str] = None
-    tool_input: Optional[Dict[str, Any]] = None
-    tool_output: Optional[Any] = None
-    error: Optional[str] = None
-
-
-@dataclass 
-class AgentExecution:
-    """智能体执行记录"""
-    task: str
-    steps: List[AgentStep]
-    final_result: Optional[Any] = None
-    success: bool = True
-    total_steps: int = 0
-    execution_time: float = 0.0
-    error: Optional[str] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
-        return {
-            "task": self.task,
-            "steps": [
-                {
-                    "step_type": step.step_type.value,
-                    "content": step.content,
-                    "timestamp": step.timestamp.isoformat(),
-                    "tool_name": step.tool_name,
-                    "tool_input": step.tool_input,
-                    "tool_output": step.tool_output,
-                    "error": step.error
-                } 
-                for step in self.steps
-            ],
-            "final_result": self.final_result,
-            "success": self.success,
-            "total_steps": self.total_steps,
-            "execution_time": self.execution_time,
-            "error": self.error
-        }
 
 
 class BaseAgent(ABC):
-    """智能体基础类 - 实现ReAct模式"""
+    """Base agent class implementing ReAct pattern"""
     
-    def __init__(self, config: TraeConfig):
-        """初始化智能体"""
-        self.config = config
+    def __init__(self, settings: Settings, db_config: DatabaseConfig):
+        """Initialize agent"""
+        self.settings = settings
+        self.db_config = db_config
         self.logger = logging.getLogger(self.__class__.__name__)
         
-        # 初始化LLM客户端
+        # Initialize LLM client
         self.llm_client = openai.OpenAI(
-            api_key=config.llm.api_key,
-            base_url=config.llm.base_url
+            api_key=settings.llm_api_key,
+            base_url=settings.llm_base_url
         )
         
         self.llm_config = {
-            'model': config.llm.model,
-            'temperature': config.llm.temperature,
-            'max_tokens': config.llm.max_tokens
+            'model': settings.llm_model,
+            'temperature': settings.llm_temperature,
+            'max_tokens': settings.llm_max_tokens
         }
         
-        # 工具映射
+        # Tool mapping
         self.tools: Dict[str, Any] = {}
         self.tool_descriptions: Dict[str, str] = {}
         
-        # 当前执行状态
+        # Current execution state
         self.current_execution: Optional[AgentExecution] = None
-        self.max_steps = getattr(config.agent, 'max_steps', 10)
-        self.enable_reflection = getattr(config.agent, 'enable_reflection', True)
-        self.enable_thinking = getattr(config.agent, 'enable_thinking', True)
+        self.max_steps = settings.max_steps
+        self.enable_reflection = settings.enable_reflection
+        self.enable_thinking = settings.enable_thinking
         
-        # 初始化工具
+        # Callbacks for execution tracking
+        self.callbacks: List[ExecutionCallback] = []
+        
+        # Trajectory recorder
+        if settings.trajectory_enabled:
+            self.trajectory_recorder = TrajectoryRecorder(
+                output_dir=settings.trajectory_directory,
+                max_trajectories=settings.trajectory_max_count
+            )
+        else:
+            self.trajectory_recorder = None
+        
+        # Initialize tools
         self._initialize_tools()
         
     @abstractmethod
@@ -120,36 +82,43 @@ class BaseAgent(ABC):
         self.tool_descriptions[name] = description
         self.logger.debug(f"注册工具: {name}")
     
+    def add_callback(self, callback: ExecutionCallback):
+        """Add execution callback"""
+        self.callbacks.append(callback)
+    
     def new_task(self, task: str) -> AgentExecution:
-        """开始新任务"""
-        self.logger.info(f"开始新任务: {task}")
+        """Start new task"""
+        self.logger.info(f"Starting new task: {task}")
         
-        # 创建执行记录
-        self.current_execution = AgentExecution(
-            task=task,
-            steps=[],
-            total_steps=0
-        )
+        # Create execution record
+        self.current_execution = AgentExecution(task=task)
         
-        start_time = datetime.now()
+        # Notify callbacks
+        for callback in self.callbacks:
+            callback.on_execution_start(self.current_execution)
         
         try:
-            # 执行ReAct循环
+            # Execute ReAct loop
             result = self._execute_react_loop(task)
-            self.current_execution.final_result = result
-            self.current_execution.success = True
+            self.current_execution.complete(result)
             
         except Exception as e:
-            self.logger.error(f"任务执行失败: {e}")
-            self.current_execution.success = False
-            self.current_execution.error = str(e)
+            self.logger.error(f"Task execution failed: {e}")
+            self.current_execution.complete(error=str(e))
             
+            # Notify callbacks of error
+            for callback in self.callbacks:
+                callback.on_error(self.current_execution, e)
+        
         finally:
-            # 计算执行时间
-            end_time = datetime.now()
-            self.current_execution.execution_time = (end_time - start_time).total_seconds()
-            self.current_execution.total_steps = len(self.current_execution.steps)
+            # Notify callbacks of completion
+            for callback in self.callbacks:
+                callback.on_execution_complete(self.current_execution)
             
+            # Save trajectory if enabled
+            if self.trajectory_recorder:
+                self.trajectory_recorder.save_execution(self.current_execution)
+        
         return self.current_execution
     
     def call_tool(self, tool_name: str, **kwargs) -> Dict[str, Any]:
@@ -252,14 +221,7 @@ class BaseAgent(ABC):
                 error_msg = f"工具执行失败: {e}"
                 self.logger.error(error_msg)
                 
-                self._add_step(
-                    AgentStepType.ACTION,
-                    f"使用工具: {action}",
-                    tool_name=action,
-                    tool_input=action_input,
-                    error=error_msg
-                )
-                
+                # 只添加观察步骤，不重复添加ACTION步骤
                 self._add_step(
                     AgentStepType.OBSERVATION,
                     f"工具执行失败: {error_msg}"
@@ -311,7 +273,34 @@ class BaseAgent(ABC):
             try:
                 action_input = json.loads(input_match.group(1).strip())
             except:
-                action_input = {"input": input_match.group(1).strip()}
+                # 智能回退：根据工具类型选择合适的参数名
+                input_text = input_match.group(1).strip()
+                
+                # 根据不同的工具使用不同的默认参数名
+                if action and action.lower() in ['sequential_thinking', 'think', 'thinking']:
+                    action_input = {
+                        "context": {},
+                        "problem": input_text
+                    }
+                elif action and 'domain' in action.lower():
+                    action_input = {
+                        "schema_info": {}  # 会自动从内存注入
+                    }
+                elif action and 'field' in action.lower() or action and 'classify' in action.lower():
+                    action_input = {
+                        "table_info": {}  # 会自动从内存注入
+                    }
+                elif action and 'question' in action.lower():
+                    action_input = {
+                        "scenario": input_text
+                    }
+                elif action and 'sql' in action.lower():
+                    action_input = {
+                        "question": input_text
+                    }
+                else:
+                    # 通用回退
+                    action_input = {"query": input_text}
         
         return thought, action, action_input
     
@@ -324,31 +313,126 @@ class BaseAgent(ABC):
         tool = self.tools[action]
         
         # 执行工具
-        if hasattr(tool, 'execute'):
-            if action_input:
-                return tool.execute(**action_input)
+        try:
+            if hasattr(tool, 'execute'):
+                if action_input:
+                    result = tool.execute(**action_input)
+                else:
+                    result = tool.execute()
+            elif hasattr(tool, 'run'):
+                if action_input:
+                    result = tool.run(**action_input)
+                else:
+                    result = tool.run()
             else:
-                return tool.execute()
-        else:
-            # 如果工具是函数
-            if action_input:
-                return tool(**action_input)
-            else:
-                return tool()
+                # 如果工具是函数
+                if action_input:
+                    result = tool(**action_input)
+                else:
+                    result = tool()
+            
+            # 添加详细调试日志
+            self.logger.debug(f"Tool {action} result type: {type(result)}")
+            if hasattr(result, '__dict__'):
+                self.logger.debug(f"Tool {action} result attributes: {list(result.__dict__.keys())}")
+            
+            # 确保返回可序列化的结果
+            try:
+                serialized = self._serialize_for_storage(result)
+                return serialized
+            except Exception as serialize_error:
+                # 使用DEBUG级别记录序列化错误，减少日志噪音
+                if "slice" in str(serialize_error).lower():
+                    self.logger.debug(f"工具结果包含slice对象: {serialize_error}")
+                    # 只在DEBUG模式下进行深度检查
+                    if self.logger.isEnabledFor(logging.DEBUG):
+                        self._debug_object_for_slices(result, "result")
+                else:
+                    self.logger.warning(f"序列化工具输出失败: {serialize_error}")
+                    self.logger.debug(f"原始结果类型: {type(result)}")
+                
+                # 返回简化但保留成功状态的版本
+                if isinstance(result, dict) and "success" in result:
+                    return {
+                        "success": result.get("success", False),
+                        "message": "结果已简化（包含不可序列化对象）",
+                        "error": result.get("error")
+                    }
+                else:
+                    return {"success": False, "error": f"序列化失败: {serialize_error}"}
+            
+        except Exception as e:
+            self.logger.error(f"工具 '{action}' 执行失败: {e}")
+            raise
     
     def _add_step(self, step_type: AgentStepType, content: str, **kwargs):
-        """添加执行步骤"""
-        step = AgentStep(
-            step_type=step_type,
-            content=content,
-            timestamp=datetime.now(),
-            **kwargs
-        )
+        """Add execution step"""
+        # Debug: check all kwargs for slice objects
+        for key, value in kwargs.items():
+            if isinstance(value, slice):
+                self.logger.error(f"Found slice in kwargs[{key}]: {value}")
+            elif isinstance(value, dict):
+                for k, v in value.items():
+                    if isinstance(k, slice):
+                        self.logger.error(f"Found slice key in kwargs[{key}][{k}]: {k}")
+                    if isinstance(v, slice):
+                        self.logger.error(f"Found slice value in kwargs[{key}][{k}]: {v}")
+        
+        # Serialize tool_output if it contains complex objects
+        if 'tool_output' in kwargs and kwargs['tool_output'] is not None:
+            try:
+                self.logger.debug(f"Serializing tool_output of type: {type(kwargs['tool_output'])}")
+                kwargs['tool_output'] = self._serialize_for_storage(kwargs['tool_output'])
+            except Exception as e:
+                self.logger.error(f"序列化tool_output失败: {e}")
+                # Debug the original object for slices
+                self._debug_object_for_slices(kwargs['tool_output'], "tool_output")
+                kwargs['tool_output'] = str(kwargs['tool_output'])
+        
+        # Serialize tool_input as well
+        if 'tool_input' in kwargs and kwargs['tool_input'] is not None:
+            try:
+                kwargs['tool_input'] = self._serialize_for_storage(kwargs['tool_input'])
+            except Exception as e:
+                self.logger.error(f"序列化tool_input失败: {e}")
+                kwargs['tool_input'] = str(kwargs['tool_input'])
+        
+        try:
+            step = AgentStep(
+                step_type=step_type,
+                content=content,
+                timestamp=datetime.now(),
+                **kwargs
+            )
+        except Exception as e:
+            self.logger.error(f"创建AgentStep失败: {e}")
+            self.logger.error(f"Error type: {type(e)}")
+            self.logger.error(f"kwargs keys: {list(kwargs.keys())}")
+            for key, value in kwargs.items():
+                self.logger.error(f"  {key}: {type(value)} = {str(value)[:100]}")
+            
+            # Check if the error is about slice objects
+            if "unhashable type: 'slice'" in str(e):
+                self.logger.error("SLICE ERROR DETECTED - debugging kwargs:")
+                self._debug_object_for_slices(kwargs, "kwargs")
+            
+            # 创建简化版本
+            step = AgentStep(
+                step_type=step_type,
+                content=content,
+                timestamp=datetime.now(),
+                tool_name=kwargs.get('tool_name'),
+                error=str(e)
+            )
         
         if self.current_execution:
-            self.current_execution.steps.append(step)
+            self.current_execution.add_step(step)
             
-        # 日志记录
+            # Notify callbacks
+            for callback in self.callbacks:
+                callback.on_step_complete(self.current_execution, step)
+            
+        # Log step
         self.logger.debug(f"{step_type.value}: {content}")
     
     def _build_conversation_history(self) -> str:
@@ -376,25 +460,50 @@ class BaseAgent(ABC):
     def _format_tool_output(self, output: Any) -> str:
         """格式化工具输出"""
         if isinstance(output, dict):
-            # 对字典类型，保留更多信息，特别是success和关键数据
-            formatted = json.dumps(output, ensure_ascii=False, indent=2)
-            if len(formatted) > 2000:  # 增加到2000字符
-                # 如果太长，保留关键信息
-                summary = {
-                    "success": output.get("success"),
-                    "message": output.get("message", ""),
-                    "error": output.get("error"),
-                }
-                # 添加数据摘要
-                if "schemas" in output:
-                    summary["schemas_count"] = len(output["schemas"])
-                if "results" in output:
-                    summary["results_count"] = len(output.get("results", []))
-                if "data" in output:
-                    summary["data_sample"] = output.get("data", [])[:2]  # 只显示前2条
+            try:
+                # 先确保数据可以被序列化（处理slice等不可序列化对象）
+                clean_output = self._serialize_for_storage(output)
                 
-                return json.dumps(summary, ensure_ascii=False, indent=2) + "\n[输出已简化，完整信息已保存]"
-            return formatted
+                # 对字典类型，保留更多信息，特别是success和关键数据
+                formatted = json.dumps(clean_output, ensure_ascii=False, indent=2)
+                if len(formatted) > 2000:  # 增加到2000字符
+                    # 如果太长，保留关键信息
+                    summary = {
+                        "success": clean_output.get("success"),
+                        "message": clean_output.get("message", ""),
+                        "error": clean_output.get("error"),
+                    }
+                    # 添加数据摘要
+                    if "schemas" in clean_output:
+                        summary["schemas_count"] = len(clean_output["schemas"])
+                    if "results" in clean_output:
+                        summary["results_count"] = len(clean_output.get("results", []))
+                    if "data" in clean_output:
+                        summary["data_sample"] = clean_output.get("data", [])[:2]  # 只显示前2条
+                    
+                    return json.dumps(summary, ensure_ascii=False, indent=2) + "\n[输出已简化，完整信息已保存]"
+                return formatted
+            except Exception as e:
+                # 使用DEBUG级别记录序列化错误，减少日志噪音
+                if "slice" in str(e).lower():
+                    self.logger.debug(f"工具输出包含slice对象，使用简化格式: {e}")
+                else:
+                    self.logger.warning(f"格式化工具输出失败: {e}")
+                
+                # 返回简化但有用的输出
+                if isinstance(output, dict):
+                    # 尝试提取关键信息
+                    simplified = {
+                        "success": output.get("success", False),
+                        "message": "输出已简化（包含不可序列化对象）",
+                        "data_type": type(output.get("data", None)).__name__ if "data" in output else None
+                    }
+                    try:
+                        return json.dumps(simplified, ensure_ascii=False)
+                    except:
+                        return str(simplified)
+                else:
+                    return f"[{type(output).__name__}] {str(output)[:500]}"
         elif isinstance(output, (list, tuple)):
             return str(output)[:1000]
         else:
@@ -412,5 +521,75 @@ class BaseAgent(ABC):
             "task": self.current_execution.task,
             "completed": True,
             "steps": len(self.current_execution.steps),
-            "execution_time": self.current_execution.execution_time
+            "execution_time": self.current_execution.get_duration()
         }
+    
+    def _debug_object_for_slices(self, obj: Any, path: str = ""):
+        """Debug helper to find slice objects in complex data structures"""
+        try:
+            if isinstance(obj, slice):
+                self.logger.error(f"Found slice at {path}: {obj}")
+            elif isinstance(obj, dict):
+                for k, v in obj.items():
+                    if isinstance(k, slice):
+                        self.logger.error(f"Found slice key at {path}: {k}")
+                    self._debug_object_for_slices(v, f"{path}.{k}")
+            elif isinstance(obj, (list, tuple)):
+                for i, item in enumerate(obj):
+                    self._debug_object_for_slices(item, f"{path}[{i}]")
+            elif hasattr(obj, '__dict__'):
+                for attr_name, attr_value in obj.__dict__.items():
+                    self._debug_object_for_slices(attr_value, f"{path}.{attr_name}")
+        except Exception as e:
+            self.logger.error(f"Debug slice check failed at {path}: {e}")
+
+    def _serialize_for_storage(self, obj: Any) -> Any:
+        """Serialize objects for storage/logging"""
+        if obj is None:
+            return None
+        
+        try:
+            # Handle special types that can't be serialized
+            if isinstance(obj, slice):
+                return str(obj)
+                
+            # If it's a Pydantic model, use model_dump with datetime serialization
+            if hasattr(obj, 'model_dump'):
+                return obj.model_dump(mode='json')
+            # If it's a dict, recursively serialize nested objects
+            elif isinstance(obj, dict):
+                serialized_dict = {}
+                for k, v in obj.items():
+                    # 处理不可哈希的键
+                    if isinstance(k, slice):
+                        key = f"slice_{k.start}_{k.stop}_{k.step}"
+                    elif hasattr(k, '__hash__') and k.__hash__ is not None:
+                        try:
+                            # Test if the key is actually hashable
+                            hash(k)
+                            key = str(k)
+                        except TypeError:
+                            key = str(type(k).__name__) + "_" + str(id(k))
+                    else:
+                        key = str(type(k).__name__) + "_" + str(id(k))
+                    serialized_dict[key] = self._serialize_for_storage(v)
+                return serialized_dict
+            # If it's a list, recursively serialize elements
+            elif isinstance(obj, list):
+                return [self._serialize_for_storage(item) for item in obj]
+            # If it's a tuple, convert to list
+            elif isinstance(obj, tuple):
+                return [self._serialize_for_storage(item) for item in obj]
+            # Test if it's already JSON serializable
+            else:
+                import json
+                json.dumps(obj, default=str)
+                return obj
+        except (TypeError, ValueError, AttributeError) as e:
+            # If it can't be serialized, convert to string
+            self.logger.error(f"Serialization fallback for {type(obj)}: {e}")
+            self.logger.error(f"Object content: {str(obj)[:200]}")
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    self.logger.error(f"  Key {k} (type {type(k)}): {type(v)}")
+            return str(obj)

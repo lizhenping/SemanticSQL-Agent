@@ -1,278 +1,266 @@
 """
-数据库工具函数 - 连接管理和查询执行
+Simplified database connection management
+Based on the design specification - combines connection_manager functionality
 """
 
 import logging
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, Optional, List
 from contextlib import contextmanager
-from sqlalchemy import create_engine, text, MetaData, Table
-from sqlalchemy.engine import Engine, Connection
-from sqlalchemy.pool import QueuePool
+
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import sessionmaker
 
-logger = logging.getLogger(__name__)
+from config.database import DatabaseConfig
 
 
-class DatabaseUtil:
-    """数据库工具类"""
+class DatabaseManager:
+    """Simplified database manager"""
     
-    def __init__(self, connection_string: str = None, **kwargs):
-        """
-        初始化数据库工具
-        
-        Args:
-            connection_string: 数据库连接字符串
-            **kwargs: 其他连接参数
-        """
-        self.connection_string = connection_string
+    def __init__(self, config: DatabaseConfig):
+        self.config = config
         self.engine = None
-        self.metadata = None
+        self.session_factory = None
+        self.logger = logging.getLogger(__name__)
         
-        # 连接池配置
-        self.pool_config = {
-            'poolclass': QueuePool,
-            'pool_size': kwargs.get('pool_size', 5),
-            'max_overflow': kwargs.get('max_overflow', 10),
-            'pool_timeout': kwargs.get('pool_timeout', 30),
-            'pool_recycle': kwargs.get('pool_recycle', 3600),
-            'pool_pre_ping': kwargs.get('pool_pre_ping', True),
-            'echo': kwargs.get('echo', False)
-        }
+        # Validate configuration
+        self.config.validate_connection_params()
         
-        if connection_string:
-            self.init_engine(connection_string)
+        self.logger.info(f"Initializing database manager: {config.type}://{config.host}:{config.port}/{config.database}")
     
-    def init_engine(self, connection_string: str = None):
-        """初始化数据库引擎"""
+    def initialize(self) -> bool:
+        """Initialize database connection"""
         try:
-            conn_str = connection_string or self.connection_string
-            if not conn_str:
-                raise ValueError("Connection string is required")
+            connection_string = self.config.to_connection_string()
+            self.engine = create_engine(
+                connection_string,
+                pool_size=self.config.pool_size,
+                max_overflow=self.config.max_overflow,
+                pool_timeout=self.config.pool_timeout,
+                pool_recycle=self.config.pool_recycle,
+                pool_pre_ping=self.config.pool_pre_ping,
+                echo=self.config.echo
+            )
             
-            self.engine = create_engine(conn_str, **self.pool_config)
-            self.metadata = MetaData()
-            logger.info("Database engine initialized successfully")
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize database engine: {e}")
-            raise
-    
-    @contextmanager
-    def get_connection(self):
-        """获取数据库连接的上下文管理器"""
-        if not self.engine:
-            raise RuntimeError("Database engine not initialized")
-        
-        connection = None
-        try:
-            connection = self.engine.connect()
-            yield connection
-        finally:
-            if connection:
-                connection.close()
-    
-    def test_connection(self) -> bool:
-        """测试数据库连接"""
-        try:
-            with self.get_connection() as conn:
-                result = conn.execute(text("SELECT 1"))
-                result.fetchone()
-            logger.info("Database connection test successful")
+            # Test connection
+            with self.engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+                
+            self.session_factory = sessionmaker(bind=self.engine)
+            self.logger.info("Database connection successful")
             return True
+            
         except Exception as e:
-            logger.error(f"Database connection test failed: {e}")
+            self.logger.error(f"Database connection failed: {e}")
             return False
     
-    def execute_query(self, query: str, params: Dict = None) -> List[Dict]:
-        """
-        执行查询并返回结果
-        
-        Args:
-            query: SQL查询语句
-            params: 查询参数
-            
-        Returns:
-            查询结果列表
-        """
-        try:
-            with self.get_connection() as conn:
-                result = conn.execute(text(query), params or {})
-                
-                if result.returns_rows:
-                    rows = []
-                    for row in result:
-                        rows.append(dict(row._mapping))
-                    return rows
-                else:
-                    return [{"affected_rows": result.rowcount}]
-                    
-        except SQLAlchemyError as e:
-            logger.error(f"Query execution failed: {e}")
-            raise
-    
-    def execute_many(self, query: str, params_list: List[Dict]) -> int:
-        """
-        批量执行语句
-        
-        Args:
-            query: SQL语句
-            params_list: 参数列表
-            
-        Returns:
-            影响的行数
-        """
-        total_affected = 0
-        
-        try:
-            with self.get_connection() as conn:
-                trans = conn.begin()
-                try:
-                    for params in params_list:
-                        result = conn.execute(text(query), params)
-                        total_affected += result.rowcount
-                    trans.commit()
-                except Exception:
-                    trans.rollback()
-                    raise
-                    
-        except SQLAlchemyError as e:
-            logger.error(f"Batch execution failed: {e}")
-            raise
-        
-        return total_affected
-    
     def get_tables(self) -> List[str]:
-        """获取所有表名"""
+        """Get all table names"""
         try:
-            with self.get_connection() as conn:
-                self.metadata.reflect(bind=conn)
-                return list(self.metadata.tables.keys())
+            with self.engine.connect() as conn:
+                if self.config.type.value == "mysql":
+                    result = conn.execute(text("SHOW TABLES"))
+                    return [row[0] for row in result.fetchall()]
+                elif self.config.type.value == "postgresql":
+                    result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"))
+                    return [row[0] for row in result.fetchall()]
+                elif self.config.type.value == "sqlite":
+                    result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+                    return [row[0] for row in result.fetchall()]
         except Exception as e:
-            logger.error(f"Failed to get tables: {e}")
+            self.logger.error(f"Failed to get table list: {e}")
             return []
     
     def get_table_info(self, table_name: str) -> Dict[str, Any]:
-        """获取表信息"""
+        """Get table information"""
         try:
-            with self.get_connection() as conn:
-                self.metadata.reflect(bind=conn, only=[table_name])
+            with self.engine.connect() as conn:
+                info = {"name": table_name, "columns": []}
                 
-                if table_name not in self.metadata.tables:
-                    return {}
+                if self.config.type.value == "mysql":
+                    result = conn.execute(text(f"DESCRIBE {table_name}"))
+                    for row in result.fetchall():
+                        info["columns"].append({
+                            "name": row[0],
+                            "type": str(row[1]),
+                            "nullable": row[2] == "YES",
+                            "key": row[3],
+                            "default": row[4]
+                        })
+                elif self.config.type.value == "postgresql":
+                    result = conn.execute(text(f"SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = '{table_name}'"))
+                    for row in result.fetchall():
+                        info["columns"].append({
+                            "name": row[0],
+                            "type": str(row[1]),
+                            "nullable": row[2] == "YES"
+                        })
                 
-                table = self.metadata.tables[table_name]
+                return info
+                
+        except Exception as e:
+            self.logger.error(f"Failed to get table info: {e}")
+            return {"name": table_name, "columns": []}
+    
+    def get_database_info(self) -> Dict[str, Any]:
+        """Get database information"""
+        try:
+            with self.engine.connect() as conn:
+                tables = self.get_tables()
+                
+                # Get database version
+                version = "unknown"
+                try:
+                    if self.config.type.value == "mysql":
+                        result = conn.execute(text("SELECT VERSION()"))
+                        version = result.scalar()
+                    elif self.config.type.value == "postgresql":
+                        result = conn.execute(text("SELECT version()"))
+                        version = result.scalar().split()[1]
+                except:
+                    pass
                 
                 return {
-                    "name": table_name,
-                    "columns": [
-                        {
-                            "name": col.name,
-                            "type": str(col.type),
-                            "nullable": col.nullable,
-                            "primary_key": col.primary_key,
-                            "foreign_keys": [str(fk) for fk in col.foreign_keys]
-                        }
-                        for col in table.columns
-                    ],
-                    "primary_key": [col.name for col in table.primary_key],
-                    "foreign_keys": [
-                        {
-                            "column": list(fk.column_keys)[0],
-                            "referred_table": fk.referred_table.name,
-                            "referred_columns": list(fk.column_keys)
-                        }
-                        for fk in table.foreign_keys
-                    ],
-                    "indexes": [
-                        {
-                            "name": idx.name,
-                            "columns": [col.name for col in idx.columns],
-                            "unique": idx.unique
-                        }
-                        for idx in table.indexes
-                    ]
+                    "database": self.config.database,
+                    "type": self.config.type.value,
+                    "host": f"{self.config.host}:{self.config.port}",
+                    "tables_count": len(tables),
+                    "tables": tables,
+                    "version": version
                 }
                 
         except Exception as e:
-            logger.error(f"Failed to get table info for {table_name}: {e}")
-            return {}
+            self.logger.error(f"Failed to get database info: {e}")
+            return {
+                "database": self.config.database,
+                "type": self.config.type.value,
+                "error": str(e)
+            }
     
-    def get_sample_data(self, table_name: str, limit: int = 10) -> List[Dict]:
-        """获取表的样本数据"""
+    def test_connection(self) -> bool:
+        """Test database connection"""
         try:
-            query = f"SELECT * FROM {table_name} LIMIT :limit"
-            return self.execute_query(query, {"limit": limit})
-        except Exception as e:
-            logger.error(f"Failed to get sample data for {table_name}: {e}")
-            return []
+            with self.engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+                return True
+        except Exception:
+            return False
     
-    def get_row_count(self, table_name: str) -> int:
-        """获取表的行数"""
+    def execute_sql_safe(self, sql: str, dry_run: bool = False) -> Dict[str, Any]:
+        """
+        Safely execute SQL (SELECT only)
+        
+        Args:
+            sql: SQL query string
+            dry_run: Whether to perform a dry run
+            
+        Returns:
+            Execution result
+        """
+        # Clean SQL statement
+        sql_clean = sql.strip().rstrip(';')
+        sql_upper = sql_clean.upper()
+        
+        # Security check: only allow SELECT statements
+        if not sql_upper.startswith('SELECT'):
+            return {
+                "success": False,
+                "error": "For security reasons, only SELECT queries are allowed",
+                "error_type": "SecurityError",
+                "sql": sql
+            }
+        
+        # Check for dangerous operations
+        dangerous_keywords = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'CREATE', 'TRUNCATE']
+        for keyword in dangerous_keywords:
+            if keyword in sql_upper:
+                return {
+                    "success": False,
+                    "error": f"SQL contains dangerous keyword: {keyword}",
+                    "error_type": "SecurityError", 
+                    "sql": sql
+                }
+        
+        if dry_run:
+            # Dry run: use EXPLAIN to check SQL syntax
+            try:
+                explain_sql = f"EXPLAIN {sql_clean}"
+                with self.engine.connect() as conn:
+                    conn.execute(text(explain_sql))
+                return {
+                    "success": True,
+                    "dry_run": True,
+                    "sql": sql,
+                    "message": "SQL syntax check passed"
+                }
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": f"SQL syntax check failed: {e}",
+                    "error_type": "SyntaxError",
+                    "sql": sql
+                }
+        else:
+            # Actual execution
+            return self._execute_query(sql)
+    
+    def _execute_query(self, sql: str, params: Optional[Dict] = None) -> Dict[str, Any]:
+        """Execute SQL query"""
         try:
-            query = f"SELECT COUNT(*) as count FROM {table_name}"
-            result = self.execute_query(query)
-            return result[0]["count"] if result else 0
+            with self.engine.connect() as conn:
+                # Execute query
+                if params:
+                    result = conn.execute(text(sql), params)
+                else:
+                    result = conn.execute(text(sql))
+                
+                if result.returns_rows:
+                    # Get results
+                    rows = result.fetchall()
+                    columns = result.keys()
+                    
+                    # Convert to dictionary list
+                    data = []
+                    for row in rows:
+                        row_dict = {}
+                        for i, column in enumerate(columns):
+                            row_dict[column] = row[i]
+                        data.append(row_dict)
+                    
+                    return {
+                        "success": True,
+                        "data": data,
+                        "row_count": len(data),
+                        "columns": list(columns),
+                        "sql": sql
+                    }
+                else:
+                    # For non-query statements (INSERT, UPDATE, DELETE, etc.)
+                    return {
+                        "success": True,
+                        "affected_rows": result.rowcount if hasattr(result, 'rowcount') else 0,
+                        "sql": sql
+                    }
+                    
+        except SQLAlchemyError as e:
+            self.logger.error(f"SQL execution failed: {sql}, error: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "error_type": "SQLAlchemyError",
+                "sql": sql
+            }
         except Exception as e:
-            logger.error(f"Failed to get row count for {table_name}: {e}")
-            return 0
+            self.logger.error(f"Query execution failed: {sql}, error: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "sql": sql
+            }
     
     def close(self):
-        """关闭数据库连接"""
+        """Close database connection"""
         if self.engine:
             self.engine.dispose()
-            logger.info("Database connection closed")
-    
-    def __enter__(self):
-        """上下文管理器入口"""
-        return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """上下文管理器出口"""
-        self.close()
-
-
-# 便捷函数
-def create_database_util(config: Any) -> DatabaseUtil:
-    """
-    从配置创建数据库工具实例
-    
-    Args:
-        config: 配置对象或字典
-        
-    Returns:
-        DatabaseUtil实例
-    """
-    if hasattr(config, 'database'):
-        db_config = config.database
-        connection_string = db_config.to_connection_string()
-        
-        return DatabaseUtil(
-            connection_string=connection_string,
-            pool_size=getattr(db_config, 'pool_size', 5),
-            max_overflow=getattr(db_config, 'max_overflow', 10),
-            pool_timeout=getattr(db_config, 'pool_timeout', 30),
-            pool_recycle=getattr(db_config, 'pool_recycle', 3600),
-            echo=getattr(db_config, 'echo', False)
-        )
-    elif isinstance(config, dict):
-        return DatabaseUtil(**config)
-    else:
-        raise ValueError("Invalid configuration type")
-
-
-def test_database_connection(config: Any) -> bool:
-    """
-    测试数据库连接
-    
-    Args:
-        config: 配置对象
-        
-    Returns:
-        连接是否成功
-    """
-    try:
-        with create_database_util(config) as db:
-            return db.test_connection()
-    except Exception as e:
-        logger.error(f"Database connection test failed: {e}")
-        return False
+            self.logger.info("Database connection closed")
