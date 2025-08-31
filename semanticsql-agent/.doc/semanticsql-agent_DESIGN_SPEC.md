@@ -78,9 +78,11 @@ graph TB
     Field --> ER[er_analysis<br/>分析表关系]
     ER --> Memory[(记忆存储<br/>分析结果)]
     
-    Memory --> GenLoop[生成循环开始]
-    GenLoop --> Scenario[scenario_generation<br/>生成查询场景]
-    Scenario --> Question[question_generation<br/>生成自然语言问题]
+    Memory --> ScenarioBatch[scenario_generation<br/>批量生成N个场景<br/>基于预定义模板]
+    
+    ScenarioBatch --> ScenarioLoop[对每个场景循环]
+    ScenarioLoop --> Operation[operation_selection<br/>为当前场景选择SQL操作]
+    Operation --> Question[question_generation<br/>基于场景生成问题]
     Question --> SQL[sql_generation<br/>生成SQL查询]
     SQL --> Validate[sql_validation<br/>验证SQL语法]
     Validate --> Execute[sql_execution<br/>执行SQL]
@@ -91,21 +93,33 @@ graph TB
     Judge -->|是| ThinkFix[sequential_thinking<br/>分析修正策略]
     
     ThinkFix --> FixType{修正类型}
-    FixType -->|场景问题| Scenario
+    FixType -->|操作选择问题| Operation
     FixType -->|问题不清| Question
     FixType -->|SQL错误| SQL
     
-    Save --> CheckCount{达到目标数量?}
-    CheckCount -->|否| GenLoop
+    Save --> NextScenario{还有场景?}
+    NextScenario -->|是| ScenarioLoop
+    NextScenario -->|否| CheckCount{达到目标数量?}
+    CheckCount -->|否| ScenarioBatch
     CheckCount -->|是| End[结束]
 ```
 
 **Agent的智能决策过程**：
 1. **初始思考**：使用sequential_thinking规划整体执行策略
 2. **一次性分析**：完整分析数据库，结果存入记忆供后续使用
-3. **循环生成**：基于记忆中的分析结果，循环生成训练数据
-4. **质量控制**：每次SQL执行后必须反思，确保数据质量
-5. **智能修正**：发现问题时，通过思考工具分析后精准回退到问题源头
+3. **场景批量生成**：
+   - scenario_generation基于预定义模板和数据库结构生成N个场景
+   - 场景包含：业务目的、适用表、复杂度等信息
+4. **循环处理每个场景**：
+   - operation_selection：根据场景复杂度选择合适的SQL操作组合
+   - question_generation：基于场景和操作生成自然语言问题
+   - sql_generation：将问题转换为SQL查询
+   - sql_validation + sql_execution：验证并执行SQL
+   - sql_reflection：评估执行结果质量
+5. **智能修正**：
+   - 反思发现问题时，调用sequential_thinking分析原因
+   - 精准回退到问题源头（操作选择/问题生成/SQL生成）
+   - 只修正当前场景，不影响已处理的其他场景
 
 **记忆机制**：
 - **数据库分析结果必须完整记忆**：一次性分析数据库，结果贯穿整个过程
@@ -120,16 +134,21 @@ graph TB
 ```
 数据库分析（只执行一次，结果记忆）
     ↓
-场景生成 → 问题生成 → SQL生成 → SQL执行 
-    ↑         ↑         ↑         ↓
-    ←─────────←─────────←──── SQL反思分析
-                                  ↓
-                            需要修正？
-                                  ├─ 否 → 继续下一个
-                                  └─ 是 → 决定修正阶段
-                                          ├─ 场景问题 → 重新生成场景
-                                          ├─ 问题表述 → 重新生成问题
-                                          └─ SQL错误 → 重新生成SQL
+场景批量生成（基于预定义模板）
+    ↓
+对每个场景：
+    操作选择 → 问题生成 → SQL生成 → SQL执行 
+       ↑         ↑         ↑         ↓
+       ←─────────←─────────←──── SQL反思分析
+                                     ↓
+                               需要修正？
+                                     ├─ 否 → 保存数据，处理下一个场景
+                                     └─ 是 → 调用sequential_thinking
+                                             ↓
+                                       决定修正点：
+                                             ├─ 操作选择不当 → 重新选择操作
+                                             ├─ 问题表述不清 → 重新生成问题
+                                             └─ SQL生成错误 → 重新生成SQL
 ```
 
 **重要原则**：
@@ -165,19 +184,55 @@ graph TB
 
 **工具分类及使用原则**：
 
-| 工具类别 | 工具名称 | 执行次数 | 使用时机 |
-|---------|---------|---------|---------|
-| 分析工具 | extract_schema<br>domain_analysis<br>field_classification<br>er_analysis | 一次 | 任务开始时 |
-| 生成工具 | scenario_generation<br>question_generation<br>sql_generation | 多次 | 每个训练数据 |
-| 验证工具 | sql_validation<br>sql_execution | 多次 | 每个SQL必须验证 |
-| 反思工具 | sql_reflection | 多次 | 每次SQL执行后 |
-| 思考工具 | sequential_thinking | 按需 | 复杂决策时 |
+| 工具类别 | 工具名称 | 执行次数 | 使用时机 | 说明 |
+|---------|---------|---------|---------|------|
+| 分析工具 | extract_schema<br>domain_analysis<br>field_classification<br>er_analysis | 一次 | 任务开始时 | 结果保存在记忆中 |
+| 生成工具 | scenario_generation | 多批次 | 每批生成N个场景 | 基于预定义模板批量生成 |
+| 生成工具 | operation_selection | 每场景一次 | 为每个场景选择SQL操作 | 根据场景复杂度选择 |
+| 生成工具 | question_generation<br>sql_generation | 每场景多次 | 基于场景和操作生成 | 可能因反思而重新生成 |
+| 验证工具 | sql_validation<br>sql_execution | 每SQL一次 | 每个SQL必须验证执行 | 确保SQL正确可执行 |
+| 反思工具 | sql_reflection | 每次执行后 | SQL执行后立即反思 | 评估质量决定是否修正 |
+| 思考工具 | sequential_thinking | 按需 | 初始规划/修正决策 | 复杂问题深度分析 |
 
 **记忆机制核心要点**：
 1. 分析工具的输出必须保存在记忆中
 2. 生成工具自动从记忆中获取所需的分析结果
 3. 反思工具不会触发重新分析整个数据库
 4. 只有在反思发现需要时，才会局部重新分析特定内容
+
+**场景处理示例**：
+```python
+# 1. 场景批量生成（假设生成10个场景）
+scenarios = scenario_generation(schema_info=memory["schema_info"], count=10)
+# 返回: [场景1: 销售分析-简单, 场景2: 库存统计-中等, ...]
+
+# 2. 对每个场景循环处理
+for scenario in scenarios:
+    # 2.1 选择SQL操作
+    operations = operation_selection(scenario=scenario, schema_info=memory["schema_info"])
+    # 返回: {"operations": ["SELECT", "GROUP", "ORDER"], ...}
+    
+    # 2.2 生成问题
+    question = question_generation(scenario=scenario, operations=operations)
+    # 返回: {"question": "查询上个月各产品类别的销售总额并按金额排序"}
+    
+    # 2.3 生成SQL
+    sql = sql_generation(question=question, schema_info=memory["schema_info"])
+    # 返回: {"sql": "SELECT category, SUM(amount)..."}
+    
+    # 2.4 验证执行
+    validation = sql_validation(sql=sql)
+    execution = sql_execution(sql=sql)
+    
+    # 2.5 反思评估
+    reflection = sql_reflection(sql=sql, execution_result=execution, question=question)
+    
+    # 2.6 如果需要修正，只影响当前场景
+    if reflection["needs_revision"]:
+        # 分析问题并决定修正点
+        fix_strategy = sequential_thinking(problem="SQL执行结果不符合预期", context=...)
+        # 回退到适当步骤重新生成
+```
 
 ### 2.2 数据生成规范
 
