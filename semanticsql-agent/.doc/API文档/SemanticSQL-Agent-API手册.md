@@ -319,14 +319,16 @@ class SmartSQLAgent(BaseAgent):
 #### SQLQueryResult
 
 ```python
-@dataclass
-class SQLQueryResult:
-    natural_language_query: str  # 原始查询
-    generated_sql: str          # 生成的 SQL
-    execution_result: Dict      # 执行结果
-    answer: str                 # 自然语言答案
-    success: bool              # 是否成功
-    error: Optional[str]       # 错误信息
+class SQLQueryResult(BaseModel):
+    success: bool                    # 是否成功
+    question: str                    # 原始查询
+    sql: Optional[str] = None        # 生成的 SQL（可选）
+    answer: Optional[str] = None     # 自然语言答案（可选）
+    data: List[Dict[str, Any]] = []  # 查询结果数据
+    row_count: int = 0               # 返回行数
+    execution_time: float = 0.0      # 执行时间（秒）
+    error: Optional[str] = None      # 错误信息（可选）
+    steps: int = 0                   # 执行步骤数
 ```
 
 ### 工具 API

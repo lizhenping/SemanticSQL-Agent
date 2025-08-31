@@ -281,14 +281,15 @@ SQL 查询结果。
 
 ```python
 class SQLQueryResult(BaseModel):
-    natural_language_query: str     # 自然语言查询
-    generated_sql: str              # 生成的SQL
-    execution_result: Optional[Dict[str, Any]]  # 执行结果
-    answer: str                     # 自然语言答案
-    success: bool = True            # 是否成功
-    error: Optional[str] = None     # 错误信息
-    execution_time: Optional[float] = None  # 执行时间
-    metadata: Dict[str, Any] = Field(default_factory=dict)  # 元数据
+    success: bool                           # 是否成功
+    question: str                           # 自然语言查询
+    sql: Optional[str] = None               # 生成的SQL（可选）
+    answer: Optional[str] = None            # 自然语言答案（可选）
+    data: List[Dict[str, Any]] = []         # 查询结果数据
+    row_count: int = 0                      # 返回行数
+    execution_time: float = 0.0             # 执行时间（秒）
+    error: Optional[str] = None             # 错误信息（可选）
+    steps: int = 0                          # 执行步骤数
 ```
 
 ## 工具输入输出模型

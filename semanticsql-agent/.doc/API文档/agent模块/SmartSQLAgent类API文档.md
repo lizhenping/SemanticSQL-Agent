@@ -76,12 +76,15 @@ class SmartSQLAgent(BaseAgent):
 
 **返回：**
 - `SQLQueryResult`: 查询结果对象，包含：
-  - `natural_language_query`: 原始自然语言查询
-  - `generated_sql`: 生成的 SQL 语句
-  - `execution_result`: SQL 执行结果
-  - `answer`: 自然语言答案
   - `success`: 执行是否成功
-  - `error`: 错误信息（如果有）
+  - `question`: 原始自然语言查询
+  - `sql`: 生成的 SQL 语句（可选）
+  - `answer`: 自然语言答案（可选）
+  - `data`: 查询结果数据列表
+  - `row_count`: 返回的行数
+  - `execution_time`: 执行时间（秒）
+  - `error`: 错误信息（可选）
+  - `steps`: 执行步骤数
 
 **执行流程：**
 1. 使用 `new_task()` 开始新任务
@@ -127,11 +130,13 @@ agent = SmartSQLAgent(settings, db_config)
 try:
     # 执行自然语言查询
     result = agent.query("查询上个月销售额最高的前10个产品")
-    
-    if result.success:
-        print(f"生成的SQL: {result.generated_sql}")
-        print(f"查询结果: {result.execution_result}")
-        print(f"答案: {result.answer}")
+
+if result.success:
+    print(f"生成的SQL: {result.sql}")
+    print(f"查询结果: {result.data}")
+    print(f"答案: {result.answer}")
+    print(f"返回行数: {result.row_count}")
+    print(f"执行时间: {result.execution_time}秒")
     else:
         print(f"错误: {result.error}")
         
