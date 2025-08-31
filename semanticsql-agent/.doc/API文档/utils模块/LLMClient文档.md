@@ -77,67 +77,34 @@ messages = [
 - `max_tokens` (int): 最大 token 数（可选）
 - `stop` (List[str]): 停止标记（可选）
 
-### `chat_with_functions(messages: List[Dict], functions: List[Dict], ...) -> LLMResponse`
-带函数调用的聊天。
+### `function_call(messages: List[Dict], functions: List[Dict], ...) -> LLMResponse`
+带函数调用的请求（如果模型支持）。
 
 **参数：**
 - `messages` (List[Dict]): 消息列表
 - `functions` (List[Dict]): 函数定义列表
-- `function_call` (Union[str, Dict]): 函数调用策略
+- `function_call` (str): 函数调用模式（"auto" 或具体函数名）
 
-**函数定义格式：**
-```python
-functions = [{
-    "name": "get_weather",
-    "description": "获取天气信息",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "location": {
-                "type": "string",
-                "description": "城市名称"
-            }
-        },
-        "required": ["location"]
-    }
-}]
-```
-
-### `parse_function_call(response: LLMResponse) -> Optional[Dict[str, Any]]`
-解析函数调用。
-
-**返回：**
-```python
-{
-    "name": "function_name",
-    "arguments": {"arg1": "value1", ...}
-}
-```
-
-### `format_messages(system_prompt: str, user_prompt: str, ...) -> List[Dict[str, str]]`
-格式化消息列表。
+### `generate_sql(query: str, schema_context: str, dialect: str = "mysql") -> str`
+生成 SQL 查询。
 
 **参数：**
-- `system_prompt` (str): 系统提示（可选）
-- `user_prompt` (str): 用户提示
-- `assistant_prompt` (str): 助手提示（可选）
-- `history` (List[Dict]): 历史消息（可选）
+- `query` (str): 自然语言查询
+- `schema_context` (str): 数据库结构上下文
+- `dialect` (str): SQL 方言
+
+### `analyze_text(text: str, analysis_type: str = "summary", ...) -> str`
+分析文本。
+
+**参数：**
+- `text` (str): 要分析的文本
+- `analysis_type` (str): 分析类型
+- `max_length` (int): 最大输出长度
+- `language` (str): 输出语言
 
 
 
-### `get_model_info() -> Dict[str, Any]`
-获取模型信息。
 
-**返回：**
-```python
-{
-    "model": "gpt-3.5-turbo",
-    "context_window": 4096,
-    "max_output_tokens": 4096,
-    "supports_functions": True,
-    "supports_vision": False
-}
-```
 
 ## 内部方法
 
@@ -187,41 +154,16 @@ response = client.complete(
 print(f"生成的SQL: {response.content}")
 ```
 
-### 函数调用
+### SQL 生成
 ```python
-# 定义函数
-functions = [{
-    "name": "execute_sql",
-    "description": "执行SQL查询",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "sql": {
-                "type": "string",
-                "description": "要执行的SQL语句"
-            },
-            "database": {
-                "type": "string",
-                "description": "目标数据库"
-            }
-        },
-        "required": ["sql"]
-    }
-}]
-
-# 发送请求
-response = client.chat_with_functions(
-    messages=[
-        {"role": "user", "content": "查询所有活跃用户"}
-    ],
-    functions=functions,
-    function_call="auto"
+# 生成 SQL 查询
+schema_context = "users表包含: id, name, email, status, created_at"
+sql = client.generate_sql(
+    query="查询所有活跃用户",
+    schema_context=schema_context,
+    dialect="mysql"
 )
-
-# 解析函数调用
-if function_call := client.parse_function_call(response):
-    print(f"调用函数: {function_call['name']}")
-    print(f"参数: {function_call['arguments']}")
+print(f"生成的SQL: {sql}")
 ```
 
 ### 流式输出
@@ -236,17 +178,13 @@ for chunk in client.chat(
 
 ### 对话历史管理
 ```python
-# 使用历史消息
-history = [
+# 手动管理历史消息
+messages = [
+    {"role": "system", "content": "你是数据库专家"},
     {"role": "user", "content": "什么是主键？"},
     {"role": "assistant", "content": "主键是..."},
+    {"role": "user", "content": "外键和主键有什么区别？"}
 ]
-
-messages = client.format_messages(
-    system_prompt="你是数据库专家",
-    user_prompt="外键和主键有什么区别？",
-    history=history
-)
 
 response = client.chat(messages)
 ```

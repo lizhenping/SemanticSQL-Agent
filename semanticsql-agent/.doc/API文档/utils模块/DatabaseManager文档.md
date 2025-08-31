@@ -130,28 +130,7 @@ else:
 - 释放所有连接
 - 清理资源
 
-## 上下文管理器
 
-### `@contextmanager session()`
-提供数据库会话的上下文管理器。
-
-**使用示例：**
-```python
-with db_manager.session() as sess:
-    result = sess.execute(text("SELECT * FROM users"))
-    data = result.fetchall()
-```
-
-### `@contextmanager transaction()`
-提供事务的上下文管理器。
-
-**使用示例：**
-```python
-with db_manager.transaction() as conn:
-    conn.execute(text("INSERT INTO users (name) VALUES (:name)"), {"name": "张三"})
-    conn.execute(text("UPDATE stats SET count = count + 1"))
-    # 自动提交或回滚
-```
 
 ## 连接池配置
 
@@ -214,44 +193,9 @@ if db_manager.initialize():
     db_manager.close()
 ```
 
-### 事务处理
-```python
-try:
-    with db_manager.transaction() as conn:
-        # 插入订单
-        conn.execute(text(
-            "INSERT INTO orders (user_id, amount) VALUES (:user_id, :amount)"
-        ), {"user_id": 1, "amount": 100.00})
-        
-        # 更新库存
-        conn.execute(text(
-            "UPDATE inventory SET quantity = quantity - :qty WHERE product_id = :pid"
-        ), {"qty": 1, "pid": 123})
-        
-        # 事务自动提交
-        
-except Exception as e:
-    print(f"事务失败: {e}")
-    # 事务自动回滚
-```
 
-### 批量操作
-```python
-# 批量插入
-users = [
-    {"name": "张三", "email": "zhang@example.com"},
-    {"name": "李四", "email": "li@example.com"},
-    {"name": "王五", "email": "wang@example.com"}
-]
 
-with db_manager.session() as session:
-    for user in users:
-        session.execute(
-            text("INSERT INTO users (name, email) VALUES (:name, :email)"),
-            user
-        )
-    session.commit()
-```
+
 
 ## 错误处理
 
@@ -298,14 +242,7 @@ result = db_manager.execute_sql_safe(
 )
 ```
 
-### 3. 批量操作
-```python
-# 使用事务批量操作
-with db_manager.transaction() as conn:
-    for i in range(1000):
-        conn.execute(text("INSERT INTO ..."))
-    # 一次性提交
-```
+
 
 ## 安全考虑
 

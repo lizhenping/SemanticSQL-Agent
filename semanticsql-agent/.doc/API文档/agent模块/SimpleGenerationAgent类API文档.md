@@ -57,14 +57,15 @@ known_tables = {
 
 ## 公共方法
 
-### `generate_training_pairs(self, count: int = 10) -> List[Dict[str, Any]]`
-生成指定数量的训练数据对。
+### `generate_training_data(self, count: int, output_file: str) -> Dict[str, Any]`
+生成指定数量的训练数据。
 
 **参数：**
 - `count` (int): 要生成的数据对数量
+- `output_file` (str): 输出文件路径
 
 **返回：**
-- `List[Dict[str, Any]]`: 生成的训练数据列表
+- `Dict[str, Any]`: 生成结果统计
 
 **数据格式：**
 ```python
@@ -116,29 +117,28 @@ db_config = DatabaseConfig(
 agent = SimpleGenerationAgent(settings, db_config)
 
 # 生成训练数据
-training_data = agent.generate_training_pairs(count=20)
+result = agent.generate_training_data(count=20, output_file="training_data.jsonl")
 
-# 查看生成的数据
-for item in training_data:
-    print(f"问题: {item['question']}")
-    print(f"SQL: {item['sql']}")
-    print(f"Schema: {item['schema']}")
-    print("-" * 50)
+# 查看结果
+print(f"生成完成: {result}")
+# 注意：数据已直接保存到文件中
 ```
 
-### 保存训练数据
+### 查看生成的数据
 ```python
-# 生成数据
-training_data = agent.generate_training_pairs(count=50)
+# 生成数据（自动保存到文件）
+result = agent.generate_training_data(count=50, output_file="training_data.jsonl")
 
-# 保存为 JSONL 格式
+# 读取生成的数据查看
 import json
 
-with open("training_data.jsonl", "w", encoding="utf-8") as f:
-    for item in training_data:
-        f.write(json.dumps(item, ensure_ascii=False) + "\n")
-
-print(f"已保存 {len(training_data)} 条训练数据")
+with open("training_data.jsonl", "r", encoding="utf-8") as f:
+    for i, line in enumerate(f):
+        if i < 5:  # 只查看前5条
+            data = json.loads(line)
+            print(f"问题: {data['question']}")
+            print(f"SQL: {data['sql']}")
+            print("-" * 50)
 ```
 
 ## 生成的问题类型
