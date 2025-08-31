@@ -73,8 +73,7 @@ semanticsql-agent/
 ├── agent/
 │   ├── __init__.py
 │   ├── base_agent.py           # 基础Agent（含执行流程控制和ReAct循环）
-│   ├── sql_agent.py            # SQL智能体（支持单次查询和批量生成两种模式）
-│   └── simple_generation_agent.py # 简化版生成Agent（可选，用于快速测试）
+│   └── sql_agent.py            # SQL智能体（支持单次查询和批量生成两种模式）
 │
 ├── utils/
 │   ├── __init__.py
