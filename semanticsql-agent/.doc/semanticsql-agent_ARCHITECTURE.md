@@ -72,16 +72,17 @@ semanticsql-agent/
 │
 ├── agent/
 │   ├── __init__.py
-│   ├── base_agent.py           # 基础Agent（含执行记录和记忆管理）
+│   ├── base_agent.py           # 基础Agent（含执行流程控制）
 │   ├── smart_sql_agent.py      # 主SQL Agent（用于SQL查询生成）
 │   ├── data_generation_agent.py # 数据生成Agent（用于批量生成训练数据）
-│   └── callbacks.py            # 执行回调（轨迹记录等）
+│   ├── memory.py               # 记忆模块（存储和管理数据库分析结果）
+│   └── callbacks.py            # 执行回调（与trajectory配合）
 │
 ├── utils/
 │   ├── __init__.py
 │   ├── database.py              # 数据库连接管理
 │   ├── llm_client.py            # LLM客户端（支持使用标准OpenAI库调用Qwen）
-│   └── trajectory.py            # 执行轨迹记录（保存每次执行的完整过程）
+│   └── trajectory.py            # 执行轨迹记录（保存执行历史，用于调试分析）
 │
 └── cli.py                       # 命令行接口
 ```
