@@ -11,7 +11,7 @@ class SQLGenerationTool(BaseTool):
 
 ## 工具属性
 
-- **名称**: `generate_sql`
+- **名称**: `sql_generation`
 - **类别**: `generation`
 - **描述**: 根据自然语言问题生成对应的SQL查询
 

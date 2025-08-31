@@ -11,7 +11,7 @@ class OperationSelectionTool(BaseTool):
 
 ## 工具属性
 
-- **名称**: `select_operations`
+- **名称**: `operation_selection`
 - **类别**: `generation`
 - **描述**: 根据场景和难度选择合适的SQL操作组合
 

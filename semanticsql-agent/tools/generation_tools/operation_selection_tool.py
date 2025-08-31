@@ -14,7 +14,7 @@ class OperationSelectionTool(BaseTool):
     
     @property
     def name(self) -> str:
-        return "select_operations"
+        return "operation_selection"
     
     @property
     def description(self) -> str:

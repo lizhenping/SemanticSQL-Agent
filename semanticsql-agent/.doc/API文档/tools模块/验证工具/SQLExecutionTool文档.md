@@ -23,7 +23,7 @@ def __init__(self, db_manager: DatabaseManager)
 
 ## 工具属性
 
-- **名称**: `execute_sql`
+- **名称**: `sql_execution`
 - **类别**: `validation`
 - **描述**: 执行SQL查询并返回结果
 

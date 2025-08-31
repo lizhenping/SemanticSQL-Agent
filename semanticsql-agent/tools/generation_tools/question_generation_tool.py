@@ -27,7 +27,7 @@ class QuestionGenerationTool(BaseTool):
     
     @property
     def name(self) -> str:
-        return "generate_question"
+        return "question_generation"
     
     @property
     def description(self) -> str:

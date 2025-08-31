@@ -11,7 +11,7 @@ class SQLReflectionTool(BaseTool):
 
 ## 工具属性
 
-- **名称**: `reflect_on_sql`
+- **名称**: `sql_reflection`
 - **类别**: `reflection`
 - **描述**: 分析SQL执行结果并提供质量评估和优化建议
 

@@ -23,7 +23,7 @@ class FieldClassificationTool(BaseTool):
     
     @property
     def name(self) -> str:
-        return "classify_fields"
+        return "field_classification"
     
     @property
     def description(self) -> str:

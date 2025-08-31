@@ -11,7 +11,7 @@ class FieldClassificationTool(BaseTool):
 
 ## 工具属性
 
-- **名称**: `classify_fields`
+- **名称**: `field_classification`
 - **类别**: `analysis`
 - **描述**: 对数据库表的字段进行智能分类，识别字段的业务含义
 

@@ -11,7 +11,7 @@ class SQLValidationTool(BaseTool):
 
 ## 工具属性
 
-- **名称**: `validate_sql`
+- **名称**: `sql_validation`
 - **类别**: `validation`
 - **描述**: 验证SQL查询的语法和结构正确性
 

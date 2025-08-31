@@ -15,7 +15,7 @@ class SQLValidationTool(BaseTool):
     
     @property
     def name(self) -> str:
-        return "validate_sql"
+        return "sql_validation"
     
     @property
     def description(self) -> str:

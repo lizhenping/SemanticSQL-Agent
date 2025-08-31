@@ -11,7 +11,7 @@ class ScenarioTool(BaseTool):
 
 ## 工具属性
 
-- **名称**: `generate_scenario`
+- **名称**: `scenario_generation`
 - **类别**: `generation`
 - **描述**: 基于数据库结构和业务领域生成查询场景
 

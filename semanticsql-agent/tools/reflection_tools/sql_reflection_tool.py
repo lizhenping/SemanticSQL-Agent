@@ -31,7 +31,7 @@ class SQLReflectionTool(BaseTool):
     
     @property
     def name(self) -> str:
-        return "reflect_on_sql"
+        return "sql_reflection"
     
     @property
     def description(self) -> str:

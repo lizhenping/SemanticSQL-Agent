@@ -11,7 +11,7 @@ class ERAnalysisTool(BaseTool):
 
 ## 工具属性
 
-- **名称**: `analyze_er`
+- **名称**: `er_analysis`
 - **类别**: `analysis`
 - **描述**: 分析数据库表之间的实体关系，构建ER图
 

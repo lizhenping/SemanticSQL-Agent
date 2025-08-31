@@ -11,7 +11,7 @@ class DomainAnalysisTool(BaseTool):
 
 ## 工具属性
 
-- **名称**: `analyze_domain`
+- **名称**: `domain_analysis`
 - **类别**: `analysis`
 - **描述**: 分析数据库的业务领域，识别主要业务场景
 

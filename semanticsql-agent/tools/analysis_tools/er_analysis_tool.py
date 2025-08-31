@@ -14,7 +14,7 @@ class ERAnalysisTool(BaseTool):
     
     @property
     def name(self) -> str:
-        return "analyze_er"
+        return "er_analysis"
     
     @property
     def description(self) -> str:

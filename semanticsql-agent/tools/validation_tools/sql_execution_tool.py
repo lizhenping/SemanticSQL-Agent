@@ -26,7 +26,7 @@ class SQLExecutionTool(BaseTool):
     
     @property
     def name(self) -> str:
-        return "execute_sql"
+        return "sql_execution"
     
     @property
     def description(self) -> str:

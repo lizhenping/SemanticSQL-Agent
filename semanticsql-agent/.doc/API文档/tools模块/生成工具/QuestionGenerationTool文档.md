@@ -11,7 +11,7 @@ class QuestionGenerationTool(BaseTool):
 
 ## 工具属性
 
-- **名称**: `generate_question`
+- **名称**: `question_generation`
 - **类别**: `generation`
 - **描述**: 根据场景和操作生成自然语言查询问题
 
