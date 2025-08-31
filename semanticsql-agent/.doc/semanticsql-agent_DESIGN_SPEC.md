@@ -180,10 +180,10 @@ SQL反思分析
             └─ 确定需要回退到哪一步
                     ↓
             只重新执行出问题的那一步：
-            ├─ 如果是数据库记忆不足 → 补充分析特定内容，更新记忆
             ├─ 如果是操作选择问题 → 只重新执行操作选择
-            ├─ 如果是问题表述问题 → 只重新生成问题
-            └─ 如果是SQL生成问题 → 只重新生成SQL
+            ├─ 如果是问题表述问题 → 只重新生成问题  
+            ├─ 如果是SQL生成问题 → 只重新生成SQL
+            └─ 如果是记忆使用问题 → 重新执行该步骤，更好地利用已有记忆
                     ↓
             使用新结果继续后续步骤
 ```
@@ -250,9 +250,11 @@ sql_reflection 发现问题
        - 输出：SQL查询
        - 检查：SQL是否准确实现问题意图
     
-    5. 数据库记忆使用是否充分？
-       - 检查：是否遗漏重要的表关系
-       - 检查：是否误解了字段含义
+    5. 是否充分利用了数据库分析记忆？
+       - 检查：是否正确使用了schema_info中的表结构
+       - 检查：是否利用了field_classification的字段分类
+       - 检查：是否考虑了er_analysis中的表关系
+       - 检查：是否参考了domain_analysis的业务理解
     ↓
 定位问题源头步骤
     ↓
@@ -418,18 +420,31 @@ if reflection["needs_revision"]:
         sql = new_sql  # 更新SQL
         # 重新验证和执行新SQL
         
-    elif fix_strategy["problem_step"] == "memory":
-        # 补充分析特定内容，更新记忆
-        if fix_strategy["missing_info"] == "table_relationship":
-            additional_er = analyze_specific_tables(tables=fix_strategy["tables"])
-            memory["er_analysis"].update(additional_er)  # 更新记忆
-        # 使用更新后的记忆重新执行出问题的步骤
+    elif fix_strategy["problem_step"] == "memory_usage":
+        # 不是记忆不足，而是没有正确使用已有的记忆
+        if fix_strategy["unused_memory"] == "er_analysis":
+            # 例如：SQL生成时没有考虑表关系，重新生成SQL
+            new_sql = sql_generation(
+                question=question["text"],
+                schema_info=memory["schema_info"],
+                er_info=memory["er_analysis"]  # 确保使用表关系信息
+            )
+            sql = new_sql
+        elif fix_strategy["unused_memory"] == "field_classification":
+            # 例如：问题生成时没有使用字段分类信息
+            new_question = question_generation(
+                scenario=scenario,
+                operations=operations,
+                schema_info=memory["schema_info"],
+                field_info=memory["field_classification"]  # 确保使用字段分类
+            )
 ```
 
 **修正原则**：
 - 只修正出问题的那一步，不影响之前的步骤
 - 修正后的结果用于继续执行流程
-- 如果是记忆问题，更新记忆后重新执行受影响的步骤
+- 数据库分析记忆是一次性获取的，不会重新分析
+- 如果是记忆使用问题，重新执行该步骤并确保正确使用已有记忆
 
 ### 2.2 数据生成规范
 
