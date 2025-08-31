@@ -27,7 +27,7 @@ class SQLGenerationTool(BaseTool):
     
     @property
     def name(self) -> str:
-        return "generate_sql"
+        return "sql_generation"
     
     @property
     def description(self) -> str:

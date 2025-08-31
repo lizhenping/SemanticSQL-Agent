@@ -29,7 +29,7 @@ class ScenarioTool(BaseTool):
     
     @property
     def name(self) -> str:
-        return "generate_scenario"
+        return "scenario_generation"
     
     @property
     def description(self) -> str:

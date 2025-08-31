@@ -13,7 +13,7 @@ class DomainAnalysisTool(BaseTool):
     
     @property
     def name(self) -> str:
-        return "analyze_domain"
+        return "domain_analysis"
     
     @property
     def description(self) -> str:
