@@ -116,6 +116,17 @@ class TrajectoryCallbackHandler(BaseCallbackHandler):
             if self.current_execution:
                 self.current_execution.steps.append(self.current_step)
             
+            # 保存到轨迹（包含工具名称）
+            if self.current_step.tool_name:
+                self.trajectories.append({
+                    "type": "action",
+                    "tool": self.current_step.tool_name,
+                    "input": self.current_step.tool_input,
+                    "output": output if isinstance(output, dict) else {"result": output},
+                    "timestamp": datetime.now(),
+                    "run_id": str(run_id)
+                })
+            
             self.current_step = None
     
     def on_tool_error(

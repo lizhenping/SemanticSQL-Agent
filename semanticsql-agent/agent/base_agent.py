@@ -105,6 +105,11 @@ Begin!"""),
         )
         
         # 创建执行器
+        callbacks = [self.callback_handler]
+        # 添加额外的回调（如果子类提供）
+        if hasattr(self, 'extra_callbacks'):
+            callbacks.extend(self.extra_callbacks)
+        
         return AgentExecutor(
             agent=agent,
             tools=self.tools,
@@ -112,7 +117,7 @@ Begin!"""),
             verbose=True,
             max_iterations=self.settings.max_steps,
             handle_parsing_errors=True,
-            callbacks=[self.callback_handler]
+            callbacks=callbacks
         )
     
     def run(self, task: str, **kwargs) -> Dict[str, Any]:

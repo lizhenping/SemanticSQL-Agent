@@ -10,6 +10,7 @@ from datetime import datetime
 
 from langchain.tools import BaseTool
 from langchain.memory import BaseMemory
+from langchain.callbacks.base import BaseCallbackHandler
 
 from agent.base_agent import BaseAgent
 from config.settings import Settings
@@ -42,8 +43,15 @@ from tools.thinking_tools.sequential_thinking_tool import SequentialThinkingTool
 class SQLAgent(BaseAgent):
     """SQL 生成智能体 - 支持批量训练数据生成"""
     
-    def __init__(self, settings: Settings, db_config: DatabaseConfig):
-        """初始化 SQL Agent"""
+    def __init__(self, settings: Settings, db_config: DatabaseConfig, 
+                 callbacks: Optional[List[BaseCallbackHandler]] = None):
+        """初始化 SQL Agent
+        
+        Args:
+            settings: 系统配置
+            db_config: 数据库配置
+            callbacks: LangChain 回调处理器列表
+        """
         # 初始化数据库管理器
         self.db_manager = DatabaseManager(db_config)
         if not self.db_manager.initialize():
@@ -51,6 +59,9 @@ class SQLAgent(BaseAgent):
                 step="initialization",
                 reason="Failed to initialize database connection"
             )
+        
+        # 保存额外的回调
+        self.extra_callbacks = callbacks or []
         
         # 调用父类初始化
         super().__init__(settings, db_config)
@@ -214,14 +225,79 @@ class SQLAgent(BaseAgent):
     
     def _extract_generated_examples(self, agent_output: Any) -> List[Dict[str, Any]]:
         """从 Agent 输出中提取生成的样例"""
-        # 这里需要根据实际的 Agent 输出格式来解析
-        # 目前返回空列表，实际实现需要解析 agent_output
         examples = []
         
-        # TODO: 实现实际的解析逻辑
-        # 可能需要从执行轨迹中提取生成的问题和SQL对
+        # 从执行轨迹中提取数据
+        if hasattr(self.callback_handler, 'get_trajectories'):
+            trajectories = self.callback_handler.get_trajectories()
+            
+            # 解析轨迹，提取问题-SQL对
+            current_example = {}
+            current_scenario = {}
+            
+            for trajectory in trajectories:
+                if trajectory['type'] == 'action':
+                    tool = trajectory['tool']
+                    tool_output = trajectory.get('output', {})
+                    
+                    if tool == 'scenario_tool':
+                        current_scenario = {
+                            'id': tool_output.get('scenario_id', ''),
+                            'category': tool_output.get('category', ''),
+                            'business_purpose': tool_output.get('business_purpose', ''),
+                            'difficulty': tool_output.get('complexity', 'medium')
+                        }
+                    elif tool == 'operation_selection':
+                        current_example['operations'] = tool_output.get('selected_operations', [])
+                    elif tool == 'question_generation':
+                        current_example['question'] = tool_output.get('question', '')
+                        current_example['scenario'] = current_scenario
+                    elif tool == 'sql_generation':
+                        current_example['sql'] = tool_output.get('sql', '')
+                        current_example['tables'] = tool_output.get('tables_used', [])
+                    elif tool == 'sql_validation':
+                        if 'validation' not in current_example:
+                            current_example['validation'] = {}
+                        current_example['validation']['syntax_valid'] = tool_output.get('valid', False)
+                    elif tool == 'sql_execution':
+                        if 'validation' not in current_example:
+                            current_example['validation'] = {}
+                        current_example['validation']['execution_success'] = tool_output.get('success', False)
+                        current_example['validation']['row_count'] = tool_output.get('row_count', 0)
+                        if tool_output.get('data'):
+                            current_example['validation']['result_sample'] = tool_output['data'][:3]
+                    elif tool == 'sql_reflection':
+                        current_example['quality_score'] = tool_output.get('overall_score', 0.0)
+                        
+                        # 如果反思通过，保存样例
+                        if not tool_output.get('needs_revision', True) and 'question' in current_example and 'sql' in current_example:
+                            # 格式化样例
+                            formatted_example = self._format_training_example(current_example)
+                            examples.append(formatted_example)
+                            # 重置当前样例
+                            current_example = {}
         
         return examples
+    
+    def _format_training_example(self, raw_example: Dict[str, Any]) -> Dict[str, Any]:
+        """格式化训练样例以符合API规范"""
+        import uuid
+        
+        return {
+            "id": f"q_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}",
+            "scenario": raw_example.get("scenario", {}),
+            "question": raw_example.get("question", ""),
+            "sql": raw_example.get("sql", ""),
+            "operations": raw_example.get("operations", []),
+            "tables": raw_example.get("tables", []),
+            "timestamp": datetime.now().isoformat(),
+            "validation": raw_example.get("validation", {
+                "syntax_valid": False,
+                "execution_success": False,
+                "row_count": 0
+            }),
+            "quality_score": raw_example.get("quality_score", 0.0)
+        }
     
     def _save_training_data(self, examples: List[Dict[str, Any]], output_file: str):
         """保存训练数据到文件"""
