@@ -142,6 +142,8 @@ Final Answer: 最终结果
         
         # 设置到回调处理器
         self.callback_handler.set_execution(execution)
+        # 设置内存引用以便保存工具结果
+        self.callback_handler.memory = self.memory
         
         try:
             # 执行任务

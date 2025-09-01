@@ -20,14 +20,62 @@ class DomainAnalysisTool(BaseTool):
     
     name: str = "domain_analysis"
     description: str = "分析数据库的业务领域，识别主要业务场景和数据特征"
-    args_schema: Type[BaseModel] = DomainAnalysisInput
+    # args_schema: Type[BaseModel] = DomainAnalysisInput  # Commented due to LangChain complex parameter issues
     
-    def _run(self, memory: Dict[str, Any]) -> Dict[str, Any]:
+    def _run(self, tool_input: str = "", **kwargs) -> Dict[str, Any]:
         """执行领域分析"""
         try:
-            # 从记忆中获取schema信息
-            db_analysis = memory.get("db_analysis", {})
-            schema_info = db_analysis.get("schema_info", {})
+            # 解析输入参数
+            import json
+            memory = {}
+            schema_info = {}
+            
+            if tool_input:
+                try:
+                    parsed_input = json.loads(tool_input)
+                    print(f"[DEBUG] Parsed input keys: {list(parsed_input.keys())}")
+                    
+                    # 尝试多种输入格式
+                    if "schema" in parsed_input:
+                        # Agent传递的schema格式
+                        schema_info = parsed_input["schema"]
+                        print(f"[DEBUG] Found schema key, has tables: {'tables' in schema_info}")
+                    elif "database_schema" in parsed_input:
+                        # Agent传递的database_schema格式
+                        schema_info = parsed_input["database_schema"]
+                        print(f"[DEBUG] Found database_schema key, has tables: {'tables' in schema_info}")
+                    elif "database_structure" in parsed_input:
+                        # 直接的数据库结构格式
+                        schema_info = parsed_input
+                        print(f"[DEBUG] Found database_structure key")
+                    elif "memory" in parsed_input:
+                        # 包装在memory中的格式
+                        memory = parsed_input["memory"]
+                        db_analysis = memory.get("db_analysis", {})
+                        schema_info = db_analysis.get("schema_info", {})
+                        print(f"[DEBUG] Found memory key")
+                    elif "db_analysis" in parsed_input:
+                        # db_analysis格式
+                        db_analysis = parsed_input["db_analysis"]
+                        schema_info = db_analysis.get("schema_info", {})
+                        print(f"[DEBUG] Found db_analysis key")
+                    elif "tables" in parsed_input and "database_name" in parsed_input:
+                        # 直接的schema结果格式（从schema_extraction输出）
+                        schema_info = parsed_input
+                        print(f"[DEBUG] Found direct schema format")
+                    else:
+                        # 默认作为记忆处理
+                        memory = parsed_input
+                        db_analysis = memory.get("db_analysis", {})
+                        schema_info = db_analysis.get("schema_info", {})
+                        print(f"[DEBUG] Using default parsing")
+                except json.JSONDecodeError as e:
+                    print(f"[DEBUG] JSON decode error: {e}")
+                    schema_info = {}
+            
+            print(f"[DEBUG] Final schema_info empty: {not schema_info}")
+            if schema_info:
+                print(f"[DEBUG] Schema contains tables: {'tables' in schema_info}")
             
             if not schema_info:
                 raise ToolExecutionError(

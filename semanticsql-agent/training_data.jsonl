@@ -1,1 +1,0 @@
-{"question": "最近，各个产品类别的销售额分别是多少？", "sql": "SELECT 产品类别, SUM(销售额) AS 总销售额 FROM 销售表 GROUP BY 产品类别", "scenario_id": "SCN_001", "complexity": "medium", "category": "sales_analysis", "validation_result": {"syntax_check": "valid", "execution_result": "成功返回各产品类别的总销售额", "needs_revision": false}}

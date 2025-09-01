@@ -22,13 +22,42 @@ class FieldClassificationTool(BaseTool):
     description: str = "对数据库字段进行语义分类，识别字段的业务含义和用途"
     args_schema: Type[BaseModel] = FieldClassificationInput
     
-    def _run(self, memory: Dict[str, Any]) -> Dict[str, Any]:
+    def _run(self, tool_input: str = "", **kwargs) -> Dict[str, Any]:
         """执行字段分类"""
         try:
-            # 从记忆中获取必要信息
-            db_analysis = memory.get("db_analysis", {})
-            schema_info = db_analysis.get("schema_info", {})
-            domain_info = db_analysis.get("domain_info", {})
+            # 解析输入参数
+            import json
+            memory = {}
+            schema_info = {}
+            domain_info = {}
+            
+            if tool_input:
+                try:
+                    parsed_input = json.loads(tool_input)
+                    # 尝试多种输入格式
+                    if "database_schema" in parsed_input:
+                        schema_info = parsed_input["database_schema"]
+                    elif "schema" in parsed_input:
+                        schema_info = parsed_input["schema"]
+                    elif "memory" in parsed_input:
+                        memory = parsed_input["memory"]
+                        db_analysis = memory.get("db_analysis", {})
+                        schema_info = db_analysis.get("schema_info", {})
+                        domain_info = db_analysis.get("domain_info", {})
+                    elif "db_analysis" in parsed_input:
+                        db_analysis = parsed_input["db_analysis"]
+                        schema_info = db_analysis.get("schema_info", {})
+                        domain_info = db_analysis.get("domain_info", {})
+                    elif "tables" in parsed_input and "database_name" in parsed_input:
+                        # 直接的schema结果格式（从schema_extraction输出）
+                        schema_info = parsed_input
+                    else:
+                        memory = parsed_input
+                        db_analysis = memory.get("db_analysis", {})
+                        schema_info = db_analysis.get("schema_info", {})
+                        domain_info = db_analysis.get("domain_info", {})
+                except json.JSONDecodeError:
+                    schema_info = {}
             
             if not schema_info:
                 raise ToolExecutionError(

@@ -23,7 +23,7 @@ class QuestionGenerationTool(BaseTool):
     
     name: str = "question_generation"
     description: str = "根据场景和数据库结构生成自然语言问题"
-    # args_schema: Type[BaseModel] = QuestionGenerationInput
+    # args_schema: Type[BaseModel] = QuestionGenerationInput  # Commented due to LangChain complex parameter issues
     
     def __init__(self, llm: ChatOpenAI):
         super().__init__()
@@ -36,16 +36,19 @@ class QuestionGenerationTool(BaseTool):
             import json
             scenario = {}
             operations = []
+            memory = {}
             try:
                 if tool_input:
                     input_data = json.loads(tool_input)
                     scenario = input_data.get('scenario', {})
                     operations = input_data.get('operations', [])
+                    memory = input_data.get('memory', {})
                     if isinstance(scenario, str):
                         scenario = json.loads(scenario)
             except:
                 scenario = {}
                 operations = []
+                memory = {}
             
             # QuestionGenerationTool基于场景和操作生成问题，不强制依赖数据库分析
             category = scenario.get("category", "通用查询")

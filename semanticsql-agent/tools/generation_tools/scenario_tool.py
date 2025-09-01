@@ -24,8 +24,7 @@ class ScenarioTool(BaseTool):
     
     name: str = "scenario_tool"
     description: str = "从预定义的场景模板中选择一个适合当前数据库的业务场景"
-    # 暂时移除args_schema，让工具接受任意参数
-    # args_schema: Type[BaseModel] = ScenarioToolInput
+    args_schema: Type[BaseModel] = ScenarioToolInput
     
     def __init__(self):
         super().__init__()
@@ -38,19 +37,9 @@ class ScenarioTool(BaseTool):
             DifficultyLevel.EXPERT: 0.05
         })
     
-    def _run(self, tool_input: str = "", **kwargs) -> Dict[str, Any]:
+    def _run(self, iteration: int = 0, **kwargs) -> Dict[str, Any]:
         """选择一个场景"""
         try:
-            # 解析JSON输入参数
-            import json
-            try:
-                if tool_input:
-                    input_data = json.loads(tool_input)
-                    iteration = input_data.get('iteration', 0)
-                else:
-                    iteration = 0
-            except:
-                iteration = 0
             
             # ScenarioTool基于预定义模板工作，不需要数据库分析结果
             # 它会返回通用的业务场景，供后续工具使用

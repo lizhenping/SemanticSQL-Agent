@@ -134,15 +134,25 @@ class DataGenerationAgent(BaseAgent):
         analysis_task = f"""
         请对数据库 {database_name} 执行完整的分析流程。按照以下顺序执行：
         
-        1. 使用 schema_extraction 提取数据库结构
-        2. 使用 domain_analysis 分析业务领域
-        3. 使用 field_classification 对字段进行语义分类
-        4. 使用 column_meaning_analysis 分析每个列的业务含义
-        5. 使用 table_meaning_analysis 分析每个表的业务职责
-        6. 使用 er_analysis 分析表之间的实体关系
+        **步骤1**: 使用 schema_extraction 提取数据库结构
+        - 参数: {{"database": "{database_name}"}}
         
-        请按顺序执行这些分析工具，并将结果保存到记忆中供后续使用。
-        所有分析结果都应该保存在记忆系统中，不要重复执行。
+        **步骤2**: 使用 domain_analysis 分析业务领域
+        - 参数: 传入步骤1的完整输出结果（JSON格式）
+        
+        **步骤3**: 使用 field_classification 对字段进行语义分类
+        - 参数: 传入步骤1的完整输出结果（JSON格式）
+        
+        **步骤4**: 使用 column_meaning_analysis 分析每个列的业务含义
+        - 参数: 传入步骤1的完整输出结果（JSON格式）
+        
+        **步骤5**: 使用 table_meaning_analysis 分析每个表的业务职责
+        - 参数: 传入步骤1的完整输出结果（JSON格式）
+        
+        **步骤6**: 使用 er_analysis 分析表之间的实体关系
+        - 参数: 传入步骤1的完整输出结果（JSON格式）
+        
+        **重要**：每个分析工具都需要数据库结构信息，请将schema_extraction的完整输出作为参数传递给后续的每个分析工具。
         """
         
         result = self.run(analysis_task)
@@ -180,100 +190,112 @@ class DataGenerationAgent(BaseAgent):
         """
         self.logger.info(f"Starting training data generation: {count} examples")
         
-        # 如果指定了数据库，先执行分析
-        if database_name:
-            analysis_result = self.analyze_database(database_name)
+        # 检查是否需要执行数据库分析
+        if database_name or not self.memory.has_complete_analysis():
+            # 如果指定了数据库名或记忆中没有完整分析，执行分析
+            target_db = database_name or self.db_manager.config.database
+            analysis_result = self.analyze_database(target_db)
             if not analysis_result["success"]:
                 raise AgentExecutionError(
                     step="database_analysis",
                     reason=analysis_result["error"]
                 )
         
-        # 构建生成任务（遵循设计文档的ReAct流程）
+        # 构建生成任务（强制执行工具序列）
         generation_task = f"""
-        请生成 {count} 个高质量的 NL2SQL 训练数据。
+        **任务目标**：生成 {count} 个高质量的 NL2SQL 训练数据
+        
+        **严格执行要求**：
+        - 你必须依次调用每个工具，不能跳过任何步骤
+        - 不允许提前给出 Final Answer
+        - 每个样本必须完成全部7个步骤才能继续下一个
+        - 不允许自行构造或假设工具结果
 
-        **极其重要**：你必须严格按照以下7个步骤的流程生成每个训练样本，不能跳过任何步骤！
+        ## 开始之前，先执行数据库分析（仅执行一次）：
+        
+        **必须首先执行：**
+        1. schema_extraction - 提取数据库结构
+        2. domain_analysis - 分析业务领域  
+        3. column_meaning_analysis - 分析列含义
+        4. table_meaning_analysis - 分析表含义
+        5. er_analysis - 分析实体关系
 
-        ## 主循环（执行 {count} 次迭代）：
-        for i in range({count}):
-            
-            print(f"\\n=== 生成第 {{i+1}}/{count} 个训练样本 ===")
-            
-            # 步骤1/7
-            1. **scenario_tool**：从预定义模板中选择一个场景
-               - 传入当前迭代次数 i 进行场景轮转
-               - 确保场景的多样性
-               - 注意：仅获取场景信息，不生成问题或SQL
-            
-            # 步骤2/7
-            2. **operation_selection**：根据场景复杂度选择SQL操作
-               - 基于预定义规则选择操作组合
-               - 简单场景：基础查询
-               - 中等场景：聚合分析
-               - 复杂场景：多表关联
-               - 注意：仅选择操作类型，不生成SQL
-            
-            # 步骤3/7
-            3. **question_generation**：生成自然语言问题
-               - 基于场景、操作和数据库记忆
-               - 确保问题清晰、自然、无歧义
-               - 注意：仅生成问题文本，不生成SQL
-            
-            # 步骤4/7
-            4. **sql_generation**：生成对应的SQL查询
-               - 基于问题和数据库记忆
-               - 确保SQL准确实现问题意图
-               - 注意：此时才生成SQL语句
-            
-            # 步骤5/7
-            5. **sql_validation**：验证SQL语法
-               - 检查SQL语法正确性
-               - 注意：必须验证，不能跳过
-            
-            # 步骤6/7
-            6. **sql_execution**：执行SQL测试
-               - 实际执行SQL验证可行性
-               - 获取执行结果
-               - 注意：必须执行，不能跳过
-            
-            # 步骤7/7
-            7. **sql_reflection**：反思生成质量
-               - 评估SQL执行结果
-               - 评估问题与SQL的匹配度
-               - 评估数据库记忆的使用情况
-               - 决定是否需要修正
+        ## 现在开始样本生成！必须一步一步执行：
+
+        **第1个训练样本开始：**
         
-        ## 反思后的修正机制：
-        如果 sql_reflection 发现问题（needs_revision = true）：
+        现在执行步骤1/7: 调用 scenario_tool
+        - 参数: {{"iteration": 0}}
+        - 等待工具执行完成后再继续
         
-        1. 使用 **sequential_thinking** 深度分析问题根源
-        2. 根据分析结果精确定位问题步骤：
-           - 如果是数据库分析有误：重新执行相应的分析工具并更新记忆
-           - 如果是问题生成有误：重新执行 question_generation
-           - 如果是SQL生成有误：重新执行 sql_generation
-        3. 重新执行后续的验证和反思步骤
+        (执行完步骤1后，继续步骤2...)
+        现在执行步骤2/7: 调用 operation_selection  
+        - 使用scenario_tool的输出结果
+        - 等待工具执行完成后再继续
         
-        ## 数据保存：
-        - 只有通过反思的样本才保存为训练数据
-        - 每个样本包含：问题、SQL、场景信息、验证结果
+        (执行完步骤2后，继续步骤3...)
+        现在执行步骤3/7: 调用 question_generation
+        - 使用前面步骤的结果
+        - 等待工具执行完成后再继续
         
-        ## 重要提醒：
-        - 数据库分析结果已保存在记忆中，请直接使用记忆中的信息
-        - 确保每个工具都从记忆中获取所需的依赖信息
-        - 反思失败时，只重新执行有问题的特定步骤
-        - 目标是生成 {{count}} 个高质量的训练样本
+        (执行完步骤3后，继续步骤4...)
+        现在执行步骤4/7: 调用 sql_generation
+        - 使用前面步骤的结果
+        - 等待工具执行完成后再继续
         
-        ## 特别强调：
-        1. 你看到工具输出后，不要自己构造完整的训练样本
-        2. 每个工具只完成它自己的任务：
-           - question_generation 只输出问题文本
-           - sql_generation 只输出SQL语句
-           - 其他工具类似
-        3. 必须执行完所有7个步骤才算完成一个样本
-        4. 只有在完成所有 {count} 个样本后，才输出最终结果
+        (执行完步骤4后，继续步骤5...)
+        现在执行步骤5/7: 调用 sql_validation
+        - 验证步骤4生成的SQL
+        - 等待工具执行完成后再继续
         
-        现在开始执行！记住：严格按照7个步骤的流程。
+        (执行完步骤5后，继续步骤6...)
+        现在执行步骤6/7: 调用 sql_execution
+        - 执行步骤4生成的SQL
+        - 等待工具执行完成后再继续
+        
+        (执行完步骤6后，继续步骤7...)
+        现在执行步骤7/7: 调用 sql_reflection
+        - 反思整体质量
+        - 完成第1个样本
+
+        **第2个训练样本开始：**
+        重复上述7个步骤，iteration参数改为1...
+        
+        **继续剩余样本直到完成{count}个样本**
+
+        ## 最终输出要求：
+        - 只有在完成所有 {count} 个样本的7个步骤后，才能输出 Final Answer
+        - Final Answer 必须是纯JSON数组格式，不要添加任何其他文本
+        - 精确的输出格式：
+        [
+          {{
+            "question": "自然语言问题",
+            "sql": "SQL查询语句",
+            "scenario_info": {{
+              "scenario_id": "场景ID",
+              "category": "场景类别",
+              "complexity": "复杂度"
+            }},
+            "validation_result": {{
+              "syntax_valid": true,
+              "execution_result": "执行结果描述"
+            }}
+          }}
+        ]
+
+        **禁止行为：**
+        - 禁止跳过任何工具调用
+        - 禁止提前给出结果
+        - 禁止自行构造工具输出
+        - 禁止在未完成所有步骤时给出 Final Answer
+
+        ## 错误修正机制：
+        如果任何步骤失败：
+        1. 使用 sequential_thinking 分析问题
+        2. 重新执行失败的步骤
+        3. 继续后续步骤
+
+        **现在开始执行！第一步：schema_extraction**
         """
         
         # 执行生成任务

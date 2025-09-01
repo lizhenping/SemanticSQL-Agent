@@ -22,14 +22,43 @@ class TableMeaningTool(BaseTool):
     description: str = "分析数据库表的业务含义，识别表的业务用途、实体类型和表间关系"
     args_schema: Type[BaseModel] = TableMeaningInput
     
-    def _run(self, memory: Dict[str, Any]) -> Dict[str, Any]:
+    def _run(self, tool_input: str = "", **kwargs) -> Dict[str, Any]:
         """执行表含义分析"""
         try:
-            # 从记忆中获取必要信息
-            db_analysis = memory.get("db_analysis", {})
-            schema_info = db_analysis.get("schema_info", {})
-            domain_info = db_analysis.get("domain_info", {})
-            er_relations = db_analysis.get("er_relations", {})
+            # 解析输入参数
+            import json
+            memory = {}
+            schema_info = {}
+            domain_info = {}
+            er_relations = {}
+            
+            if tool_input:
+                try:
+                    parsed_input = json.loads(tool_input)
+                    # 尝试多种输入格式
+                    if "database_schema" in parsed_input:
+                        schema_info = parsed_input["database_schema"]
+                    elif "schema" in parsed_input:
+                        schema_info = parsed_input["schema"]
+                    elif "memory" in parsed_input:
+                        memory = parsed_input["memory"]
+                        db_analysis = memory.get("db_analysis", {})
+                        schema_info = db_analysis.get("schema_info", {})
+                        domain_info = db_analysis.get("domain_info", {})
+                        er_relations = db_analysis.get("er_relations", {})
+                    elif "db_analysis" in parsed_input:
+                        db_analysis = parsed_input["db_analysis"]
+                        schema_info = db_analysis.get("schema_info", {})
+                        domain_info = db_analysis.get("domain_info", {})
+                        er_relations = db_analysis.get("er_relations", {})
+                    else:
+                        memory = parsed_input
+                        db_analysis = memory.get("db_analysis", {})
+                        schema_info = db_analysis.get("schema_info", {})
+                        domain_info = db_analysis.get("domain_info", {})
+                        er_relations = db_analysis.get("er_relations", {})
+                except json.JSONDecodeError:
+                    schema_info = {}
             
             if not schema_info:
                 raise ToolExecutionError(

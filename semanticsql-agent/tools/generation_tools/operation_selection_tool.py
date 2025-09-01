@@ -22,7 +22,7 @@ class OperationSelectionTool(BaseTool):
     
     name: str = "operation_selection"
     description: str = "根据场景复杂度和业务需求选择合适的SQL操作组合"
-    # args_schema: Type[BaseModel] = OperationSelectionInput
+    # args_schema: Type[BaseModel] = OperationSelectionInput  # Commented due to LangChain complex parameter issues
     
     def _run(self, tool_input: str = "", **kwargs) -> Dict[str, Any]:
         """选择SQL操作"""
@@ -30,15 +30,17 @@ class OperationSelectionTool(BaseTool):
             # 解析JSON输入参数
             import json
             scenario = {}
+            memory = {}
             try:
                 if tool_input:
                     input_data = json.loads(tool_input)
                     scenario = input_data.get('scenario', {})
+                    memory = input_data.get('memory', {})
                     if isinstance(scenario, str):
-                        # 如果scenario是字符串，再次尝试解析
                         scenario = json.loads(scenario)
             except:
                 scenario = {}
+                memory = {}
             
             complexity = scenario.get("complexity", "medium")
             category = scenario.get("category", "")

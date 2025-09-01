@@ -109,11 +109,21 @@ class DatabaseAnalysisMemory(BaseMemory):
     
     def has_complete_analysis(self) -> bool:
         """检查是否有完整的数据库分析结果"""
-        required_analyses = [
-            "schema_info", "domain_info", "field_classification",
-            "column_meanings", "table_meanings", "er_relations"
-        ]
-        return all(analysis in self.memories for analysis in required_analyses)
+        try:
+            # 确保memories是字典类型
+            if not isinstance(self.memories, dict):
+                self.memories = {}
+                return False
+                
+            required_analyses = [
+                "schema_info", "domain_info", "field_classification",
+                "column_meanings", "table_meanings", "er_relations"
+            ]
+            return all(analysis in self.memories for analysis in required_analyses)
+        except Exception:
+            # 如果检查失败，重置memories并返回False
+            self.memories = {}
+            return False
     
     def get_summary(self) -> str:
         """获取记忆摘要"""

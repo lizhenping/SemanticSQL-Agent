@@ -57,7 +57,7 @@ class SchemaExtractionTool(BaseTool):
             engine = self.db_manager.engine
             if not engine:
                 raise DatabaseConnectionError(
-                    host=self.db_manager.db_config.host,
+                    host=self.db_manager.config.host,
                     database=database_name,
                     original_error="数据库连接未建立"
                 )

@@ -136,6 +136,20 @@ class TrajectoryCallbackHandler(BaseCallbackHandler):
                     "timestamp": datetime.now(),
                     "run_id": str(run_id)
                 })
+                
+                # 如果是分析工具，自动保存结果到记忆
+                if hasattr(self, 'memory') and self.current_step.tool_name in [
+                    'schema_extraction', 'domain_analysis', 'field_classification',
+                    'column_meaning_analysis', 'table_meaning_analysis', 'er_analysis'
+                ]:
+                    try:
+                        if isinstance(output, dict):
+                            self.memory.save_context(
+                                {"tool_name": self.current_step.tool_name},
+                                output
+                            )
+                    except Exception as e:
+                        self.logger.warning(f"Failed to save tool output to memory: {e}")
             
             self.current_step = None
     
