@@ -1214,29 +1214,45 @@ output:
 - **系统错误**：内存不足、权限问题
 
 ### 5.2 错误处理策略
+
+#### 使用统一的异常体系
+所有异常都定义在 `models/exceptions.py` 中：
+- `SemanticSQLException`: 基础异常类
+- `ConfigurationError`: 配置相关异常
+- `DatabaseError`: 数据库相关异常
+- `LLMError`: LLM相关异常
+- `ToolError`: 工具相关异常
+- `AgentError`: Agent相关异常
+- `ValidationError`: 验证相关异常
+
+#### 工具级错误处理
 ```python
-# 工具级错误处理
-def run(self, **kwargs) -> Dict[str, Any]:
+from semanticsql_agent.models.exceptions import (
+    ToolExecutionError,
+    ToolParameterError
+)
+
+# 在工具的 _run 方法中
+def _run(self, **kwargs):
     try:
+        # 参数验证
+        if "memory" not in kwargs:
+            raise ToolParameterError(
+                tool_name=self.name,
+                param_name="memory",
+                reason="Missing required parameter"
+            )
+        
         # 执行逻辑
         result = self._execute(**kwargs)
-        return {
-            "success": True,
-            "data": result
-        }
-    except ValidationError as e:
-        return {
-            "success": False,
-            "error": f"参数验证失败: {e}",
-            "error_type": "validation"
-        }
+        return result  # LangChain 会自动包装结果
+        
     except Exception as e:
-        self.logger.error(f"工具执行失败: {e}", exc_info=True)
-        return {
-            "success": False,
-            "error": str(e),
-            "error_type": "execution"
-        }
+        # 转换为工具执行错误
+        raise ToolExecutionError(
+            tool_name=self.name,
+            reason=str(e)
+        ) from e
 
 # Agent 级错误恢复
 def _execute_with_retry(self, action: Dict, max_retries: int = 3):

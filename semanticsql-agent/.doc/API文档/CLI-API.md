@@ -205,20 +205,42 @@ semanticsql generate -c 10 -o data.json -d ecommerce -u root --output-format jso
 ## 错误处理
 
 ```python
+from functools import wraps
+from semanticsql_agent.models.exceptions import (
+    DatabaseConnectionError,
+    LLMError,
+    AgentExecutionError,
+    SemanticSQLException
+)
+
 def handle_errors(func):
-    """错误处理装饰器"""
+    """统一的错误处理装饰器"""
+    @wraps(func)
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)
         except DatabaseConnectionError as e:
-            click.echo(f"数据库连接失败: {e}", err=True)
+            click.echo(f"数据库连接失败 [{e.error_code}]: {e.message}", err=True)
+            if e.details:
+                click.echo(f"详情: {e.details}", err=True)
             sys.exit(1)
+        except LLMError as e:
+            click.echo(f"LLM错误 [{e.error_code}]: {e.message}", err=True)
+            sys.exit(2)
+        except AgentExecutionError as e:
+            click.echo(f"执行失败 [{e.error_code}]: {e.message}", err=True)
+            sys.exit(3)
+        except SemanticSQLException as e:
+            # 处理所有其他已知异常
+            click.echo(f"错误 [{e.error_code}]: {e.message}", err=True)
+            sys.exit(4)
         except Exception as e:
+            # 未预期的错误
             if click.get_current_context().obj.get('verbose'):
                 click.echo(traceback.format_exc(), err=True)
             else:
-                click.echo(f"错误: {e}", err=True)
-            sys.exit(1)
+                click.echo(f"未预期的错误: {e}", err=True)
+            sys.exit(5)
     return wrapper
 ```
 

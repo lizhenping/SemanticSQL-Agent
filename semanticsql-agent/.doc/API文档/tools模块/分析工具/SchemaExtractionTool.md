@@ -363,16 +363,24 @@ def _get_tables_batch(self, database_name, batch_size=100):
 ## 错误处理
 
 ```python
+from semanticsql_agent.models.exceptions import (
+    DatabaseConnectionError,
+    SchemaExtractionError,
+    ToolExecutionError
+)
+
 try:
-    schema = tool.run(database_name="mydb")
+    schema = tool.run({"database_name": "mydb"})
 except DatabaseConnectionError as e:
     print(f"连接失败: {e.message}")
+    print(f"错误代码: {e.error_code}")  # DB_001
     # 尝试重连或使用备用数据库
-except PermissionError as e:
-    print(f"权限不足: {e.message}")
-    # 请求必要的权限
-except Exception as e:
-    print(f"未知错误: {e}")
+except SchemaExtractionError as e:
+    print(f"Schema提取失败: {e.message}")
+    print(f"错误代码: {e.error_code}")  # DB_003
+    # 可能需要检查表结构或权限
+except ToolExecutionError as e:
+    print(f"工具执行错误: {e.message}")
     # 记录错误并通知
 ```
 

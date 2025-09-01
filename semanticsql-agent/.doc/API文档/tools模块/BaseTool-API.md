@@ -150,13 +150,18 @@ class ToolInput(BaseModel):
 ### 2. 错误处理
 
 ```python
+from semanticsql_agent.models.exceptions import ToolExecutionError
+
 def _run(self, **kwargs):
     try:
         # 执行逻辑
         result = self.execute(**kwargs)
     except SpecificError as e:
         # 提供清晰的错误信息
-        raise ToolExecutionError(f"工具执行失败: {str(e)}")
+        raise ToolExecutionError(
+            tool_name=self.name,
+            reason=str(e)
+        )
     
     return result
 ```

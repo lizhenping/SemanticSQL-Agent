@@ -79,8 +79,7 @@ def _run(
         Dict[str, Any]: 生成结果
     
     Raises:
-        SQLGenerationError: SQL 生成失败
-        InvalidSchemaError: Schema 信息无效
+        ToolExecutionError: SQL 生成失败
     
     Return Format:
         ```python
@@ -358,21 +357,30 @@ result = tool.run(
 ## 错误处理
 
 ```python
+from semanticsql_agent.models.exceptions import ToolExecutionError
+
 try:
-    result = tool.run(question=question, schema_info=schema)
-except SQLGenerationError as e:
+    result = tool.run({
+        "question": question, 
+        "memory": memory
+    })
+except ToolExecutionError as e:
     # SQL 生成失败
     print(f"Generation failed: {e.message}")
-    print(f"Problematic input: {e.input_data}")
+    print(f"Error code: {e.error_code}")
+    print(f"Details: {e.details}")
     
-    # 尝试简化问题
-    simplified = simplify_question(question)
-    result = tool.run(question=simplified, schema_info=schema)
-    
-except InvalidSchemaError as e:
-    # Schema 信息有问题
-    print(f"Invalid schema: {e.message}")
-    # 重新获取 schema
+    # 可以根据错误类型采取不同策略
+    if "schema" in e.message.lower():
+        # Schema 相关问题，可能需要重新分析数据库
+        pass
+    else:
+        # 尝试简化问题
+        simplified = simplify_question(question)
+        result = tool.run({
+            "question": simplified, 
+            "memory": memory
+        })
 ```
 
 ## 配置选项
