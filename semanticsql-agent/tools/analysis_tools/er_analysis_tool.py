@@ -15,8 +15,8 @@ from models.exceptions import ToolExecutionError
 class ERAnalysisInput(BaseModel):
     """ER分析输入"""
     memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
-    analyze_implicit: bool = Field(default=True, description: str = "是否分析隐式关系")
-    depth: int = Field(default=2, description: str = "关系分析深度")
+    analyze_implicit: bool = Field(default=True, description="是否分析隐式关系")
+    depth: int = Field(default=2, description="关系分析深度")
 
 
 class ERAnalysisTool(BaseTool):

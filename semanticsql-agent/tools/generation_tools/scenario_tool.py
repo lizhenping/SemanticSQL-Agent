@@ -17,7 +17,7 @@ from models.exceptions import ToolExecutionError
 class ScenarioToolInput(BaseModel):
     """场景工具输入"""
     memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
-    iteration: int = Field(default=0, description: str = "当前迭代次数")
+    iteration: int = Field(default=0, description="当前迭代次数")
 
 
 class ScenarioTool(BaseTool):

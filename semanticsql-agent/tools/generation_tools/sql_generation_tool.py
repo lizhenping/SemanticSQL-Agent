@@ -18,8 +18,8 @@ class SQLGenerationInput(BaseModel):
     """SQL生成输入"""
     question: str = Field(description="自然语言问题")
     memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
-    operations: List[str] = Field(default_factory=list, description: str = "建议的SQL操作")
-    dialect: str = Field(default="mysql", description: str = "SQL方言")
+    operations: List[str] = Field(default_factory=list, description="建议的SQL操作")
+    dialect: str = Field(default="mysql", description="SQL方言")
 
 
 class SQLGenerationTool(BaseTool):

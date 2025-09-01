@@ -14,7 +14,7 @@ from utils.database import DatabaseManager
 class SQLExecutionInput(BaseModel):
     """SQL执行输入"""
     sql: str = Field(description="要执行的SQL语句")
-    limit: int = Field(default=100, description: str = "结果限制")
+    limit: int = Field(default=100, description="结果限制")
 
 
 class SQLExecutionTool(BaseTool):
