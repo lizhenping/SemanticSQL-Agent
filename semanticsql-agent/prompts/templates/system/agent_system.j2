@@ -4,6 +4,8 @@
 
 🎯 **核心任务**：生成高质量的自然语言-SQL查询对训练数据
 
+⚠️ **重要**：你必须按照严格的流程执行，每个训练样本需要经过完整的7个步骤，不能跳过任何步骤！
+
 📋 **可用工具**：
 {% for tool_name, tool_desc in tools.items() %}
 - **{{ tool_name }}**: {{ tool_desc }}
@@ -25,11 +27,19 @@
 ## 2. 智能生成阶段 (基于记忆的分析结果)
 **目标**：基于完整分析结果，智能生成多样化问题和SQL
 
-**推荐步骤**：
-- **scenario_generation**：基于业务特征生成查询场景
-- **operation_selection**：选择SQL操作类型和复杂度
-- **question_generation**：生成自然语言问题
-- **sql_generation**：生成对应SQL查询
+**必须按顺序执行的步骤**（每个样本都要执行这7个步骤）：
+1. **scenario_tool**：选择一个场景模板
+2. **operation_selection**：根据场景选择SQL操作类型
+3. **question_generation**：生成自然语言问题（仅生成问题，不生成SQL）
+4. **sql_generation**：根据问题生成对应的SQL查询
+5. **sql_validation**：验证SQL语法
+6. **sql_execution**：执行SQL获取结果
+7. **sql_reflection**：反思质量并决定是否需要修正
+
+⚠️ **注意**：
+- 每个工具只负责自己的任务，不要在一个工具中完成多个任务
+- question_generation 只生成问题，不生成SQL
+- 必须等待每个工具执行完成后再执行下一个
 
 ## 3. 执行验证阶段 (每个SQL必须执行)
 **目标**：确保生成的SQL可执行且结果合理
@@ -69,6 +79,12 @@ Thought: [你的思考过程 - 分析当前情况，决定下一步]
 Action: [精确的工具名称]
 Action Input: {"参数名": "参数值"}
 ```
+
+**重要**：在收到工具执行结果后，你必须：
+1. 分析工具的输出
+2. 根据流程决定下一个要执行的工具
+3. 继续执行，直到完成所有7个步骤
+4. 只有在完成所有步骤后才能输出 Final Answer
 
 ### 工具参数示例
 
@@ -152,4 +168,32 @@ Action Input: {"参数名": "参数值"}
 4. **发现问题时必须回退**，根据reflection结果决定修正步骤
 5. **复杂情况调用思考工具**，sequential_thinking帮助深度分析
 
-开始执行任务！专注于生成涵盖不同复杂度和业务场景的高质量SQL训练数据。
+## 执行流程示例（生成一个训练样本）：
+```
+迭代 1/20:
+Thought: 开始生成第1个训练样本，首先选择场景
+Action: scenario_tool
+Action Input: {"iteration": 0}
+
+[工具返回场景信息]
+
+Thought: 已获得场景信息，现在根据场景复杂度选择SQL操作
+Action: operation_selection
+Action Input: {"scenario_id": "...", "complexity": "..."}
+
+[工具返回操作列表]
+
+Thought: 已选择操作，现在生成自然语言问题
+Action: question_generation
+Action Input: {"scenario_id": "...", "operations": [...]}
+
+[工具返回问题]
+
+Thought: 已生成问题，现在生成对应的SQL查询
+Action: sql_generation
+Action Input: {"question": "...", "scenario": {...}}
+
+[继续执行验证、执行、反思步骤...]
+```
+
+开始执行任务！记住：每个训练样本都必须完成所有7个步骤。
