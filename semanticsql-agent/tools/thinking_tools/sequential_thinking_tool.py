@@ -5,7 +5,7 @@
 
 from typing import Dict, Any, Type
 from langchain.tools import BaseTool
-from langchain_community.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from models.exceptions import ToolExecutionError
@@ -27,7 +27,7 @@ class SequentialThinkingTool(BaseTool):
     
     def __init__(self, llm: ChatOpenAI):
         super().__init__()
-        self.llm = llm
+        object.__setattr__(self, 'llm', llm)
     
     def _run(
         self,

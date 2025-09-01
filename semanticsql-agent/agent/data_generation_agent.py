@@ -261,8 +261,8 @@ class DataGenerationAgent(BaseAgent):
         
         # 处理生成结果
         try:
-            # 从 Agent 输出和轨迹中提取生成的数据
-            generated_examples = self._extract_generated_examples()
+            # 从 Agent 最终输出中提取生成的数据
+            generated_examples = self._extract_from_agent_output(result)
             
             # 保存到文件
             self._save_training_data(generated_examples, output_file)
@@ -287,6 +287,29 @@ class DataGenerationAgent(BaseAgent):
                 step="post_processing",
                 reason=f"Failed to process generation results: {str(e)}"
             )
+    
+    def _extract_from_agent_output(self, result: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """从Agent输出中提取训练样本"""
+        examples = []
+        
+        try:
+            # 从result中获取输出
+            output = result.get("result", {})
+            if isinstance(output, str):
+                # 如果是字符串，尝试解析为JSON
+                import json
+                output = json.loads(output)
+            
+            # 如果输出直接是一个训练样本
+            if "question" in output and "sql" in output:
+                examples.append(output)
+                
+            self.logger.info(f"Extracted {len(examples)} training examples from agent output")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to extract examples from agent output: {e}")
+            
+        return examples
     
     def _extract_generated_examples(self) -> List[Dict[str, Any]]:
         """从 Agent 执行轨迹中提取生成的样例"""

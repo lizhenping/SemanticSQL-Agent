@@ -34,7 +34,8 @@ class SchemaExtractionTool(BaseTool):
     
     def __init__(self, db_manager: DatabaseManager):
         super().__init__()
-        self.db_manager = db_manager
+        # 直接设置为实例属性，避开Pydantic验证
+        object.__setattr__(self, 'db_manager', db_manager)
     
     def _run(
         self, 
@@ -63,19 +64,13 @@ class SchemaExtractionTool(BaseTool):
             
             # 提取表信息
             table_infos = {}
-            inspector = self.db_manager.inspect()
             
             # 获取表列表
-            table_names = tables if tables else inspector.get_table_names()
-            if include_views:
-                view_names = inspector.get_view_names()
-                table_names.extend(view_names)
+            table_names = tables if tables else self.db_manager.get_tables()
             
             # 提取每个表的详细信息
             for table_name in table_names:
-                table_info = self._extract_table_info(
-                    inspector, table_name, include_indexes
-                )
+                table_info = self.db_manager.get_table_info(table_name)
                 
                 # 获取样本数据
                 if sample_data:

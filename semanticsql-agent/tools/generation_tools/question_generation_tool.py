@@ -5,7 +5,7 @@
 
 from typing import Dict, Any, Type, List
 from langchain.tools import BaseTool
-from langchain_community.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from models.exceptions import ToolExecutionError
@@ -23,33 +23,37 @@ class QuestionGenerationTool(BaseTool):
     
     name: str = "question_generation"
     description: str = "根据场景和数据库结构生成自然语言问题"
-    args_schema: Type[BaseModel] = QuestionGenerationInput
+    # args_schema: Type[BaseModel] = QuestionGenerationInput
     
     def __init__(self, llm: ChatOpenAI):
         super().__init__()
-        self.llm = llm
+        object.__setattr__(self, 'llm', llm)
     
-    def _run(
-        self,
-        scenario: Dict[str, Any],
-        operations: List[str],
-        memory: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _run(self, tool_input: str = "", **kwargs) -> Dict[str, Any]:
         """生成问题"""
         try:
-            # 从记忆中获取必要信息
-            db_analysis = memory.get("db_analysis", {})
-            schema_info = db_analysis.get("schema_info", {})
-            domain_info = db_analysis.get("domain_info", {})
+            # 解析JSON输入参数
+            import json
+            scenario = {}
+            operations = []
+            try:
+                if tool_input:
+                    input_data = json.loads(tool_input)
+                    scenario = input_data.get('scenario', {})
+                    operations = input_data.get('operations', [])
+                    if isinstance(scenario, str):
+                        scenario = json.loads(scenario)
+            except:
+                scenario = {}
+                operations = []
             
-            if not schema_info:
-                raise ToolExecutionError(
-                    tool_name=self.name,
-                    reason="未找到数据库结构信息"
-                )
+            # QuestionGenerationTool基于场景和操作生成问题，不强制依赖数据库分析
+            category = scenario.get("category", "通用查询")
+            business_purpose = scenario.get("business_purpose", "数据查询")
+            complexity = scenario.get("complexity", "easy")
             
-            # 构建上下文
-            context = self._build_context(scenario, operations, schema_info, domain_info)
+            # 构建简化的上下文（不依赖数据库分析）
+            context = self._build_context(scenario, operations)
             
             # 使用LLM生成问题
             question = self._generate_question_with_llm(context)
@@ -70,9 +74,7 @@ class QuestionGenerationTool(BaseTool):
     def _build_context(
         self,
         scenario: Dict[str, Any],
-        operations: List[str],
-        schema_info: Dict[str, Any],
-        domain_info: Dict[str, Any]
+        operations: List[str]
     ) -> str:
         """构建生成问题的上下文"""
         context_parts = []
@@ -86,21 +88,9 @@ class QuestionGenerationTool(BaseTool):
         if operations:
             context_parts.append(f"需要使用的SQL操作：{', '.join(operations)}")
         
-        # 添加相关表信息
-        applicable_tables = scenario.get("applicable_tables", [])
-        if applicable_tables:
-            context_parts.append(f"\n相关表：")
-            tables = schema_info.get("tables", {})
-            
-            for table_name in applicable_tables[:5]:  # 限制表数量
-                if table_name in tables:
-                    table_info = tables[table_name]
-                    context_parts.append(f"\n表：{table_name}")
-                    
-                    # 添加部分列信息
-                    columns = table_info.get("columns", [])
-                    col_names = [col["name"] for col in columns[:10]]
-                    context_parts.append(f"  主要列：{', '.join(col_names)}")
+        # 添加操作说明
+        if operations:
+            context_parts.append(f"\n需要的操作类型：{', '.join(operations)}")
         
         return "\n".join(context_parts)
     

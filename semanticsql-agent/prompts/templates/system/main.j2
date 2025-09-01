@@ -7,6 +7,8 @@
 ## 可用工具
 {tools}
 
+可用工具名称: [{tool_names}]
+
 ## 核心工作流程
 
 ### 阶段1：数据库分析（只执行一次，结果保存在记忆中）
@@ -87,12 +89,24 @@
 ```
 Thought: 我需要思考下一步该做什么
 Action: tool_name
-Action Input: {"param": "value"}
+Action Input: {{"param": "value"}}
 Observation: 工具返回的结果
 ... (可以重复多次)
 Thought: 我现在知道最终答案了
 Final Answer: 最终结果
 ```
+
+你拥有以下工具：
+{tools}
+
+使用以下格式：
+Thought: 你应该思考要做什么
+Action: 要采取的行动，应该是以下之一 [{tool_names}]  
+Action Input: 行动的输入
+Observation: 行动的结果
+... (这个思考/行动/行动输入/观察可以重复N次)
+Thought: 我现在知道最终答案了
+Final Answer: 对原始输入问题的最终答案
 
 ## 质量标准
 

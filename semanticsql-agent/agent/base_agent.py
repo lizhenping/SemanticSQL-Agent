@@ -9,7 +9,7 @@ import logging
 
 from langchain.agents import AgentExecutor, create_react_agent
 from langchain.prompts import ChatPromptTemplate
-from langchain_community.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from langchain.tools import BaseTool
 from langchain_core.memory import BaseMemory
 
@@ -68,26 +68,31 @@ class BaseAgent(ABC):
         try:
             from prompts.manager import PromptManager
             prompt_manager = PromptManager()
-            return prompt_manager.create_agent_prompt()
+            # 传递工具名称列表给提示词模板
+            tool_names = [tool.name for tool in self.tools]
+            return prompt_manager.create_agent_prompt(
+                tool_names=", ".join(tool_names),
+                tools="\n".join([f"- {tool.name}: {tool.description}" for tool in self.tools])
+            )
         except Exception as e:
             self.logger.warning(f"Failed to load prompt template: {e}. Using default.")
             # 使用默认提示词
             return ChatPromptTemplate.from_messages([
-                ("system", """You are a helpful AI assistant that uses tools to complete tasks.
+                ("system", """你是一个专业的SQL训练数据生成专家。
 
-You have access to the following tools:
+你拥有以下工具:
 {tools}
 
-Use the following format:
-Thought: you should always think about what to do
-Action: the action to take, should be one of [{tool_names}]
-Action Input: the input to the action
-Observation: the result of the action
-... (this Thought/Action/Action Input/Observation can repeat N times)
-Thought: I now know the final answer
-Final Answer: the final answer to the original input question
+使用以下格式:
+Thought: 思考下一步该做什么
+Action: 要使用的工具，应该是以下之一 [{tool_names}]
+Action Input: 工具的输入参数
+Observation: 工具返回的结果
+... (可以重复多次)
+Thought: 我现在知道最终答案了
+Final Answer: 最终结果
 
-Begin!"""),
+开始!"""),
                 ("human", "{input}"),
                 ("assistant", "{agent_scratchpad}")
             ])
@@ -142,7 +147,7 @@ Begin!"""),
             
             # 更新执行状态
             execution.status = "completed"
-            execution.result = result
+            execution.final_result = result
             
             # 保存轨迹
             if self.trajectory_recorder:
@@ -151,7 +156,7 @@ Begin!"""),
             return {
                 "success": True,
                 "result": result.get("output", result),
-                "execution_id": execution.execution_id,
+                "execution_id": execution.task_id,
                 "steps": len(execution.steps)
             }
             
@@ -169,7 +174,7 @@ Begin!"""),
             return {
                 "success": False,
                 "error": str(e),
-                "execution_id": execution.execution_id,
+                "execution_id": execution.task_id,
                 "steps": len(execution.steps)
             }
     

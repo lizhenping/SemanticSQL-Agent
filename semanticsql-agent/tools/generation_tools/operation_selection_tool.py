@@ -22,14 +22,27 @@ class OperationSelectionTool(BaseTool):
     
     name: str = "operation_selection"
     description: str = "根据场景复杂度和业务需求选择合适的SQL操作组合"
-    args_schema: Type[BaseModel] = OperationSelectionInput
+    # args_schema: Type[BaseModel] = OperationSelectionInput
     
-    def _run(self, scenario: Dict[str, Any], memory: Dict[str, Any]) -> Dict[str, Any]:
+    def _run(self, tool_input: str = "", **kwargs) -> Dict[str, Any]:
         """选择SQL操作"""
         try:
+            # 解析JSON输入参数
+            import json
+            scenario = {}
+            try:
+                if tool_input:
+                    input_data = json.loads(tool_input)
+                    scenario = input_data.get('scenario', {})
+                    if isinstance(scenario, str):
+                        # 如果scenario是字符串，再次尝试解析
+                        scenario = json.loads(scenario)
+            except:
+                scenario = {}
+            
             complexity = scenario.get("complexity", "medium")
             category = scenario.get("category", "")
-            suggested_operations = scenario.get("suggested_operations", [])
+            suggested_operations = scenario.get("applicable_operations", [])
             
             # 如果场景已经有建议的操作，直接使用
             if suggested_operations:

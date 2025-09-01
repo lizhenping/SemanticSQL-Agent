@@ -6,7 +6,7 @@ SQL生成工具 - 根据问题生成SQL查询
 import re
 from typing import Dict, Any, Type, List, Optional
 from langchain.tools import BaseTool
-from langchain_community.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from models.schemas import SQLOperation
@@ -31,8 +31,8 @@ class SQLGenerationTool(BaseTool):
     
     def __init__(self, llm: ChatOpenAI, db_manager: Optional[DatabaseManager] = None):
         super().__init__()
-        self.llm = llm
-        self.db_manager = db_manager
+        object.__setattr__(self, 'llm', llm)
+        object.__setattr__(self, 'db_manager', db_manager)
     
     def _run(
         self,

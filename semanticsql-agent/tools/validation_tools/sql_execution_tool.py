@@ -26,7 +26,7 @@ class SQLExecutionTool(BaseTool):
     
     def __init__(self, db_manager: DatabaseManager):
         super().__init__()
-        self.db_manager = db_manager
+        object.__setattr__(self, 'db_manager', db_manager)
     
     def _run(self, sql: str, limit: int = 100) -> Dict[str, Any]:
         """执行SQL"""

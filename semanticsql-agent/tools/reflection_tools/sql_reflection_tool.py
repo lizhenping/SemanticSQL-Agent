@@ -5,7 +5,7 @@ SQL反思工具 - 分析执行结果并提供优化建议
 
 from typing import Dict, Any, Type, List, Optional
 from langchain.tools import BaseTool
-from langchain_community.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from models.exceptions import ToolExecutionError
@@ -28,15 +28,15 @@ class SQLReflectionTool(BaseTool):
     
     def __init__(self, llm: ChatOpenAI):
         super().__init__()
-        self.llm = llm
+        object.__setattr__(self, 'llm', llm)
         
-        # 定义质量权重
-        self.quality_weights = {
+        # 定义质量权重，使用object.__setattr__避开Pydantic验证
+        object.__setattr__(self, 'quality_weights', {
             "syntax_correctness": 0.3,
             "semantic_match": 0.3,
             "execution_success": 0.25,
             "result_relevance": 0.15
-        }
+        })
     
     def _run(
         self,
