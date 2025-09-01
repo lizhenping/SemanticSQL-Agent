@@ -1,328 +1,172 @@
 """
-提示词管理器 - 统一管理和加载提示词
+提示词管理器 - 管理和加载提示词模板
 """
 
-import yaml
 import os
 from pathlib import Path
 from typing import Dict, Any, Optional
-from string import Template
-import logging
 
-from core.exceptions import PromptError
+from jinja2 import Environment, FileSystemLoader, Template
+from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
 
 
 class PromptManager:
     """提示词管理器"""
     
-    def __init__(self, prompts_dir: str = None):
-        """
-        初始化提示词管理器
+    def __init__(self, template_dir: Optional[str] = None):
+        """初始化提示词管理器
         
         Args:
-            prompts_dir: 提示词目录路径
+            template_dir: 模板目录路径，默认为 prompts/templates
         """
-        self.logger = logging.getLogger("PromptManager")
+        if template_dir is None:
+            # 获取当前文件所在目录
+            current_dir = Path(__file__).parent
+            template_dir = current_dir / "templates"
         
-        # 确定提示词目录
-        if prompts_dir:
-            self.prompts_dir = Path(prompts_dir)
-        else:
-            # 默认使用当前模块所在目录
-            self.prompts_dir = Path(__file__).parent
+        self.template_dir = Path(template_dir)
         
-        # 缓存加载的提示词
-        self._system_prompts = None
-        self._tool_prompts = None
-        self._custom_prompts = {}
-        
-        # 加载默认提示词
-        self._load_prompts()
+        # 初始化 Jinja2 环境
+        self.env = Environment(
+            loader=FileSystemLoader(str(self.template_dir)),
+            trim_blocks=True,
+            lstrip_blocks=True
+        )
     
-    def _load_prompts(self):
-        """加载提示词文件"""
-        try:
-            # 加载系统提示词
-            system_prompt_file = self.prompts_dir / "system_prompt.yaml"
-            if system_prompt_file.exists():
-                with open(system_prompt_file, 'r', encoding='utf-8') as f:
-                    self._system_prompts = yaml.safe_load(f)
-                self.logger.info("System prompts loaded successfully")
-            else:
-                self.logger.warning(f"System prompt file not found: {system_prompt_file}")
-                self._system_prompts = {}
-            
-            # 加载工具提示词
-            tool_prompts_file = self.prompts_dir / "tool_prompts.yaml"
-            if tool_prompts_file.exists():
-                with open(tool_prompts_file, 'r', encoding='utf-8') as f:
-                    self._tool_prompts = yaml.safe_load(f)
-                self.logger.info("Tool prompts loaded successfully")
-            else:
-                self.logger.warning(f"Tool prompts file not found: {tool_prompts_file}")
-                self._tool_prompts = {}
-                
-        except Exception as e:
-            raise PromptError(f"Failed to load prompts: {e}")
-    
-    def get_system_prompt(self, agent_name: str, section: str = None) -> str:
-        """
-        获取系统提示词
+    def get_template(self, template_path: str) -> Template:
+        """获取模板
         
         Args:
-            agent_name: 智能体名称
-            section: 具体章节（如role, instructions等）
+            template_path: 模板路径，如 'system/main.j2'
             
         Returns:
-            提示词文本
+            Jinja2 模板对象
         """
-        if not self._system_prompts:
-            return ""
-        
-        agent_prompts = self._system_prompts.get("agent", {}).get(agent_name, {})
-        
-        if section:
-            return agent_prompts.get(section, "")
-        else:
-            # 组合所有部分
-            parts = []
-            if "role" in agent_prompts:
-                parts.append(agent_prompts["role"])
-            if "instructions" in agent_prompts:
-                parts.append(agent_prompts["instructions"])
-            if "capabilities" in agent_prompts:
-                parts.append("Capabilities:\n" + "\n".join(f"- {cap}" for cap in agent_prompts["capabilities"]))
-            if "output_requirements" in agent_prompts:
-                parts.append("Output Requirements:\n" + "\n".join(f"- {req}" for req in agent_prompts["output_requirements"]))
-            
-            return "\n\n".join(parts)
+        return self.env.get_template(template_path)
     
-    def get_tool_prompt(self, category: str, tool_name: str, template_name: str = None, **kwargs) -> str:
-        """
-        获取工具提示词
+    def render_template(self, template_path: str, **kwargs) -> str:
+        """渲染模板
         
         Args:
-            category: 工具类别（analysis/generation/validation/reflection）
+            template_path: 模板路径
+            **kwargs: 模板变量
+            
+        Returns:
+            渲染后的字符串
+        """
+        template = self.get_template(template_path)
+        return template.render(**kwargs)
+    
+    def get_system_prompt(self, **kwargs) -> str:
+        """获取系统提示词
+        
+        Args:
+            **kwargs: 模板变量
+            
+        Returns:
+            系统提示词字符串
+        """
+        return self.render_template('system/main.j2', **kwargs)
+    
+    def get_tool_prompt(self, tool_name: str, **kwargs) -> str:
+        """获取工具提示词
+        
+        Args:
             tool_name: 工具名称
-            template_name: 模板名称
             **kwargs: 模板变量
             
         Returns:
-            格式化后的提示词
+            工具提示词字符串
         """
-        if not self._tool_prompts:
+        template_path = f'tools/{tool_name}.j2'
+        try:
+            return self.render_template(template_path, **kwargs)
+        except:
+            # 如果没有特定的工具模板，返回空字符串
             return ""
+    
+    def get_analysis_prompt(self, analysis_type: str, **kwargs) -> str:
+        """获取分析提示词
         
-        tool_prompts = self._tool_prompts.get(category, {}).get(tool_name, {})
+        Args:
+            analysis_type: 分析类型
+            **kwargs: 模板变量
+            
+        Returns:
+            分析提示词字符串
+        """
+        template_path = f'analysis/{analysis_type}.j2'
+        try:
+            return self.render_template(template_path, **kwargs)
+        except:
+            return ""
+    
+    def create_agent_prompt(self, **kwargs) -> ChatPromptTemplate:
+        """创建Agent提示词模板
         
-        if template_name:
-            prompt_template = tool_prompts.get(template_name, "")
+        Args:
+            **kwargs: 模板变量
+            
+        Returns:
+            LangChain ChatPromptTemplate
+        """
+        # 获取系统提示词
+        system_prompt = self.get_system_prompt(**kwargs)
+        
+        # 创建提示词模板
+        messages = [
+            SystemMessagePromptTemplate.from_template(system_prompt),
+            HumanMessagePromptTemplate.from_template("{input}"),
+            # Agent scratchpad 用于 ReAct 模式
+            HumanMessagePromptTemplate.from_template("{agent_scratchpad}")
+        ]
+        
+        return ChatPromptTemplate.from_messages(messages)
+    
+    def create_tool_prompt_template(self, tool_name: str, **kwargs) -> ChatPromptTemplate:
+        """创建工具专用的提示词模板
+        
+        Args:
+            tool_name: 工具名称
+            **kwargs: 模板变量
+            
+        Returns:
+            工具专用的 ChatPromptTemplate
+        """
+        tool_prompt = self.get_tool_prompt(tool_name, **kwargs)
+        
+        if tool_prompt:
+            messages = [
+                SystemMessagePromptTemplate.from_template(tool_prompt),
+                HumanMessagePromptTemplate.from_template("{input}")
+            ]
         else:
-            prompt_template = tool_prompts.get("prompt_template", tool_prompts.get("description", ""))
+            # 使用默认模板
+            messages = [
+                HumanMessagePromptTemplate.from_template(
+                    "Please use the {tool_name} tool to process: {input}"
+                )
+            ]
         
-        # 如果有变量，进行替换
-        if kwargs and prompt_template:
-            try:
-                # 使用安全的模板替换
-                prompt = self._safe_format(prompt_template, **kwargs)
-                return prompt
-            except Exception as e:
-                self.logger.warning(f"Failed to format prompt: {e}")
-                return prompt_template
-        
-        return prompt_template
+        return ChatPromptTemplate.from_messages(messages)
     
-    def get_react_prompt(self, prompt_type: str, **kwargs) -> str:
-        """
-        获取ReAct模式提示词
-        
-        Args:
-            prompt_type: 提示词类型（thinking/action/observation/reflection）
-            **kwargs: 模板变量
-            
-        Returns:
-            格式化后的提示词
-        """
-        if not self._system_prompts:
-            return ""
-        
-        react_prompts = self._system_prompts.get("react_pattern", {})
-        prompt_list = react_prompts.get(f"{prompt_type}_prompts", [])
-        
-        if not prompt_list:
-            return ""
-        
-        # 随机选择一个提示词
-        import random
-        prompt_template = random.choice(prompt_list)
-        
-        # 格式化
-        if kwargs:
-            return self._safe_format(prompt_template, **kwargs)
-        
-        return prompt_template
-    
-    def get_error_prompt(self, error_type: str, **kwargs) -> str:
-        """
-        获取错误处理提示词
-        
-        Args:
-            error_type: 错误类型（retry/fallback/clarification）
-            **kwargs: 模板变量
-            
-        Returns:
-            格式化后的提示词
-        """
-        if not self._system_prompts:
-            return ""
-        
-        error_prompts = self._system_prompts.get("error_handling", {})
-        prompt_template = error_prompts.get(f"{error_type}_prompt", "")
-        
-        if kwargs and prompt_template:
-            return self._safe_format(prompt_template, **kwargs)
-        
-        return prompt_template
-    
-    def get_completion_prompt(self, status: str, **kwargs) -> str:
-        """
-        获取完成提示词
-        
-        Args:
-            status: 完成状态（success/partial_success/failure）
-            **kwargs: 模板变量
-            
-        Returns:
-            格式化后的提示词
-        """
-        if not self._system_prompts:
-            return ""
-        
-        completion_prompts = self._system_prompts.get("completion", {})
-        prompt_template = completion_prompts.get(f"{status}_prompt", "")
-        
-        if kwargs and prompt_template:
-            return self._safe_format(prompt_template, **kwargs)
-        
-        return prompt_template
-    
-    def load_custom_prompts(self, file_path: str):
-        """
-        加载自定义提示词文件
-        
-        Args:
-            file_path: 自定义提示词文件路径
-        """
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                custom_prompts = yaml.safe_load(f)
-                
-            # 缓存自定义提示词
-            prompt_id = Path(file_path).stem
-            self._custom_prompts[prompt_id] = custom_prompts
-            
-            self.logger.info(f"Custom prompts loaded: {prompt_id}")
-            
-        except Exception as e:
-            raise PromptError(f"Failed to load custom prompts from {file_path}: {e}")
-    
-    def get_custom_prompt(self, prompt_id: str, path: str, **kwargs) -> str:
-        """
-        获取自定义提示词
-        
-        Args:
-            prompt_id: 提示词文件ID
-            path: 提示词路径（用.分隔）
-            **kwargs: 模板变量
-            
-        Returns:
-            格式化后的提示词
-        """
-        if prompt_id not in self._custom_prompts:
-            return ""
-        
-        # 获取嵌套的提示词
-        prompt_data = self._custom_prompts[prompt_id]
-        for key in path.split('.'):
-            if isinstance(prompt_data, dict):
-                prompt_data = prompt_data.get(key, "")
-            else:
-                return ""
-        
-        # 格式化
-        if kwargs and isinstance(prompt_data, str):
-            return self._safe_format(prompt_data, **kwargs)
-        
-        return str(prompt_data)
-    
-    def _safe_format(self, template_str: str, **kwargs) -> str:
-        """
-        安全的字符串格式化
-        
-        Args:
-            template_str: 模板字符串
-            **kwargs: 替换变量
-            
-        Returns:
-            格式化后的字符串
-        """
-        try:
-            # 使用Template进行安全替换
-            template = Template(template_str.replace('{', '${').replace('}', '}'))
-            return template.safe_substitute(**kwargs)
-        except Exception as e:
-            self.logger.warning(f"Template formatting failed: {e}")
-            # 降级到简单替换
-            result = template_str
-            for key, value in kwargs.items():
-                result = result.replace(f"{{{key}}}", str(value))
-            return result
-    
-    def list_available_prompts(self) -> Dict[str, Any]:
-        """
-        列出所有可用的提示词
+    def list_templates(self) -> Dict[str, list]:
+        """列出所有可用的模板
         
         Returns:
-            提示词清单
+            按类别分组的模板列表
         """
-        available = {
-            "system_prompts": {},
-            "tool_prompts": {},
-            "custom_prompts": list(self._custom_prompts.keys())
+        templates = {
+            "system": [],
+            "tools": [],
+            "analysis": []
         }
         
-        # 系统提示词
-        if self._system_prompts:
-            available["system_prompts"] = {
-                "agents": list(self._system_prompts.get("agent", {}).keys()),
-                "react_patterns": list(self._system_prompts.get("react_pattern", {}).keys()),
-                "error_handling": list(self._system_prompts.get("error_handling", {}).keys()),
-                "completion": list(self._system_prompts.get("completion", {}).keys())
-            }
+        for category in templates.keys():
+            category_dir = self.template_dir / category
+            if category_dir.exists():
+                templates[category] = [
+                    f.name for f in category_dir.glob("*.j2")
+                ]
         
-        # 工具提示词
-        if self._tool_prompts:
-            for category, tools in self._tool_prompts.items():
-                available["tool_prompts"][category] = list(tools.keys())
-        
-        return available
-    
-    def reload_prompts(self):
-        """重新加载所有提示词"""
-        self._system_prompts = None
-        self._tool_prompts = None
-        self._custom_prompts = {}
-        self._load_prompts()
-        self.logger.info("All prompts reloaded")
-
-
-# 全局提示词管理器实例
-_prompt_manager = None
-
-
-def get_prompt_manager() -> PromptManager:
-    """获取全局提示词管理器实例"""
-    global _prompt_manager
-    if _prompt_manager is None:
-        _prompt_manager = PromptManager()
-    return _prompt_manager
+        return templates
