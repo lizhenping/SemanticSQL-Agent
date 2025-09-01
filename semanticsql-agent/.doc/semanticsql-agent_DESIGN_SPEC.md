@@ -251,13 +251,23 @@ SQL反思分析
    - 操作选择是否适合当前场景的复杂度
    - 是否正确使用了数据库分析记忆
 
+**反思工具的智能分析**：
+
+sql_reflection 不仅评估质量，还能：
+- 定位问题源头（哪个工具/步骤出错）
+- 分析根本原因（为什么出错）
+- 推荐修正工具（应该调用哪个工具）
+- 提供参数建议（如何调用工具）
+
 **反思后的决策流程**：
 ```
-sql_reflection 发现问题
+sql_reflection 发现问题并给出建议
     ↓
-调用 sequential_thinking 深度分析
+Agent 根据 recommended_action 决定：
+├─ 直接调用建议的工具（简单问题）
+└─ 先调用 sequential_thinking 深度分析（复杂问题）
     ↓
-分析生成步骤的执行情况：
+执行修正：
     1. 问题生成是否准确？
        - 输入：场景+操作+数据库记忆
        - 输出：自然语言问题
@@ -344,7 +354,7 @@ new_sql = sql_generation(
 | 生成工具 | operation_selection | 每场景一次 | 为每个场景选择SQL操作 | 根据场景复杂度选择 |
 | 生成工具 | question_generation<br>sql_generation | 每场景多次 | 基于场景和操作生成 | 可能因反思而重新生成 |
 | 验证工具 | sql_validation<br>sql_execution | 每SQL一次 | 每个SQL必须验证执行 | 确保SQL正确可执行 |
-| 反思工具 | sql_reflection | 每次执行后 | SQL执行后立即反思 | 评估质量决定是否修正 |
+| 反思工具 | sql_reflection | 每次执行后 | SQL执行后立即反思 | 评估质量、定位问题、推荐修正工具 |
 | 思考工具 | sequential_thinking | 按需 | 初始规划/修正决策 | 复杂问题深度分析 |
 
 **记忆机制核心要点**：

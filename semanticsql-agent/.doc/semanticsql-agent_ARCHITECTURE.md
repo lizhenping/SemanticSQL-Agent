@@ -135,7 +135,7 @@ semanticsql-agent/
 - **sql_execution_tool**: 安全执行SQL并返回结果
 
 **反思工具** (reflection_tools/)
-- **sql_reflection_tool**: 评估执行结果质量，诊断问题
+- **sql_reflection_tool**: 评估执行结果质量，定位问题源头，推荐修正工具
 
 **思考工具** (thinking_tools/)
 - **sequential_thinking_tool**: 深度分析问题，制定修正策略
@@ -150,9 +150,9 @@ semanticsql-agent/
 - 支持自定义的 OutputParser 处理响应
 
 #### sql_agent.py
-- 继承 BaseAgent，配置专门的 SQL 生成 Chain
-- 使用 `langchain.chains.LLMChain` 管理提示词
-- 使用单个 Chain 执行查询任务
+- 继承 BaseAgent，配置专门的 SQL 生成系统提示词
+- 系统提示词引导 Agent 自主决策执行流程
+- Agent 根据工具输出和反思结果决定下一步行动
 - 集成 LangChain 的错误处理机制
 
 ### 3.4 记忆管理（基于 LangChain Memory）
@@ -310,13 +310,15 @@ for i in range(N):  # 生成N个问题
     ├─ sql_generation（生成SQL语句）
     ├─ sql_validation（验证语法）
     ├─ sql_execution（执行测试）
-    └─ sql_reflection（反思评估）
+    └─ sql_reflection（反思评估，定位问题，推荐工具）
          ↓
     需要修正？
     ├─ 否 → 保存生成的问题和SQL，继续下一个
-    └─ 是 → sequential_thinking（分析问题）
-            ↓
-       定位问题源头：
+    └─ 是 → Agent根据recommended_action决定：
+            ├─ 直接调用建议的工具（如sql_generation）
+            └─ 调用sequential_thinking深度分析
+                    ↓
+       基于分析结果执行修正：
        ├─ 数据库分析有误 → 重新执行相应分析工具 → 更新记忆
        │   ├─ 领域理解错误 → 重新执行 domain_analysis
        │   ├─ 字段分类错误 → 重新执行 field_classification
@@ -327,7 +329,27 @@ for i in range(N):  # 生成N个问题
        └─ SQL生成有误 → 重新执行 sql_generation
 ```
 
-### 4.4 ReAct 执行模式
+### 4.4 Agent 自主决策机制
+
+**核心原则**：
+- Agent 通过系统提示词引导，自主决定执行流程
+- 不是硬编码的步骤，而是基于工具输出的智能决策
+- 反思工具提供建议，Agent 决定是否采纳
+
+**决策示例**：
+1. **反思后的决策**：
+   - sql_reflection 返回 `recommended_action.tool_to_call = "sql_generation"`
+   - Agent 可以：
+     - 直接调用 sql_generation（简单问题）
+     - 先调用 sequential_thinking 深入分析（复杂问题）
+     - 忽略建议继续下一个任务（质量可接受）
+
+2. **工具链的灵活性**：
+   - Agent 可以跳过某些工具（如已有缓存结果）
+   - 可以重复调用工具直到满意
+   - 可以并行调用多个分析工具
+
+### 4.5 ReAct 执行模式
 ```
 用户输入/工具结果
     ↓
