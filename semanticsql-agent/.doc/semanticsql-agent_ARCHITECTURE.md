@@ -304,13 +304,13 @@ sequential_thinking（规划执行策略）
 根据设定的问题生成数量N，循环遍历预定义场景模板：
     ↓
 for i in range(N):  # 生成N个问题
-    ├─ scenario_tool（从预定义模板中选择一个场景）
-    ├─ operation_selection（基于场景选择SQL操作）
-    ├─ question_generation（生成自然语言问题）
-    ├─ sql_generation（生成SQL语句）
+    ├─ scenario_tool（从预定义模板中选择一个场景）【不可修正】
+    ├─ operation_selection（基于场景选择SQL操作）【不可修正】
+    ├─ question_generation（生成自然语言问题）【可修正】
+    ├─ sql_generation（生成SQL语句）【可修正】
     ├─ sql_validation（验证语法）
     ├─ sql_execution（执行测试）
-    └─ sql_reflection（反思评估，定位问题，推荐工具）
+    └─ sql_reflection（基于执行结果反思，定位问题）
          ↓
     需要修正？
     ├─ 否 → 保存生成的问题和SQL，继续下一个
@@ -340,14 +340,19 @@ for i in range(N):  # 生成N个问题
 1. **反思后的决策**：
    - sql_reflection 返回 `recommended_action.tool_to_call = "sql_generation"`
    - Agent 可以：
-     - 直接调用 sql_generation（简单问题）
-     - 先调用 sequential_thinking 深入分析（复杂问题）
-     - 忽略建议继续下一个任务（质量可接受）
+     - 直接调用 sql_generation 重新生成SQL
+     - 先调用 sequential_thinking 深入分析
+     - 如果是数据库分析问题，重新执行相应分析工具
 
-2. **工具链的灵活性**：
-   - Agent 可以跳过某些工具（如已有缓存结果）
-   - 可以重复调用工具直到满意
-   - 可以并行调用多个分析工具
+2. **不可修改的内容**：
+   - 场景选择（scenario_tool的结果固定）
+   - 操作选择（operation_selection的结果固定）
+   - 这两个是预定义的，确保生成的多样性和覆盖性
+
+3. **可修正的内容**：
+   - 数据库分析结果（如果理解有误）
+   - 问题生成（如果不够清晰）
+   - SQL生成（如果有错误）
 
 ### 4.5 ReAct 执行模式
 ```

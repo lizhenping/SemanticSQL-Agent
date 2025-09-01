@@ -81,7 +81,8 @@ def _run(
                     "missing": []
                 }
             },
-            "problem_source": null,  # 问题来源：question_generation/sql_generation/memory_usage/database_analysis
+            "problem_source": null,  # 问题来源：database_analysis/question_generation/sql_generation
+                                     # 注意：不包括scenario和operation_selection（预定义不可改）
             "root_cause_analysis": {
                 "component": null,  # 出问题的组件/工具
                 "reason": null,     # 问题原因
@@ -147,6 +148,15 @@ def analyze_root_cause(self, issues: List[Dict]) -> str:
 ```
 
 ## 反思结果示例
+
+**重要说明**：反思工具只会建议修正以下内容：
+- 数据库分析（如果分析有误）
+- 问题生成（如果问题不合理）
+- SQL生成（如果SQL有错误）
+
+**不会修正**：
+- 场景选择（预定义模板）
+- 操作选择（预定义规则）
 
 ### 示例1：SQL生成错误
 ```python
