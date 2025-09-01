@@ -16,6 +16,12 @@ class LLMClient:
     
     提供统一的接口调用 Qwen 模型（通过 OpenAI 兼容 API）。
     
+    LangChain 集成：
+    - 使用 ChatOpenAI 作为底层实现
+    - 支持 LangChain 的回调机制
+    - 兼容 LangChain 的消息格式
+    - 可直接用于 LangChain Agent 和 Chain
+    
     Attributes:
         llm: LangChain ChatOpenAI 实例
         config: LLM 配置

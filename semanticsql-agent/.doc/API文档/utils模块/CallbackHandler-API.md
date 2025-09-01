@@ -25,6 +25,15 @@ class TrajectoryCallback(BaseCallbackHandler):
     
     记录 Agent 执行的每个步骤，与 TrajectoryRecorder 配合使用。
     
+    实现的 LangChain 回调方法：
+    - on_agent_action: 记录 Agent 动作
+    - on_agent_finish: 记录 Agent 完成
+    - on_tool_start: 记录工具开始
+    - on_tool_end: 记录工具结果
+    - on_tool_error: 记录工具错误
+    - on_llm_start: 记录 LLM 调用
+    - on_llm_end: 记录 LLM 响应
+    
     Attributes:
         recorder: TrajectoryRecorder 实例
         current_step: 当前步骤信息

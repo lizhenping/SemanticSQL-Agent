@@ -7,13 +7,21 @@
 ```python
 from jinja2 import Environment, FileSystemLoader
 from typing import Dict, Any, Optional
+from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
+from langchain.prompts import HumanMessagePromptTemplate, MessagesPlaceholder
 from semanticsql_agent.prompts.manager import PromptManager
 
 class PromptManager:
     """
     提示词管理器
     
-    使用 Jinja2 模板引擎管理所有提示词。
+    整合 Jinja2 和 LangChain 的提示词管理功能。
+    
+    LangChain 集成：
+    - 支持创建 ChatPromptTemplate
+    - 支持 SystemMessagePromptTemplate
+    - 支持动态变量替换
+    - 与 LangChain Agent 无缝集成
     
     Attributes:
         env: Jinja2 环境
@@ -231,6 +239,46 @@ def render_string(self, template_str: str, **kwargs) -> str:
     
     Returns:
         str: 渲染结果
+    """
+```
+
+### create_chat_prompt
+
+```python
+def create_chat_prompt(
+    self,
+    system_template: str,
+    include_history: bool = True,
+    include_scratchpad: bool = True
+) -> ChatPromptTemplate:
+    """
+    创建 LangChain ChatPromptTemplate
+    
+    Args:
+        system_template: 系统提示词模板名称
+        include_history: 是否包含聊天历史
+        include_scratchpad: 是否包含 Agent 暂存区
+    
+    Returns:
+        ChatPromptTemplate: LangChain 聊天提示词模板
+    
+    Example:
+        ```python
+        # 创建 Agent 提示词
+        prompt = manager.create_chat_prompt(
+            system_template="sql_agent",
+            include_history=True,
+            include_scratchpad=True
+        )
+        
+        # 用于 LangChain Agent
+        from langchain.agents import create_react_agent
+        agent = create_react_agent(
+            llm=llm,
+            tools=tools,
+            prompt=prompt
+        )
+        ```
     """
 ```
 

@@ -5,9 +5,9 @@
 ## 类定义
 
 ```python
-from langchain.tools import BaseTool
-from pydantic import BaseModel, Field
 from typing import Dict, List, Any
+from langchain.tools import BaseTool
+from langchain.pydantic_v1 import BaseModel, Field
 
 class SchemaExtractionTool(BaseTool):
     """

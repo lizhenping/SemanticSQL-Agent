@@ -129,10 +129,17 @@ def run(self, task: str, **kwargs) -> Dict[str, Any]:
     
     Example:
         ```python
+        # 内部调用 LangChain AgentExecutor
         result = agent.run(
             "分析数据库并生成10条训练数据",
             verbose=True
         )
+        
+        # 等同于
+        result = self.agent_executor.invoke({
+            "input": task,
+            **kwargs
+        })
         ```
     """
 ```
@@ -145,6 +152,11 @@ def _initialize_agent(self) -> None:
     初始化 LangChain Agent
     
     内部方法，创建和配置 AgentExecutor。
+    
+    使用 LangChain 组件：
+    - langchain.agents.create_react_agent
+    - langchain.agents.AgentExecutor
+    - langchain.memory.ConversationSummaryBufferMemory
     
     配置包括：
     - 创建 ReAct agent
