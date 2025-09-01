@@ -1,12 +1,12 @@
 """
-trae_agent风格的配置系统
+Configuration module for SemanticSQL Agent
 """
 
-from .trae_config import TraeConfig, DEFAULT_CONFIG_TEMPLATE, DatabaseConfig, DatabaseType
+from .settings import Settings
+from .database import DatabaseConfig, DatabaseType
 
 __all__ = [
-    "TraeConfig",
+    "Settings",
     "DatabaseConfig", 
-    "DatabaseType",
-    "DEFAULT_CONFIG_TEMPLATE"
+    "DatabaseType"
 ]
