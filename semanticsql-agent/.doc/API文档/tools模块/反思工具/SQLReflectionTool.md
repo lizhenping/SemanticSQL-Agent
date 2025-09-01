@@ -81,7 +81,7 @@ def _run(
                     "missing": []
                 }
             },
-            "root_cause": null,
+            "root_cause": null,  # Agent会根据此信息决定是否调用sequential_thinking
             "suggestions": [
                 "Consider adding index on orders.created_at"
             ],
