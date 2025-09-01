@@ -1,19 +1,10 @@
 """
 记忆管理模块 - 基于 LangChain BaseMemory
+适配 LangChain 0.3.x 版本
 """
 from typing import Dict, Any, List
+from langchain_core.memory import BaseMemory
 from pydantic import Field
-
-try:
-    # LangChain 0.2.x
-    from langchain_core.memory import BaseMemory
-except ImportError:
-    try:
-        # LangChain 0.1.x fallback
-        from langchain.memory.base import BaseMemory
-    except ImportError:
-        # Another fallback
-        from langchain.schema.memory import BaseMemory
 
 
 class DatabaseAnalysisMemory(BaseMemory):
@@ -49,7 +40,7 @@ class DatabaseAnalysisMemory(BaseMemory):
         """
         return {self.memory_key: self.memories}
     
-    def save_context(self, inputs: Dict[str, Any], outputs: Dict[str, Any]):
+    def save_context(self, inputs: Dict[str, Any], outputs: Dict[str, Any]) -> None:
         """保存上下文到记忆
         
         Args:
