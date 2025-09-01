@@ -85,8 +85,7 @@ class SQLAgent:
     def generate_training_data(
         self,
         count: int,
-        output_file: str,
-        scenarios_per_batch: int = 10
+        output_file: str
     ) -> TrainingDataResult:
         """
         批量生成训练数据
@@ -94,7 +93,6 @@ class SQLAgent:
         Args:
             count: 生成数据条数
             output_file: 输出文件路径
-            scenarios_per_batch: 每批场景数量
             
         Returns:
             TrainingDataResult: 生成结果统计
@@ -140,7 +138,7 @@ class ScenarioTool(BaseTool):
         domain_info: Dict[str, Any],
         count: int = 10
     ) -> List[QueryScenario]:
-        """批量生成场景"""
+        """从预定义模板选择一个场景"""
 
 class SQLGenerationTool(BaseTool):
     """SQL 生成"""

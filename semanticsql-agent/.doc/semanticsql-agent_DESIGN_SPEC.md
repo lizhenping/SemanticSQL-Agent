@@ -130,10 +130,10 @@ graph TB
    - 分析结果保存在记忆中，供全程使用
    - 这些记忆是后续所有生成步骤的基础
 
-3. **基于预定义模板的场景生成**：
-   - scenario_generation使用预定义的业务场景模板
-   - 结合数据库结构生成具体场景实例
-   - 每批生成N个不同类型和复杂度的场景
+3. **问题生成循环**（基于设定数量N）：
+   - 使用 for 循环，每次迭代生成一个问题
+   - scenario_tool 从预定义模板中选择一个场景
+   - 每个场景都有预定义的类型和复杂度
 
 4. **循环处理每个场景**：
    - **操作选择**：基于预定义规则，根据场景复杂度选择SQL操作组合
@@ -372,30 +372,33 @@ new_sql = sql_generation(
 ```python
 # 根据设定的问题数量进行循环
 for i in range(question_count):
-    # scenario_generation 从预定义模板中选择一个场景
-    scenario = scenario_generation(
-        schema_info=memory["schema_info"],  # 使用数据库分析记忆
-        iteration=i  # 当前迭代次数，用于场景轮转
-    )
-    # 预定义场景类型包括：
-    # - 基础查询场景（单表、简单条件）
-    # - 统计分析场景（聚合、分组）
-    # - 关联查询场景（多表JOIN）
-    # - 时间序列场景（时间范围查询）
+    # scenario_tool 从预定义模板中选择一个场景
+    # 每次调用返回一个场景，不是批量返回
+    scenario = scenario_tool.run({
+        "memory": memory,  # 传入完整的数据库分析记忆
+        "iteration": i     # 当前迭代次数，用于场景轮转
+    })
+    
+    # 预定义场景模板示例：
+    # - 销售分析：统计销售额、订单量等
+    # - 库存查询：查询库存状态、补货需求等
+    # - 客户分析：客户分布、购买行为等
+    # - 财务报表：收入、成本、利润等
 ```
 
 2. **每个循环的完整处理流程**：
 ```python
     # 在循环内，对当前场景进行完整处理
-    # operation_selection 根据预定义规则选择操作
-    operations = operation_selection(
-        scenario=scenario,
-        schema_info=memory["schema_info"]
-    )
-    # 基于场景复杂度的预定义规则：
-    # - 简单场景 → ["SELECT", "WHERE"]
-    # - 中等场景 → ["SELECT", "JOIN", "GROUP"]
-    # - 复杂场景 → ["SELECT", "JOIN", "GROUP", "HAVING", "ORDER"]
+    # operation_selection_tool 根据场景的复杂度选择SQL操作
+    operations = operation_selection_tool.run({
+        "scenario": scenario,
+        "memory": memory
+    })
+    
+    # 预定义的操作选择规则（基于场景复杂度）：
+    # - 简单场景 → 基础查询操作：SELECT, WHERE, ORDER BY
+    # - 中等场景 → 聚合分析操作：GROUP BY, HAVING, 聚合函数
+    # - 复杂场景 → 多表关联操作：多表JOIN, 子查询, 窗口函数
 ```
 
 3. **基于记忆的生成过程**：
@@ -850,15 +853,15 @@ system_prompt = SystemMessagePromptTemplate.from_template("""
    - table_meaning：分析表职责
    - er_analysis：分析表关系
    
-2. 基于分析结果生成数据：
-   - scenario_generation：选择场景（每次从预定义模板选一个）
-   - 对每个场景：
-     - operation_selection：选择SQL操作
-     - question_generation：生成问题
-     - sql_generation：生成SQL
-     - sql_validation：验证语法
-     - sql_execution：执行测试
-     - sql_reflection：反思质量
+2. 基于分析结果生成数据（循环N次）：
+   for i in range(N):  # N是要生成的问题数量
+     - scenario_tool：选择场景（从预定义模板选一个，基于iteration轮转）
+     - operation_selection：根据场景复杂度选择SQL操作
+     - question_generation：生成自然语言问题
+     - sql_generation：生成对应的SQL
+     - sql_validation：验证SQL语法
+     - sql_execution：执行SQL测试
+     - sql_reflection：评估结果质量
 
 3. 反思后的处理：
    - 如果质量不达标，使用sequential_thinking分析问题
@@ -1192,12 +1195,8 @@ agent:
   verbose: true           # 详细日志
   
 generation:
-  scenarios_per_batch: 10      # 每批场景数
-  questions_per_scenario: 5    # 每场景问题数
-  sql_complexity_weights:      # SQL复杂度权重
-    simple: 0.3
-    medium: 0.5
-    complex: 0.2
+  default_count: 100           # 默认生成数量
+  output_format: "jsonl"       # 输出格式
     
 output:
   directory: ./output     # 输出目录
