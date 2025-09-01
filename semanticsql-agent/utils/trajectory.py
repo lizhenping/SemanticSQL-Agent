@@ -31,30 +31,30 @@ class TrajectoryRecorder:
             filename = f"execution_{timestamp}_{execution.task_id[:8]}.json"
             filepath = self.output_dir / filename
             
-            # Convert to serializable format
+            # Convert to serializable format with enhanced serialization
             trajectory_data = {
                 "task_id": execution.task_id,
                 "task": execution.task,
                 "started_at": execution.started_at.isoformat(),
                 "completed_at": execution.completed_at.isoformat() if execution.completed_at else None,
                 "status": execution.status,
-                "final_result": execution.final_result,
+                "final_result": self._serialize_tool_output(execution.final_result),
                 "error": execution.error,
-                "metadata": execution.metadata,
+                "metadata": self._serialize_tool_output(execution.metadata),
                 "steps": [
                     {
                         "step_type": step.step_type.value,
                         "content": step.content,
                         "timestamp": step.timestamp.isoformat(),
                         "tool_name": step.tool_name,
-                        "tool_input": step.tool_input,
+                        "tool_input": self._serialize_tool_output(step.tool_input),
                         "tool_output": self._serialize_tool_output(step.tool_output),
                         "error": step.error,
                         "duration_ms": step.duration_ms
                     }
                     for step in execution.steps
                 ],
-                "summary": execution.get_summary()
+                "summary": self._serialize_tool_output(execution.get_summary()) if hasattr(execution, 'get_summary') else {}
             }
             
             # Save to file
@@ -189,6 +189,15 @@ class TrajectoryRecorder:
             return None
         
         try:
+            # 特殊处理Pydantic FieldInfo对象
+            from pydantic.fields import FieldInfo
+            if isinstance(output, FieldInfo):
+                return {
+                    "type": "FieldInfo",
+                    "description": getattr(output, 'description', None),
+                    "default": str(getattr(output, 'default', None))
+                }
+            
             # 如果是Pydantic模型，使用model_dump
             if hasattr(output, 'model_dump'):
                 return output.model_dump()
@@ -198,6 +207,9 @@ class TrajectoryRecorder:
             # 如果是列表，递归处理
             elif isinstance(output, list):
                 return [self._serialize_tool_output(item) for item in output]
+            # 如果是复杂对象类型，转换为字符串
+            elif hasattr(output, '__dict__') and not isinstance(output, (str, int, float, bool)):
+                return str(output)
             # 测试是否可以JSON序列化
             json.dumps(output)
             return output

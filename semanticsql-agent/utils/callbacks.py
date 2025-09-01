@@ -38,11 +38,20 @@ class TrajectoryCallbackHandler(BaseCallbackHandler):
         """记录Agent动作"""
         self.logger.debug(f"Agent action: {action.tool} with input: {action.tool_input}")
         
+        # 确保tool_input是字典格式，避免Pydantic验证错误
+        tool_input_dict = action.tool_input
+        if isinstance(action.tool_input, str):
+            try:
+                import json
+                tool_input_dict = json.loads(action.tool_input)
+            except:
+                tool_input_dict = {"input": action.tool_input}
+        
         step = AgentStep(
             step_type=AgentStepType.ACTION,
             content=f"Calling tool: {action.tool}",
             tool_name=action.tool,
-            tool_input=action.tool_input,
+            tool_input=tool_input_dict,
             timestamp=datetime.now()
         )
         

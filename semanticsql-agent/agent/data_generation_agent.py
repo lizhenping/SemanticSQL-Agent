@@ -305,8 +305,10 @@ class DataGenerationAgent(BaseAgent):
                 # 尝试直接解析为JSON（Agent现在直接输出JSON格式）
                 try:
                     parsed_output = json.loads(output)
+                    self.logger.debug(f"Successfully parsed JSON output, type: {type(parsed_output)}")
+                    
                     if isinstance(parsed_output, list):
-                        # 处理JSON数组
+                        # 处理直接的JSON数组
                         for item in parsed_output:
                             if isinstance(item, dict) and "question" in item and "sql" in item:
                                 examples.append(item)
@@ -318,6 +320,12 @@ class DataGenerationAgent(BaseAgent):
                                 if isinstance(item, dict) and "question" in item and "sql" in item:
                                     examples.append(item)
                                     self.logger.debug(f"Successfully extracted training sample: {item.get('question', '')[:50]}...")
+                        # 处理sample_1, sample_2等键值格式
+                        elif any(key.startswith('sample_') for key in parsed_output.keys()):
+                            for key, item in parsed_output.items():
+                                if key.startswith('sample_') and isinstance(item, dict) and "question" in item and "sql" in item:
+                                    examples.append(item)
+                                    self.logger.debug(f"Successfully extracted training sample from {key}: {item.get('question', '')[:50]}...")
                         elif "question" in parsed_output and "sql" in parsed_output:
                             # 处理单个JSON对象
                             examples.append(parsed_output)
@@ -325,6 +333,10 @@ class DataGenerationAgent(BaseAgent):
                             
                 except json.JSONDecodeError as e:
                     self.logger.warning(f"Failed to parse output as JSON: {e}")
+                    # 尝试解析markdown格式
+                    markdown_examples = self._extract_from_markdown(output)
+                    if markdown_examples:
+                        return markdown_examples
                     # 回退到轨迹提取
                     return self._extract_generated_examples()
                     
@@ -340,6 +352,39 @@ class DataGenerationAgent(BaseAgent):
             return self._extract_generated_examples()
             
         return examples
+    
+    def _extract_from_markdown(self, output: str) -> List[Dict[str, Any]]:
+        """从markdown格式输出中提取训练样本"""
+        examples = []
+        import re
+        
+        try:
+            # 匹配markdown格式的问题和SQL
+            pattern = r'\*\*问题\*\*:\s*(.+?)\s*\*\*SQL\*\*:\s*(.+?)\s*\*\*场景信息\*\*:\s*(.+?)\s*\*\*验证结果\*\*:\s*(.+?)(?=\d+\.|$)'
+            matches = re.findall(pattern, output, re.DOTALL)
+            
+            for match in matches:
+                question = match[0].strip()
+                sql = match[1].strip()
+                scenario = match[2].strip()
+                validation = match[3].strip()
+                
+                if question and sql:
+                    example = {
+                        "question": question,
+                        "sql": sql,
+                        "scenario_info": {"category": scenario, "complexity": "medium"},
+                        "validation_result": {"syntax_valid": True, "execution_result": validation}
+                    }
+                    examples.append(example)
+                    self.logger.debug(f"Successfully extracted training sample from markdown: {question[:50]}...")
+            
+            self.logger.info(f"Extracted {len(examples)} training examples from markdown format")
+            return examples
+            
+        except Exception as e:
+            self.logger.error(f"Failed to extract examples from markdown: {e}")
+            return []
     
     def _extract_generated_examples(self) -> List[Dict[str, Any]]:
         """从 Agent 执行轨迹中提取生成的样例"""
