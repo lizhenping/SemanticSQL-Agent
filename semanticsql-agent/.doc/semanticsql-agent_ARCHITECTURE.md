@@ -29,7 +29,8 @@ semanticsql-agent/
 │
 ├── models/
 │   ├── __init__.py
-│   └── schemas.py               # Pydantic 模型定义
+│   ├── schemas.py               # Pydantic 模型定义
+│   └── exceptions.py            # 异常定义
 │
 ├── tools/
 │   ├── __init__.py
@@ -102,9 +103,22 @@ semanticsql-agent/
 - 连接池管理
 - 数据库连接参数管理
 
-### 3.2 工具系统 (tools/)
+### 3.2 数据模型 (models/)
 
-#### 3.2.1 基础设计（基于 LangChain）
+#### schemas.py
+- 使用 Pydantic 定义所有数据模型
+- 包括 QueryScenario、SQLQueryResult、TrainingExample 等
+- 提供数据验证和序列化功能
+
+#### exceptions.py
+- 定义所有自定义异常类
+- 继承自 SemanticSQLException 基类
+- 包括配置错误、数据库错误、LLM错误、工具错误等
+- 统一的错误代码和消息格式
+
+### 3.3 工具系统 (tools/)
+
+#### 3.3.1 基础设计（基于 LangChain）
 - **BaseTool**: 继承自 `langchain.tools.BaseTool`
   - 统一的 `_run()` 接口实现
   - 利用 LangChain 的参数验证机制
@@ -112,7 +126,7 @@ semanticsql-agent/
   - 与 LangChain Agent 无缝集成
   - 支持同步和异步执行
 
-#### 3.2.2 工具分类
+#### 3.3.2 工具分类
 
 **分析工具** (analysis_tools/)
 - **schema_extraction_tool**: 提取表结构、列信息、约束
@@ -140,7 +154,7 @@ semanticsql-agent/
 **思考工具** (thinking_tools/)
 - **sequential_thinking_tool**: 深度分析问题，制定修正策略
 
-### 3.3 智能体系统 (agent/)
+### 3.4 智能体系统 (agent/)
 
 #### base_agent.py（基于 LangChain AgentExecutor）
 - 使用 `langchain.agents.AgentExecutor` 实现 ReAct 模式
@@ -155,7 +169,7 @@ semanticsql-agent/
 - Agent 根据工具输出和反思结果决定下一步行动
 - 集成 LangChain 的错误处理机制
 
-### 3.4 记忆管理（基于 LangChain Memory）
+### 3.5 记忆管理（基于 LangChain Memory）
 
 #### 使用 LangChain 的记忆组件
 - **ConversationSummaryMemory**: 存储数据库分析摘要
@@ -184,7 +198,7 @@ class DatabaseAnalysisMemory(BaseMemory):
 - 支持持久化到文件或数据库
 - 可以使用 LangChain 的记忆链功能
 
-### 3.5 提示词管理（集成 LangChain）
+### 3.6 提示词管理（集成 LangChain）
 
 #### 使用 LangChain 的提示词组件
 - **PromptTemplate**: 基础提示词模板
