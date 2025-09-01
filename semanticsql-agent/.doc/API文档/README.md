@@ -16,7 +16,6 @@
 
 - [BaseAgent API](./agent模块/BaseAgent-API.md) - 基于 LangChain 的智能体基类
 - [SQLAgent API](./agent模块/SQLAgent-API.md) - SQL 查询生成智能体
-- [记忆管理 API](./agent模块/记忆管理-API.md) - 基于 LangChain Memory 的数据库分析记忆
 
 #### 2. Tools 模块（基于 LangChain Tools）
 所有工具继承自 `langchain.tools.BaseTool`。
