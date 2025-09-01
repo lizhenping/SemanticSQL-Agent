@@ -7,7 +7,7 @@ SemanticSQL Agent 是一个基于 ReAct 智能体架构的 **NL2SQL 训练数据
 
 **核心功能**：
 - 📊 **智能数据库分析**：自动提取数据库结构、识别业务领域、分析表关系
-- 🎯 **场景化数据生成**：基于业务场景批量生成自然语言问题和对应的 SQL 查询对
+- 🎯 **场景化问题生成**：基于预定义业务场景模板，按设定数量生成自然语言问题和对应的 SQL 查询对
 - ✅ **执行验证机制**：实际执行生成的 SQL，验证正确性和可行性
 - 🔄 **智能反思优化**：分析执行结果，自动优化 SQL 质量和性能
 - 📦 **标准化输出**：生成符合训练标准的 JSON/JSONL 格式数据集
@@ -90,10 +90,10 @@ graph TB
     TabMean --> ER[er_analysis<br/>分析表关系]
     ER --> Memory[(记忆存储<br/>分析结果)]
     
-    Memory --> ScenarioBatch[scenario_generation<br/>批量生成N个场景<br/>基于预定义模板]
+    Memory --> ScenarioLoop[问题生成循环<br/>根据数量N循环<br/>每次选择一个预定义场景]
     
-    ScenarioBatch --> ScenarioLoop[对每个场景循环]
-    ScenarioLoop --> Operation[operation_selection<br/>为当前场景选择SQL操作]
+    ScenarioLoop --> Scenario[scenario_tool<br/>从预定义模板选择场景]
+    Scenario --> Operation[operation_selection<br/>为当前场景选择SQL操作]
     Operation --> Question[question_generation<br/>基于场景生成问题]
     Question --> SQL[sql_generation<br/>生成SQL查询]
     SQL --> Validate[sql_validation<br/>验证SQL语法]
@@ -116,11 +116,9 @@ graph TB
     ReQuestion --> SQL[使用新问题生成SQL]
     ReSQL --> Validate[验证新SQL]
     
-    Save --> NextScenario{还有场景?}
-    NextScenario -->|是| ScenarioLoop
-    NextScenario -->|否| CheckCount{达到目标数量?}
-    CheckCount -->|否| ScenarioBatch
-    CheckCount -->|是| End[结束]
+    Save --> NextQuestion{还需生成更多问题?}
+    NextQuestion -->|是| ScenarioLoop
+    NextQuestion -->|否| End[完成生成]
 ```
 
 **Agent的智能决策过程**：
@@ -175,9 +173,9 @@ graph TB
     ├─ table_meaning → 表业务职责 → 记忆模块
     └─ er_analysis → 表关系信息 → 记忆模块
             ↓
-场景批量生成（基于预定义模板）
+问题生成循环（基于设定数量N）
     ↓
-对每个场景循环处理：
+对每次循环（从预定义场景模板中选择）：
     ↓
 操作选择（基于预定义规则）
     ↓
@@ -342,7 +340,7 @@ new_sql = sql_generation(
 | 工具类别 | 工具名称 | 执行次数 | 使用时机 | 说明 |
 |---------|---------|---------|---------|------|
 | 分析工具 | extract_schema<br>domain_analysis<br>field_classification<br>column_meaning<br>table_meaning<br>er_analysis | 初始一次 | 任务开始时 | 结果保存在记忆中，必要时可重新执行 |
-| 生成工具 | scenario_generation | 多批次 | 每批生成N个场景 | 基于预定义模板批量生成 |
+| 生成工具 | scenario_generation | 每个问题一次 | 从预定义模板选择场景 | 基于问题数量循环调用 |
 | 生成工具 | operation_selection | 每场景一次 | 为每个场景选择SQL操作 | 根据场景复杂度选择 |
 | 生成工具 | question_generation<br>sql_generation | 每场景多次 | 基于场景和操作生成 | 可能因反思而重新生成 |
 | 验证工具 | sql_validation<br>sql_execution | 每SQL一次 | 每个SQL必须验证执行 | 确保SQL正确可执行 |
@@ -355,33 +353,36 @@ new_sql = sql_generation(
 3. 反思工具不会触发重新分析整个数据库
 4. 只有在反思发现需要时，才会局部重新分析特定内容
 
-**场景处理的详细流程**：
+**问题生成的详细流程**：
 
-1. **预定义的场景生成**：
+1. **基于数量的循环生成**：
 ```python
-# scenario_generation 基于预定义模板生成场景
-scenarios = scenario_generation(
-    schema_info=memory["schema_info"],  # 使用数据库分析记忆
-    count=10
-)
-# 返回预定义场景类型，如：
-# - 基础查询场景（单表、简单条件）
-# - 统计分析场景（聚合、分组）
-# - 关联查询场景（多表JOIN）
-# - 时间序列场景（时间范围查询）
+# 根据设定的问题数量进行循环
+for i in range(question_count):
+    # scenario_generation 从预定义模板中选择一个场景
+    scenario = scenario_generation(
+        schema_info=memory["schema_info"],  # 使用数据库分析记忆
+        iteration=i  # 当前迭代次数，用于场景轮转
+    )
+    # 预定义场景类型包括：
+    # - 基础查询场景（单表、简单条件）
+    # - 统计分析场景（聚合、分组）
+    # - 关联查询场景（多表JOIN）
+    # - 时间序列场景（时间范围查询）
 ```
 
-2. **预定义的操作选择**：
+2. **每个循环的完整处理流程**：
 ```python
-# operation_selection 根据预定义规则选择操作
-operations = operation_selection(
-    scenario=scenario,
-    schema_info=memory["schema_info"]
-)
-# 基于场景复杂度的预定义规则：
-# - 简单场景 → ["SELECT", "WHERE"]
-# - 中等场景 → ["SELECT", "JOIN", "GROUP"]
-# - 复杂场景 → ["SELECT", "JOIN", "GROUP", "HAVING", "ORDER"]
+    # 在循环内，对当前场景进行完整处理
+    # operation_selection 根据预定义规则选择操作
+    operations = operation_selection(
+        scenario=scenario,
+        schema_info=memory["schema_info"]
+    )
+    # 基于场景复杂度的预定义规则：
+    # - 简单场景 → ["SELECT", "WHERE"]
+    # - 中等场景 → ["SELECT", "JOIN", "GROUP"]
+    # - 复杂场景 → ["SELECT", "JOIN", "GROUP", "HAVING", "ORDER"]
 ```
 
 3. **基于记忆的生成过程**：
@@ -519,6 +520,72 @@ if reflection["needs_revision"]:
 - 如果是生成步骤有误，重新执行该步骤（使用最新的记忆）
 - 记忆模块是动态的，可以被更新和改进
 - 所有后续步骤都使用记忆模块中的最新数据
+
+**完整的问题生成循环示例**：
+```python
+# 设定要生成的问题数量
+question_count = 100
+generated_data = []
+
+# 主循环：生成N个问题
+for i in range(question_count):
+    # 1. 选择场景（从预定义模板）
+    scenario = scenario_tool.run({
+        "schema_info": memory["schema_info"],
+        "iteration": i % len(predefined_scenarios)  # 轮转使用场景
+    })
+    
+    # 2. 为场景选择操作
+    operations = operation_selection_tool.run({
+        "scenario": scenario,
+        "schema_info": memory["schema_info"]
+    })
+    
+    # 3. 生成问题
+    question = question_generation_tool.run({
+        "scenario": scenario,
+        "operations": operations,
+        "memory": memory  # 使用所有分析结果
+    })
+    
+    # 4. 生成SQL
+    sql = sql_generation_tool.run({
+        "question": question,
+        "memory": memory
+    })
+    
+    # 5. 验证和执行
+    validation = sql_validation_tool.run({"sql": sql})
+    execution = sql_execution_tool.run({"sql": sql})
+    
+    # 6. 反思评估
+    reflection = sql_reflection_tool.run({
+        "sql": sql,
+        "execution": execution,
+        "question": question,
+        "scenario": scenario,
+        "memory_usage": memory
+    })
+    
+    # 7. 如果需要修正，执行修正流程
+    if reflection["needs_revision"]:
+        # 使用 sequential_thinking 分析并修正
+        # ... 修正逻辑 ...
+        pass
+    
+    # 8. 保存生成的数据
+    generated_data.append({
+        "question": question,
+        "sql": sql,
+        "scenario": scenario,
+        "validated": True
+    })
+    
+    print(f"Progress: {i+1}/{question_count}")
+
+# 生成完成
+print(f"Successfully generated {len(generated_data)} questions")
+```
 
 ### 2.2 分析工具详细说明
 
@@ -771,7 +838,7 @@ system_prompt = SystemMessagePromptTemplate.from_template("""
    - er_analysis：分析表关系
    
 2. 基于分析结果生成数据：
-   - scenario_generation：生成场景（批量）
+   - scenario_generation：选择场景（每次从预定义模板选一个）
    - 对每个场景：
      - operation_selection：选择SQL操作
      - question_generation：生成问题

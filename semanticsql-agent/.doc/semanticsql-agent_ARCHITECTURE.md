@@ -299,20 +299,21 @@ sequential_thinking（规划执行策略）
 6. er_analysis → 记忆模块（分析表间关系）
 ```
 
-### 4.3 批量生成流程
+### 4.3 问题生成流程
 ```
-scenario_tool（批量生成N个场景）
+根据设定的问题生成数量N，循环遍历预定义场景模板：
     ↓
-对每个场景循环：
-    ├─ operation_selection（选择SQL操作）
-    ├─ question_generation（生成问题）
-    ├─ sql_generation（生成SQL）
+for i in range(N):  # 生成N个问题
+    ├─ scenario_tool（从预定义模板中选择一个场景）
+    ├─ operation_selection（基于场景选择SQL操作）
+    ├─ question_generation（生成自然语言问题）
+    ├─ sql_generation（生成SQL语句）
     ├─ sql_validation（验证语法）
     ├─ sql_execution（执行测试）
     └─ sql_reflection（反思评估）
          ↓
     需要修正？
-    ├─ 否 → 保存数据，下一个场景
+    ├─ 否 → 保存生成的问题和SQL，继续下一个
     └─ 是 → sequential_thinking（分析问题）
             ↓
        定位问题源头：

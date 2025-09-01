@@ -1,6 +1,6 @@
 # ScenarioTool API 文档
 
-场景生成工具，基于预定义模板生成查询场景。
+场景生成工具，从预定义模板中选择查询场景。
 
 ## 类定义
 
@@ -13,7 +13,7 @@ class ScenarioTool(BaseTool):
     """
     场景生成工具
     
-    基于预定义的场景模板和数据库结构生成查询场景。
+    基于预定义的场景模板和数据库结构选择合适的查询场景。
     
     Attributes:
         name: "scenario_generation"
@@ -41,34 +41,30 @@ def _run(
     self,
     schema_info: Dict[str, Any],
     domain_info: Dict[str, Any],
-    count: int = 10,
-    difficulty_distribution: Dict[str, float] = None
-) -> List[Dict[str, Any]]:
+    iteration: int = 0
+) -> Dict[str, Any]:
     """
-    生成查询场景
+    选择一个查询场景
     
     Args:
         schema_info: 数据库结构信息
         domain_info: 领域分析结果
-        count: 生成场景数量
-        difficulty_distribution: 难度分布，如 {"easy": 0.3, "medium": 0.5, "hard": 0.2}
+        iteration: 当前迭代次数，用于场景轮转
     
     Returns:
-        List[Dict[str, Any]]: 生成的场景列表
+        Dict[str, Any]: 选中的场景
     
     Return Format:
         ```python
-        [
-            {
-                "id": "scenario_001",
-                "category": "销售分析",
-                "business_purpose": "分析产品销售趋势",
-                "description": "统计最近30天各产品类别的销售额和销量",
-                "difficulty": "medium",
-                "tables": ["orders", "order_items", "products", "categories"],
-                "suggested_operations": ["JOIN", "GROUP BY", "AGGREGATE", "DATE_FILTER"]
-            }
-        ]
+        {
+            "id": "scenario_001",
+            "category": "销售分析",
+            "business_purpose": "分析产品销售趋势",
+            "description": "统计最近30天各产品类别的销售额和销量",
+            "difficulty": "medium",
+            "tables": ["orders", "order_items", "products", "categories"],
+            "suggested_operations": ["JOIN", "GROUP BY", "AGGREGATE", "DATE_FILTER"]
+        }
         ```
     """
 ```
@@ -110,46 +106,35 @@ ECOMMERCE_SCENARIOS = {
 # 创建工具
 tool = ScenarioTool()
 
-# 生成场景（默认分布）
-scenarios = tool.run({
-    "schema_info": schema_info,
-    "domain_info": {"domain": "电商"},
-    "count": 20
-})
-
-# 自定义难度分布
-scenarios = tool.run({
-    "schema_info": schema_info,
-    "domain_info": {"domain": "电商"},
-    "count": 50,
-    "difficulty_distribution": {
-        "easy": 0.2,
-        "medium": 0.5,
-        "hard": 0.25,
-        "expert": 0.05
-    }
-})
-
-# 处理生成的场景
-for scenario in scenarios:
-    print(f"场景: {scenario['description']}")
+# 在问题生成循环中使用
+for i in range(100):  # 生成100个问题
+    # 选择一个场景
+    scenario = tool.run({
+        "schema_info": schema_info,
+        "domain_info": {"domain": "电商"},
+        "iteration": i  # 用于场景轮转
+    })
+    
+    print(f"选中场景: {scenario['description']}")
     print(f"难度: {scenario['difficulty']}")
     print(f"涉及表: {scenario['tables']}")
+    
+    # 继续后续的操作选择、问题生成等步骤...
 ```
 
-## 场景生成策略
+## 场景选择策略
 
-### 1. 模板匹配
-根据领域和表结构选择合适的模板
+### 1. 轮转策略
+根据迭代次数轮转使用不同的预定义场景
 
-### 2. 变量填充
-根据实际数据库内容填充模板变量
+### 2. 领域匹配
+选择与数据库领域相符的场景模板
 
-### 3. 复杂度控制
-根据难度要求选择操作组合
+### 3. 复杂度平衡
+确保不同难度的场景均匀分布
 
-### 4. 多样性保证
-避免生成重复或过于相似的场景
+### 4. 表覆盖
+尽可能覆盖数据库中的所有重要表
 
 ## 扩展场景模板
 
@@ -169,9 +154,9 @@ def add_custom_scenarios(domain: str, scenarios: Dict):
 ## 注意事项
 
 1. 场景基于预定义模板，不依赖 LLM
-2. 支持多种业务领域
-3. 可扩展场景模板库
-4. 生成结果的多样性和覆盖度有保证
+2. 每次调用返回一个场景，不是批量返回
+3. 通过迭代参数实现场景轮转
+4. 支持多种业务领域的场景模板
 
 ---
 
