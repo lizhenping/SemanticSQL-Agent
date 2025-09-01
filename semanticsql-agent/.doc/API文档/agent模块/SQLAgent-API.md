@@ -181,6 +181,13 @@ def get_system_prompt(self) -> str:
     """
     返回 SQL Agent 的系统提示词
     
+    提示词引导 Agent 自主执行任务，包括：
+    - 使用 sequential_thinking 制定执行策略
+    - 自主调用数据库分析工具
+    - 根据任务类型决定执行流程
+    - 使用 sql_reflection 评估生成质量
+    - 必要时调用 sequential_thinking 分析问题并修正
+    
     提示词专注于准确理解用户意图并生成正确的 SQL 查询。
     """
 ```

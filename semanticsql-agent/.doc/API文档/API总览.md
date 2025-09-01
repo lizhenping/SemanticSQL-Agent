@@ -4,11 +4,22 @@
 
 SemanticSQL Agent 是一个基于 LangChain 框架的智能 SQL 生成系统，专注于生成高质量的 NL2SQL 训练数据。
 
+### 核心设计原则
+
+**Agent 自主决策**：
+- ✅ **正确**：流程由提示词引导，Agent 自主决定执行策略
+- ❌ **错误**：流程硬编码在代码中，固定执行顺序
+
+**ReAct 模式**：
+- Agent 通过 思考(Thought) → 行动(Action) → 观察(Observation) 循环
+- 根据工具执行结果自主决定下一步
+- 使用 sequential_thinking 工具进行深度分析
+
 ### 核心特性
 
-1. **基于 LangChain**：利用成熟的 Agent 框架
+1. **基于 LangChain**：利用成熟的 Agent 框架和 ReAct 模式
 2. **智能分析**：深度理解数据库结构和业务语义
-3. **批量生成**：高效生成大量训练数据
+3. **自主生成**：Agent 自主决定生成流程和修正策略
 4. **质量保证**：执行验证和反思优化
 5. **MySQL 专注**：专门优化 MySQL 数据库
 
