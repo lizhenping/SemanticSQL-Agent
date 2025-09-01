@@ -1,208 +1,180 @@
-# SemanticSQL Agent 🤖
+# SemanticSQL Agent
 
-[![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+基于 LangChain 的智能 SQL 训练数据生成系统。
 
-专注MySQL的智能NL2SQL查询系统，基于ReAct（Reasoning + Acting）模式，将自然语言转换为SQL查询并执行。
+## 快速开始
 
-## ✨ 特性
-
-- 🧠 **智能体驱动**：基于 ReAct 模式的自主推理和执行
-- 🔧 **标准化工具系统**：结构分析、SQL生成、验证执行、反思优化
-- 📊 **完整执行追踪**：详细记录推理过程，支持调试分析
-- 🎯 **MySQL专用优化**：针对MySQL数据库优化的连接和查询处理
-- 🔄 **自动验证**：SQL语法检查、安全性验证、执行测试
-- 🤖 **本地LLM集成**：支持本地部署的Qwen等大模型
-
-## 🚀 快速开始
-
-### 环境准备
+### 1. 环境准备
 
 ```bash
-# 激活conda环境
+# 激活环境
 source activate alphasql
 
-# 进入项目目录
-cd /root/autodl-tmp/nl2sql/NL2SQL/trae-agent/semanticsql-agent
-
-# 安装依赖
-pip install pydantic sqlalchemy openai pymysql
+# 安装依赖（如果需要）
+pip install -r requirements.txt
 ```
 
-### 基础使用
+### 2. 启动 LLM 服务
 
 ```bash
-# 1. 测试MySQL数据库连接
-python main.py test
-
-# 2. 查看数据库结构
-python main.py schema
-
-# 3. 运行自然语言查询
-python main.py run "查询aid_info表的记录数量"
-
-# 4. 交互模式
-python main.py interactive
+# 启动 Qwen3-14B 模型服务
+CUDA_VISIBLE_DEVICES=2 vllm serve /root/autodl-tmp/model/Qwen3-14B \
+  --host 0.0.0.0 --port 9991 \
+  --trust-remote-code \
+  --served-model-name "Qwen3-14B"
 ```
 
-## 📋 命令参考
+### 3. 配置系统
 
-### 核心功能命令
-
-#### 数据库测试
 ```bash
-# 测试MySQL连接
-python main.py test
+# 复制配置文件
+cp config.example.yaml config.yaml
 
-# 显示数据库信息
-python main.py schema
+# 编辑配置（可选）
+vim config.yaml
 ```
 
-#### 查询执行
+### 4. 生成训练数据
+
 ```bash
-# 基础查询
-python main.py run "查询用户数量"
+# 生成 100 条训练数据
+python cli.py generate -n 100 -o training_data.jsonl
 
-# 复杂查询
-python main.py run "查询每个类别的平均金额"
-
-# 带超时的查询
-timeout 30 python main.py run "统计所有表的记录数"
+# 使用配置文件
+python cli.py generate -n 50 -c config.yaml -o output.jsonl
 ```
 
-#### 交互模式
+## 主要功能
+
+### 批量生成训练数据
+
 ```bash
-# 进入交互式查询模式
-python main.py interactive
+# 基本用法
+python cli.py generate -n <数量> -o <输出文件>
+
+# 参数说明
+-n, --count      生成的数据条数
+-o, --output     输出文件路径
+-d, --database   数据库名称（可选）
+-f, --format     输出格式：json 或 jsonl（默认）
+-c, --config     配置文件路径（可选）
+-v, --verbose    详细输出模式
 ```
 
-## 🔧 配置说明
+### 数据库分析
 
-### 默认配置
-系统使用内置默认配置，专门为您的MySQL环境优化：
-
-```python
-# MySQL数据库配置
-host: "192.168.200.216"
-port: 13306
-database: "testdb"
-username: "testuser"
-password: "testpass"
-
-# LLM配置（需要您提供正确的模型名称）
-model: "Qwen3-14B"  # 请根据您的实际模型名称调整
-base_url: "http://127.0.0.1:9991/v1"
-api_key: "not-needed"
-```
-
-### 环境变量配置（可选）
 ```bash
-export LLM_MODEL="您的模型名称"
-export DB_HOST="192.168.200.216"
-export DB_PORT="13306"
-export DB_NAME="testdb"
-export DB_USER="testuser"
-export DB_PASSWORD="testpass"
+# 分析数据库结构
+python cli.py analyze -d testdb
+
+# 保存分析结果
+python cli.py analyze -d testdb -o analysis.json
 ```
 
-## 📁 项目结构
+### 生成配置模板
 
-```
-semanticsql-agent/
-├── agent/              # ReAct智能体实现
-│   ├── base_agent.py   # 基础智能体类
-│   └── smart_sql_agent.py # SQL智能体
-├── config/             # 配置系统
-│   ├── settings.py     # 全局设置
-│   └── database.py     # MySQL数据库配置
-├── tools/              # 标准化工具系统
-│   ├── analysis_tools/ # 数据库结构分析
-│   ├── generation_tools/ # SQL生成
-│   ├── validation_tools/ # SQL验证执行
-│   ├── reflection_tools/ # 结果反思
-│   └── thinking_tools/ # 推理思考
-├── models/             # 数据模型
-│   ├── schemas.py      # Pydantic数据模型
-│   └── exceptions.py   # 异常定义
-├── utils/              # 工具函数
-│   └── database.py     # 数据库管理器
-├── tests/              # 单元测试
-├── main.py             # 主入口程序
-└── simple_test.py      # 简单功能测试
+```bash
+# 生成配置文件模板
+python cli.py config-template > my_config.yaml
 ```
 
-## 🔧 架构设计
+## 系统配置
 
-### ReAct 执行模式
-```
-观察(Observation) → 思考(Thought) → 行动(Action) → 观察(Observation)
+### 环境变量
+
+系统支持通过环境变量配置：
+
+```bash
+# LLM 配置
+export SEMANTICSQL_LLM_MODEL="Qwen3-14B"
+export SEMANTICSQL_LLM_BASE_URL="http://127.0.0.1:9991/v1"
+export SEMANTICSQL_LLM_TEMPERATURE="0.7"
+
+# 数据库配置
+export SEMANTICSQL_DB_HOST="192.168.200.216"
+export SEMANTICSQL_DB_PORT="13306"
+export SEMANTICSQL_DB_DATABASE="testdb"
+export SEMANTICSQL_DB_USERNAME="testuser"
+export SEMANTICSQL_DB_PASSWORD="testpass"
 ```
 
-### MySQL查询流程
-```
-1. 提取数据库结构 → MySQL表和字段信息
-2. 生成SQL查询 → 基于自然语言生成SQL
-3. 验证SQL语法 → 语法检查和安全验证
-4. 执行查询 → 安全执行并返回结果
-5. 反思优化 → 分析结果质量并提供建议
-```
+### 配置文件
 
-## 📊 查询结果示例
+参考 `config.example.yaml` 创建自己的配置文件。
+
+## 系统架构
+
+### 工具链
+
+系统包含 14 个专业工具：
+
+- **分析工具** (6个)：数据库结构分析、领域识别、字段分类等
+- **生成工具** (4个)：场景选择、操作选择、问题生成、SQL生成
+- **验证工具** (2个)：SQL语法验证、执行测试
+- **反思工具** (1个)：结果质量评估和问题诊断
+- **思考工具** (1个)：深度分析和策略制定
+
+### 执行流程
+
+1. **数据库分析**：一次性分析数据库，结果保存到记忆
+2. **问题生成循环**：
+   - 选择场景和操作
+   - 生成问题和SQL
+   - 验证和执行
+   - 反思和优化
+3. **智能修正**：发现问题时自动回退并修正
+
+## 输出格式
+
+### JSON 格式
 
 ```json
 {
-  "success": true,
-  "question": "查询aid_info表的记录数量",
-  "sql": "SELECT COUNT(*) as count FROM aid_info;",
-  "answer": "共有1250条记录",
-  "data": [{"count": 1250}],
-  "execution_time": 0.05,
-  "steps": 4
+  "metadata": {...},
+  "data": [
+    {
+      "id": "q_20240115_abc123",
+      "question": "查询所有用户的总数",
+      "sql": "SELECT COUNT(*) FROM users",
+      "scenario": {...},
+      "validation": {...},
+      "quality_score": 0.95
+    }
+  ]
 }
 ```
 
-## ⚠️ 常见问题
+### JSONL 格式
 
-### LLM模型名称错误
+```jsonl
+{"id": "q_001", "question": "...", "sql": "...", "timestamp": "..."}
+{"id": "q_002", "question": "...", "sql": "...", "timestamp": "..."}
+```
+
+## 故障排除
+
+### LLM 服务问题
+
 ```bash
-# 问题：模型不存在错误
-# 解决：请告知正确的模型名称，我会更新config/settings.py中的llm_model配置
+# 测试 LLM 服务
+curl -X POST http://localhost:9991/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "Qwen3-14B", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
 ### 数据库连接问题
-```bash
-# 测试连接
-python main.py test
-```
-
-## 🚀 快速验证
 
 ```bash
-# 完整功能验证
-source activate alphasql && \
-python main.py test && \
-python main.py schema && \
-python main.py run "查询aid_info表的记录数量"
+# 测试数据库连接
+mysql -h 192.168.200.216 -P 13306 -u testuser -p testdb
 ```
 
----
+## 许可证
 
-## 💡 使用提示
+MIT License
 
-1. **模型配置**: 请根据您的本地模型服务提供正确的模型名称
-2. **MySQL专用**: 系统已针对MySQL数据库优化，包括字符集和连接配置
-3. **安全查询**: 系统只允许SELECT查询，确保数据库安全
-4. **本地服务**: LLM API已配置为本地127.0.0.1调用
+## 更多信息
 
-## 📝 更新日志
-
-**v2.0.0 (当前版本)**
-- ✅ 重构为MySQL专用架构
-- ✅ 简化配置系统（Pydantic）
-- ✅ 标准化工具接口
-- ✅ ReAct模式智能体
-- ✅ 完整单元测试覆盖
-
----
-
-本项目专注于MySQL环境的NL2SQL查询功能，基于ReAct智能体架构实现。
+- 详细命令说明：`.doc/命令行指令.md`
+- 架构设计：`.doc/semanticsql-agent_ARCHITECTURE.md`
+- API 文档：`.doc/API文档/`

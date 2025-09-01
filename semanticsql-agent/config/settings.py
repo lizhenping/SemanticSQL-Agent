@@ -3,7 +3,7 @@ Global configuration using Pydantic BaseSettings
 Based on the design specification for SemanticSQL Agent
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 import os
 
@@ -18,11 +18,26 @@ class Settings(BaseModel):
     environment: str = "development"
     
     # LLM configuration - 使用VLLM实际返回的模型名
-    llm_model: str = "Qwen3-14B"
-    llm_base_url: str = "http://127.0.0.1:9991/v1"
-    llm_api_key: str = "not-needed"
-    llm_temperature: float = 0.1
-    llm_max_tokens: int = 20000
+    llm_model: str = Field(
+        default=os.getenv("SEMANTICSQL_LLM_MODEL", "Qwen3-14B"),
+        description="LLM model name"
+    )
+    llm_base_url: str = Field(
+        default=os.getenv("SEMANTICSQL_LLM_BASE_URL", "http://127.0.0.1:9991/v1"),
+        description="LLM API base URL"
+    )
+    llm_api_key: str = Field(
+        default=os.getenv("SEMANTICSQL_LLM_API_KEY", "not-needed"),
+        description="LLM API key"
+    )
+    llm_temperature: float = Field(
+        default=float(os.getenv("SEMANTICSQL_LLM_TEMPERATURE", "0.7")),
+        description="LLM temperature for creativity"
+    )
+    llm_max_tokens: int = Field(
+        default=int(os.getenv("SEMANTICSQL_LLM_MAX_TOKENS", "20000")),
+        description="Maximum tokens for LLM"
+    )
     llm_timeout: int = 30
     llm_max_retries: int = 3
     

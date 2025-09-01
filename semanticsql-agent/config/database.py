@@ -20,11 +20,26 @@ class DatabaseConfig(BaseModel):
     """数据库连接配置 - 专注MySQL优化，保留其他数据库扩展"""
     
     type: DatabaseType = DatabaseType.MYSQL
-    host: str = "192.168.200.216"
-    port: int = 13306
-    database: str = "testdb"
-    username: str = "testuser"
-    password: str = "testpass"
+    host: str = Field(
+        default=os.getenv("SEMANTICSQL_DB_HOST", "192.168.200.216"),
+        description="Database host"
+    )
+    port: int = Field(
+        default=int(os.getenv("SEMANTICSQL_DB_PORT", "13306")),
+        description="Database port"
+    )
+    database: str = Field(
+        default=os.getenv("SEMANTICSQL_DB_DATABASE", "testdb"),
+        description="Database name"
+    )
+    username: str = Field(
+        default=os.getenv("SEMANTICSQL_DB_USERNAME", "testuser"),
+        description="Database username"
+    )
+    password: str = Field(
+        default=os.getenv("SEMANTICSQL_DB_PASSWORD", "testpass"),
+        description="Database password"
+    )
     
     # MySQL专用配置
     charset: str = "utf8mb4"
