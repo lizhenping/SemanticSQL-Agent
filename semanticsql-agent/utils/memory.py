@@ -1,20 +1,38 @@
 """
-记忆管理模块 - 用于存储数据库分析结果
-简化实现，避免 LangChain 版本兼容问题
+记忆管理模块 - 基于 LangChain BaseMemory
 """
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
+from pydantic import Field
+
+try:
+    # LangChain 0.2.x
+    from langchain_core.memory import BaseMemory
+except ImportError:
+    try:
+        # LangChain 0.1.x fallback
+        from langchain.memory.base import BaseMemory
+    except ImportError:
+        # Another fallback
+        from langchain.schema.memory import BaseMemory
 
 
-class DatabaseAnalysisMemory:
+class DatabaseAnalysisMemory(BaseMemory):
     """数据库分析结果记忆管理
     
-    存储数据库分析的所有结果，供后续工具使用
+    基于 LangChain BaseMemory 实现，存储数据库分析的所有结果
     """
     
-    def __init__(self):
-        """初始化记忆存储"""
-        self.memories: Dict[str, Any] = {}
-        self.memory_key: str = "db_analysis"
+    # 存储的记忆变量
+    memories: Dict[str, Any] = Field(default_factory=dict)
+    
+    # 记忆键
+    memory_key: str = "db_analysis"
+    
+    # 返回的记忆变量键列表
+    @property
+    def memory_variables(self) -> List[str]:
+        """返回记忆变量列表"""
+        return [self.memory_key]
     
     def clear(self):
         """清空记忆"""
@@ -24,7 +42,7 @@ class DatabaseAnalysisMemory:
         """加载记忆变量
         
         Args:
-            inputs: 输入参数（未使用，为兼容性保留）
+            inputs: 输入参数（LangChain 要求的接口）
             
         Returns:
             包含记忆的字典
@@ -53,6 +71,10 @@ class DatabaseAnalysisMemory:
             self.memories["table_meanings"] = outputs
         elif tool_name == "er_analysis":
             self.memories["er_relations"] = outputs
+        else:
+            # 对于其他工具，可以选择保存或忽略
+            if tool_name:
+                self.memories[f"tool_{tool_name}"] = outputs
     
     def update_analysis(self, analysis_type: str, result: Dict[str, Any]):
         """更新特定类型的分析结果
@@ -73,16 +95,3 @@ class DatabaseAnalysisMemory:
             分析结果，如果不存在返回空字典
         """
         return self.memories.get(analysis_type, {})
-    
-    @property
-    def memory_variables(self) -> List[str]:
-        """返回记忆变量列表"""
-        return [self.memory_key]
-    
-    def get_memory_dict(self) -> Dict[str, Any]:
-        """获取完整的记忆字典"""
-        return self.memories.copy()
-    
-    def __str__(self) -> str:
-        """字符串表示"""
-        return f"DatabaseAnalysisMemory(keys={list(self.memories.keys())})"
