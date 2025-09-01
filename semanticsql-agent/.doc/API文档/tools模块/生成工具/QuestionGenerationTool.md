@@ -42,7 +42,6 @@ def _run(
     self,
     scenario: Dict[str, Any],
     operations: Dict[str, Any],
-    schema_info: Dict[str, Any],
     memory: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
@@ -51,8 +50,7 @@ def _run(
     Args:
         scenario: 查询场景
         operations: 选定的操作
-        schema_info: 数据库结构
-        memory: 数据库分析记忆（包含领域、字段含义等）
+        memory: 完整的数据库分析记忆（包含schema_info、领域、字段含义等）
     
     Returns:
         Dict[str, Any]: 生成的问题
@@ -133,11 +131,7 @@ result = tool.run({
         "operations": ["JOIN", "GROUP BY", "SUM"],
         "aggregations": ["SUM", "COUNT"]
     },
-    "schema_info": schema_info,
-    "memory": {
-        "domain_analysis": {"domain": "电商"},
-        "column_meanings": column_meanings
-    }
+    "memory": memory  # 包含所有数据库分析结果
 })
 
 print(f"生成的问题: {result['question']}")

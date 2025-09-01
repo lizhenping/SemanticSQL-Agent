@@ -547,14 +547,14 @@ generated_data = []
 for i in range(question_count):
     # 1. 选择场景（从预定义模板）
     scenario = scenario_tool.run({
-        "schema_info": memory["schema_info"],
-        "iteration": i % len(predefined_scenarios)  # 轮转使用场景
+        "memory": memory,
+        "iteration": i  # 传入当前迭代次数
     })
     
     # 2. 为场景选择操作
     operations = operation_selection_tool.run({
         "scenario": scenario,
-        "schema_info": memory["schema_info"]
+        "memory": memory
     })
     
     # 3. 生成问题

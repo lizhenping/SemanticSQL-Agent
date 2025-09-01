@@ -41,14 +41,14 @@ def __init__(self, db_config: DatabaseConfig):
 def _run(
     self,
     sql: str,
-    schema_info: Dict[str, Any]
+    memory: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
     验证 SQL 查询
     
     Args:
         sql: 要验证的 SQL 语句
-        schema_info: 数据库结构信息
+        memory: 包含数据库分析结果的记忆（使用其中的schema_info）
     
     Returns:
         Dict[str, Any]: 验证结果
