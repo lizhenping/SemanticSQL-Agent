@@ -248,16 +248,30 @@ def transaction(self):
 ## 错误处理
 
 ```python
-class DatabaseConnectionError(Exception):
-    """数据库连接错误"""
-    pass
+from semanticsql_agent.models.exceptions import (
+    DatabaseConnectionError,
+    SQLExecutionError,
+    SchemaExtractionError
+)
 
-class SQLExecutionError(Exception):
-    """SQL 执行错误"""
-    def __init__(self, sql: str, error: str):
-        self.sql = sql
-        self.error = error
-        super().__init__(f"SQL execution failed: {error}")
+# 使用示例
+try:
+    db_manager = DatabaseManager(config)
+except Exception as e:
+    raise DatabaseConnectionError(
+        host=config.host,
+        database=config.database,
+        original_error=e
+    )
+
+# SQL执行错误
+try:
+    result = db_manager.execute_query(sql)
+except Exception as e:
+    raise SQLExecutionError(
+        sql=sql,
+        error=str(e)
+    )
 ```
 
 ## 使用示例

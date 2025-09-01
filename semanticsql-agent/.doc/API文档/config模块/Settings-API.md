@@ -179,11 +179,26 @@ settings = Settings(
 ## 配置验证
 
 ```python
+from pydantic import ValidationError
+from semanticsql_agent.models.exceptions import (
+    InvalidConfigError,
+    MissingConfigError
+)
+
 # Pydantic 自动验证
 try:
     settings = Settings(llm_temperature=3.0)  # 超出范围
 except ValidationError as e:
-    print(f"配置错误: {e}")
+    # 转换为自定义异常
+    raise InvalidConfigError(
+        config_name="llm_temperature",
+        value=3.0,
+        expected="0.0 <= value <= 2.0"
+    ) from e
+
+# 检查必需配置
+if not settings.llm_api_key:
+    raise MissingConfigError("llm_api_key")
 ```
 
 ## 使用示例

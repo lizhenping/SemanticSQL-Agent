@@ -334,15 +334,25 @@ self.prompt = ChatPromptTemplate.from_messages([
 ## 错误处理
 
 ```python
+from semanticsql_agent.models.exceptions import (
+    AgentExecutionError,
+    MaxIterationsError,
+    ToolExecutionError
+)
+
 try:
     result = agent.run("Complex task")
+except MaxIterationsError as e:
+    print(f"达到最大迭代次数: {e.message}")
+    print(f"迭代次数: {e.details['max_iterations']}")
 except AgentExecutionError as e:
-    print(f"Agent error: {e.message}")
-    print(f"Last action: {e.last_action}")
+    print(f"Agent错误 [{e.error_code}]: {e.message}")
+    print(f"失败步骤: {e.details.get('step')}")
 except ToolExecutionError as e:
-    print(f"Tool {e.tool_name} failed: {e.message}")
+    print(f"工具错误 [{e.error_code}]: {e.message}")
+    print(f"工具名称: {e.details.get('tool')}")
 except Exception as e:
-    print(f"Unexpected error: {e}")
+    print(f"未预期的错误: {e}")
 ```
 
 ## 最佳实践

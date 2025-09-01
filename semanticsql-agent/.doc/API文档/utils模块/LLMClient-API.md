@@ -222,17 +222,32 @@ def create_prompt_template(
 ## 错误处理
 
 ```python
-class LLMError(Exception):
-    """LLM 调用错误基类"""
-    pass
+from semanticsql_agent.models.exceptions import (
+    LLMConnectionError,
+    LLMResponseError,
+    LLMTimeoutError
+)
 
-class LLMTimeoutError(LLMError):
-    """LLM 调用超时"""
-    pass
+# 连接错误处理
+try:
+    response = client.call(messages)
+except requests.ConnectionError as e:
+    raise LLMConnectionError(
+        endpoint=client.config.llm_base_url,
+        error=e
+    )
 
-class LLMRateLimitError(LLMError):
-    """LLM 调用频率限制"""
-    pass
+# 超时错误处理
+except requests.Timeout:
+    raise LLMTimeoutError(
+        timeout=client.config.request_timeout
+    )
+
+# 响应错误处理
+if not response or "error" in response:
+    raise LLMResponseError(
+        reason=response.get("error", "Empty response")
+    )
 ```
 
 ## 使用示例

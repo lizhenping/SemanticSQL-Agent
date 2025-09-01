@@ -121,6 +121,18 @@ DOMAIN_ANALYSIS_PROMPT = """
 """
 ```
 
+## 错误处理
+
+```python
+from semanticsql_agent.models.exceptions import ToolExecutionError
+
+try:
+    result = tool.run({"memory": memory})
+except ToolExecutionError as e:
+    print(f"领域分析失败 [{e.error_code}]: {e.message}")
+    # 可能需要检查schema_info是否完整
+```
+
 ## 注意事项
 
 1. 领域分析是后续工具的基础
