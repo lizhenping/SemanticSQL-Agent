@@ -1,301 +1,319 @@
 """
 SQL生成工具 - 根据问题生成SQL查询
+基于 LangChain BaseTool
 """
 
-from typing import Dict, Any, List, Optional
-from openai import OpenAI
 import re
+from typing import Dict, Any, Type, List, Optional
+from langchain.tools import BaseTool
+from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, Field
 
-from tools.base_tool import BaseTool, ToolParameter
 from models.schemas import SQLOperation
-from models.exceptions import LLMError, GenerationError
-from config.settings import Settings
+from models.exceptions import ToolExecutionError, LLMError
+from utils.database import DatabaseManager
+
+
+class SQLGenerationInput(BaseModel):
+    """SQL生成输入"""
+    question: str = Field(description="自然语言问题")
+    memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
+    operations: List[str] = Field(default_factory=list, description="建议的SQL操作")
+    dialect: str = Field(default="mysql", description="SQL方言")
 
 
 class SQLGenerationTool(BaseTool):
     """生成SQL查询语句"""
     
-    def __init__(self, settings: Settings):
-        super().__init__(settings)
-        # 初始化LLM客户端
-        self.llm_client = OpenAI(
-            base_url=settings.llm_base_url,
-            api_key=settings.llm_api_key
-        )
-        self.model = settings.llm_model
-        self.temperature = 0.1  # SQL生成使用低温度
+    name = "sql_generation"
+    description = "根据自然语言问题和数据库结构生成对应的SQL查询"
+    args_schema: Type[BaseModel] = SQLGenerationInput
     
-    @property
-    def name(self) -> str:
-        return "sql_generation"
+    def __init__(self, llm: ChatOpenAI, db_manager: Optional[DatabaseManager] = None):
+        super().__init__()
+        self.llm = llm
+        self.db_manager = db_manager
     
-    @property
-    def description(self) -> str:
-        return "根据自然语言问题生成对应的SQL查询"
-    
-    @property
-    def category(self) -> str:
-        return "generation"
-    
-    @property
-    def parameters(self) -> List[ToolParameter]:
-        return [
-            ToolParameter(
-                name="question",
-                type="string",
-                description="自然语言问题",
-                required=True
-            ),
-            ToolParameter(
-                name="schema_info",
-                type="object",
-                description="数据库结构信息",
-                required=True
-            ),
-            ToolParameter(
-                name="operations",
-                type="array",
-                description="期望的SQL操作",
-                required=False,
-                default=[]
-            ),
-            ToolParameter(
-                name="dialect",
-                type="string",
-                description="SQL方言",
-                required=False,
-                enum=["mysql", "postgresql", "sqlite"],
-                default="mysql"
-            ),
-            ToolParameter(
-                name="use_llm",
-                type="boolean",
-                description="是否使用LLM",
-                required=False,
-                default=True
-            )
-        ]
-    
-    def _execute(self, question: str, schema_info: Any,
-                 operations: List[str] = None, dialect: str = "mysql",
-                 use_llm: bool = True) -> Dict[str, Any]:
-        """
-        生成SQL查询
-        
-        Returns:
-            包含SQL和元数据的字典
-        """
-        # 转换schema_info为字典格式
-        if isinstance(schema_info, str):
-            # 如果是字符串，解析为简单的表信息
-            schema_dict = self._parse_schema_string(schema_info)
-        elif isinstance(schema_info, dict):
-            schema_dict = schema_info
-        else:
-            raise ValueError(f"Unsupported schema_info type: {type(schema_info)}")
-        
-        # 只使用LLM生成，不使用规则降级
-        if not (use_llm and self.llm_client):
-            raise GenerationError("LLM生成被禁用，无法生成SQL")
-            
-        sql = self._generate_with_llm(question, schema_dict, operations, dialect)
-        
-        # 后处理
-        sql = self._postprocess_sql(sql, dialect)
-        
-        # 分析SQL
-        analysis = self._analyze_sql(sql)
-        
-        return {
-            "sql": sql,
-            "dialect": dialect,
-            "tables_used": analysis["tables"],
-            "operations_used": analysis["operations"],
-            "has_aggregation": analysis["has_aggregation"],
-            "has_join": analysis["has_join"],
-            "complexity": self._estimate_complexity(analysis)
-        }
-    
-    def _generate_with_llm(self, question: str, schema_info: Dict[str, Any],
-                          operations: List[str] = None, dialect: str = "mysql") -> str:
-        """使用LLM生成SQL"""
+    def _run(
+        self,
+        question: str,
+        memory: Dict[str, Any],
+        operations: List[str] = None,
+        dialect: str = "mysql"
+    ) -> Dict[str, Any]:
+        """生成SQL查询"""
         try:
-            prompt = self._build_sql_prompt(question, schema_info, operations, dialect)
+            # 从记忆中获取必要信息
+            db_analysis = memory.get("db_analysis", {})
+            schema_info = db_analysis.get("schema_info", {})
+            domain_info = db_analysis.get("domain_info", {})
+            field_classification = db_analysis.get("field_classification", {})
             
-            response = self.llm_client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": self._get_system_prompt(dialect)},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=self.temperature,
-                max_tokens=500
+            if not schema_info:
+                raise ToolExecutionError(
+                    tool_name=self.name,
+                    reason="未找到数据库结构信息，请先执行数据库分析"
+                )
+            
+            # 构建提示词上下文
+            context = self._build_context(
+                schema_info, domain_info, field_classification, operations
             )
             
-            sql = response.choices[0].message.content.strip()
+            # 生成SQL
+            sql = self._generate_sql_with_llm(question, context, dialect)
             
-            # 提取SQL语句
-            sql = self._extract_sql_from_response(sql)
+            # 后处理
+            sql = self._postprocess_sql(sql, dialect)
+            
+            # 分析SQL
+            analysis = self._analyze_sql(sql, schema_info)
+            
+            return {
+                "sql": sql,
+                "dialect": dialect,
+                "tables_used": analysis["tables"],
+                "operations_used": analysis["operations"],
+                "has_aggregation": analysis["has_aggregation"],
+                "has_join": analysis["has_join"],
+                "complexity": analysis["complexity"]
+            }
+            
+        except LLMError:
+            raise
+        except Exception as e:
+            raise ToolExecutionError(
+                tool_name=self.name,
+                reason=f"SQL生成失败: {str(e)}"
+            )
+    
+    def _build_context(
+        self,
+        schema_info: Dict[str, Any],
+        domain_info: Dict[str, Any],
+        field_classification: Dict[str, Any],
+        operations: Optional[List[str]]
+    ) -> str:
+        """构建LLM生成SQL所需的上下文"""
+        context_parts = []
+        
+        # 添加领域信息
+        if domain_info:
+            primary_domain = domain_info.get("primary_domain", "")
+            if primary_domain:
+                context_parts.append(f"业务领域：{primary_domain}")
+        
+        # 添加表结构信息
+        context_parts.append("\n数据库结构：")
+        tables = schema_info.get("tables", {})
+        
+        for table_name, table_info in tables.items():
+            context_parts.append(f"\n表：{table_name}")
+            
+            # 添加表注释
+            if table_info.get("comment"):
+                context_parts.append(f"  说明：{table_info['comment']}")
+            
+            # 添加列信息
+            columns = table_info.get("columns", [])
+            context_parts.append("  列：")
+            
+            for col in columns[:20]:  # 限制列数避免上下文过长
+                col_desc = f"    - {col['name']} ({col['type']})"
+                
+                # 添加列的业务含义（如果有）
+                if field_classification:
+                    table_fields = field_classification.get("field_classifications", {}).get(table_name, {})
+                    field_info = table_fields.get(col['name'], {})
+                    if field_info.get("business_meaning"):
+                        col_desc += f" -- {field_info['business_meaning']}"
+                
+                context_parts.append(col_desc)
+            
+            # 添加主键信息
+            if table_info.get("primary_keys"):
+                context_parts.append(f"  主键：{', '.join(table_info['primary_keys'])}")
+            
+            # 添加外键信息
+            foreign_keys = table_info.get("foreign_keys", [])
+            if foreign_keys:
+                for fk in foreign_keys[:5]:  # 限制外键数量
+                    fk_cols = ', '.join(fk.get("constrained_columns", []))
+                    ref_table = fk.get("referred_table", "")
+                    ref_cols = ', '.join(fk.get("referred_columns", []))
+                    context_parts.append(
+                        f"  外键：{fk_cols} -> {ref_table}({ref_cols})"
+                    )
+        
+        # 添加操作建议
+        if operations:
+            context_parts.append(f"\n建议使用的SQL操作：{', '.join(operations)}")
+        
+        return "\n".join(context_parts)
+    
+    def _generate_sql_with_llm(
+        self,
+        question: str,
+        context: str,
+        dialect: str
+    ) -> str:
+        """使用LLM生成SQL"""
+        prompt = f"""基于以下数据库结构信息，生成SQL查询来回答用户的问题。
+
+{context}
+
+SQL方言：{dialect}
+
+用户问题：{question}
+
+请生成SQL查询，要求：
+1. SQL语法正确，符合{dialect}方言
+2. 只返回SQL语句，不要其他解释
+3. 使用合适的表和字段
+4. 如果需要聚合，使用GROUP BY
+5. 如果需要排序，使用ORDER BY
+6. 考虑性能，避免不必要的复杂度
+
+SQL查询："""
+
+        try:
+            response = self.llm.invoke(prompt)
+            sql = response.content.strip()
+            
+            # 提取SQL（如果被包裹在代码块中）
+            sql_match = re.search(r'```sql\s*(.*?)\s*```', sql, re.DOTALL | re.IGNORECASE)
+            if sql_match:
+                sql = sql_match.group(1).strip()
             
             return sql
             
         except Exception as e:
-            self.logger.error(f"LLM SQL generation failed: {e}")
-            raise GenerationError(f"LLM SQL生成失败: {e}")
-    
-    def _parse_schema_string(self, schema_string: str) -> Dict[str, Any]:
-        """解析schema字符串为字典格式"""
-        # 从字符串中提取表信息
-        tables = {}
-        
-        # 简单解析："aid_info表包含id, amount, aid_type等字段"
-        import re
-        table_match = re.search(r'(\w+)表', schema_string)
-        if table_match:
-            table_name = table_match.group(1)
-            
-            # 提取字段名
-            fields_match = re.search(r'包含([^等]+)', schema_string)
-            if fields_match:
-                fields_str = fields_match.group(1)
-                columns = []
-                for field in re.split(r'[,，\s]+', fields_str.strip()):
-                    field = field.strip()
-                    if field:
-                        columns.append({
-                            "name": field,
-                            "type": "VARCHAR",
-                            "is_primary": field == "id"
-                        })
-                
-                tables[table_name] = {
-                    "columns": columns
-                }
-        
-        return {"tables": tables}
-    
-    def _build_sql_prompt(self, question: str, schema_info: Dict[str, Any],
-                         operations: List[str] = None, dialect: str = "mysql") -> str:
-        """构建SQL生成提示词"""
-        prompt = f"""将以下自然语言问题转换为{dialect} SQL查询：
-
-问题：{question}
-
-数据库结构：
-"""
-        
-        # 添加表结构信息
-        for table_name, table_info in schema_info.get("tables", {}).items():
-            prompt += f"\n表名：{table_name}\n字段：\n"
-            for col in table_info.get("columns", [])[:15]:  # 限制字段数量
-                col_type = col.get('type', col.get('data_type', 'unknown'))
-                col_desc = f"  - {col['name']} ({col_type})"
-                if col.get("is_primary"):
-                    col_desc += " PRIMARY KEY"
-                if col.get("is_foreign"):
-                    col_desc += " FOREIGN KEY"
-                prompt += col_desc + "\n"
-        
-        if operations:
-            prompt += f"\n期望的SQL操作：{', '.join(operations)}\n"
-        
-        prompt += """
-要求：
-1. 只返回SQL语句，不要有其他解释
-2. SQL语句要符合语法规范
-3. 使用合适的表和字段名
-4. 考虑性能优化
-
-SQL查询："""
-        
-        return prompt
-    
-    def _get_system_prompt(self, dialect: str) -> str:
-        """获取系统提示词"""
-        return f"""你是一个{dialect}数据库专家，擅长将自然语言问题转换为高效的SQL查询。
-你生成的SQL要：
-1. 语法正确
-2. 性能优化
-3. 结果准确
-4. 符合{dialect}方言特性
-只返回SQL语句，不要包含解释或其他内容。"""
-    
-    def _extract_sql_from_response(self, response: str) -> str:
-        """从响应中提取SQL"""
-        # 移除markdown代码块标记
-        sql = re.sub(r'```sql?\s*\n?', '', response)
-        sql = re.sub(r'```\s*$', '', sql)
-        
-        # 移除前后空白
-        sql = sql.strip()
-        
-        # 如果没有分号，添加分号
-        if sql and not sql.endswith(';'):
-            sql += ';'
-        
-        return sql
-    
+            raise LLMError(
+                model=self.llm.model_name,
+                reason=f"LLM生成SQL失败: {str(e)}"
+            )
     
     def _postprocess_sql(self, sql: str, dialect: str) -> str:
         """后处理SQL"""
-        # 格式化SQL
-        sql = sql.strip()
+        # 移除多余的空白
+        sql = re.sub(r'\s+', ' ', sql).strip()
         
-        # 确保有分号
+        # 确保以分号结尾
         if not sql.endswith(';'):
             sql += ';'
         
+        # MySQL特定处理
+        if dialect == "mysql":
+            # 确保使用反引号而不是双引号
+            sql = sql.replace('"', '`')
+        
         return sql
     
-    def _analyze_sql(self, sql: str) -> Dict[str, Any]:
+    def _analyze_sql(self, sql: str, schema_info: Dict[str, Any]) -> Dict[str, Any]:
         """分析SQL语句"""
-        sql_upper = sql.upper()
+        sql_lower = sql.lower()
         
-        # 提取表名
-        tables = []
-        from_match = re.search(r'FROM\s+(\w+)', sql, re.IGNORECASE)
-        if from_match:
-            tables.append(from_match.group(1))
+        # 提取使用的表
+        tables_used = []
+        all_tables = list(schema_info.get("tables", {}).keys())
         
-        join_matches = re.findall(r'JOIN\s+(\w+)', sql, re.IGNORECASE)
-        tables.extend(join_matches)
+        for table in all_tables:
+            # 检查表名是否在SQL中（考虑别名）
+            table_pattern = rf'\b{re.escape(table)}\b'
+            if re.search(table_pattern, sql, re.IGNORECASE):
+                tables_used.append(table)
         
-        # 识别操作
-        operations = []
-        if 'SELECT' in sql_upper:
-            operations.append('SELECT')
-        if 'JOIN' in sql_upper:
-            operations.append('JOIN')
-        if 'GROUP BY' in sql_upper:
-            operations.append('GROUP')
-        if 'ORDER BY' in sql_upper:
-            operations.append('ORDER')
+        # 识别SQL操作
+        operations_used = []
+        
+        if re.search(r'\bselect\b', sql_lower):
+            operations_used.append(SQLOperation.SELECT.value)
+        
+        if re.search(r'\bjoin\b', sql_lower):
+            operations_used.append(SQLOperation.JOIN.value)
+        
+        if re.search(r'\bgroup\s+by\b', sql_lower):
+            operations_used.append(SQLOperation.GROUP.value)
+        
+        if re.search(r'\bwith\s+\w+\s+as\s*\(', sql_lower):
+            operations_used.append(SQLOperation.CTE.value)
+        
+        if re.search(r'over\s*\(', sql_lower):
+            operations_used.append(SQLOperation.WINDOW.value)
+        
+        if re.search(r'\bunion\b', sql_lower):
+            operations_used.append(SQLOperation.UNION.value)
+        
+        # 检查子查询
+        if sql_lower.count('select') > 1:
+            operations_used.append(SQLOperation.SUBQUERY.value)
+        
+        # 检查聚合
+        has_aggregation = any(
+            agg in sql_lower 
+            for agg in ['count(', 'sum(', 'avg(', 'max(', 'min(']
+        )
+        
+        # 检查连接
+        has_join = 'join' in sql_lower
+        
+        # 估计复杂度
+        complexity = self._estimate_complexity(
+            len(operations_used),
+            len(tables_used),
+            has_aggregation,
+            has_join
+        )
         
         return {
-            "tables": tables,
-            "operations": operations,
-            "has_aggregation": any(func in sql_upper for func in ['COUNT', 'SUM', 'AVG', 'MAX', 'MIN']),
-            "has_join": 'JOIN' in sql_upper,
-            "has_subquery": '(SELECT' in sql_upper.replace(' ', '')
+            "tables": tables_used,
+            "operations": operations_used,
+            "has_aggregation": has_aggregation,
+            "has_join": has_join,
+            "complexity": complexity
         }
     
-    def _estimate_complexity(self, analysis: Dict[str, Any]) -> str:
-        """估算SQL复杂度"""
+    def _estimate_complexity(
+        self,
+        operation_count: int,
+        table_count: int,
+        has_aggregation: bool,
+        has_join: bool
+    ) -> str:
+        """估计SQL复杂度"""
         score = 0
         
-        score += len(analysis["tables"])
-        score += len(analysis["operations"])
+        # 基于操作数量
+        score += operation_count * 2
         
-        if analysis["has_aggregation"]:
-            score += 2
-        if analysis["has_join"]:
-            score += 2
-        if analysis["has_subquery"]:
+        # 基于表数量
+        if table_count > 3:
             score += 3
+        elif table_count > 1:
+            score += 1
         
-        if score <= 3:
-            return "simple"
-        elif score <= 6:
-            return "medium"
+        # 特殊操作
+        if has_aggregation:
+            score += 1
+        if has_join:
+            score += 2
+        
+        # 判断复杂度
+        if score <= 2:
+            return "简单"
+        elif score <= 5:
+            return "中等"
+        elif score <= 8:
+            return "复杂"
         else:
-            return "complex"
+            return "高级"
+    
+    async def _arun(
+        self,
+        question: str,
+        memory: Dict[str, Any],
+        operations: List[str] = None,
+        dialect: str = "mysql"
+    ) -> Dict[str, Any]:
+        """异步执行（当前实现为同步）"""
+        return self._run(question, memory, operations, dialect)
