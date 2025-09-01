@@ -45,9 +45,16 @@ def _run(
     """
     选择 SQL 操作
     
+    功能描述：
+        基于场景的复杂度和业务需求，根据预定义规则选择合适的SQL操作组合。
+        确保生成的SQL既满足业务需求，又具有良好的性能。
+    
     Args:
-        scenario: 查询场景
-        memory: 数据库分析记忆（主要使用 schema_info）
+        scenario: 查询场景（来自 scenario_tool 的输出）
+            - 必须包含: category, difficulty, tables, suggested_operations
+        memory: 数据库分析记忆
+            - 使用 memory["db_analysis"]["schema_info"] 验证表是否存在
+            - 使用 memory["db_analysis"]["er_analysis"] 确定JOIN路径
     
     Returns:
         Dict[str, Any]: 选择的操作组合

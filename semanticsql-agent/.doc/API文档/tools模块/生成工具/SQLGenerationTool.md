@@ -63,9 +63,17 @@ def _run(
     """
     生成 SQL 查询
     
+    功能描述：
+        将自然语言问题转换为准确的SQL查询语句。
+        利用数据库分析记忆中的所有信息，确保生成的SQL语法正确、逻辑合理、性能优良。
+    
     Args:
-        question: 自然语言问题
-        memory: 完整的数据库分析记忆（包含schema_info, er_analysis, domain_analysis等）
+        question: 自然语言问题（来自 question_generation_tool 的输出中的 "question" 字段）
+        memory: 完整的数据库分析记忆
+            - 使用 memory["db_analysis"]["schema_info"] 获取表和字段信息
+            - 使用 memory["db_analysis"]["er_analysis"] 确定表关系
+            - 使用 memory["db_analysis"]["column_meanings"] 理解字段含义
+            - 使用 memory["db_analysis"]["domain_analysis"] 应用领域知识
     
     Returns:
         Dict[str, Any]: 生成结果

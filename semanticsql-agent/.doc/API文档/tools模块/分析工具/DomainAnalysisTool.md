@@ -40,15 +40,17 @@ def __init__(self, llm: ChatOpenAI):
 ```python
 def _run(
     self,
-    schema_info: Dict[str, Any],
-    sample_data: Optional[Dict[str, List]] = None
+    memory: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
     执行领域分析
     
+    功能描述：
+        基于数据库结构信息分析业务领域，识别主要的业务实体、流程和术语。
+        通过分析表名、字段名和表关系，推断出数据库所属的业务领域。
+    
     Args:
-        schema_info: 数据库结构信息（来自 schema_extraction）
-        sample_data: 可选的样本数据
+        memory: 包含数据库分析结果的记忆，使用其中的 schema_info
     
     Returns:
         Dict[str, Any]: 领域分析结果

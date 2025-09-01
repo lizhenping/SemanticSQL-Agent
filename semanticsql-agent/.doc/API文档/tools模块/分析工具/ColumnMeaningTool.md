@@ -40,19 +40,22 @@ def __init__(self, llm: ChatOpenAI):
 ```python
 def _run(
     self,
-    schema_info: Dict[str, Any],
-    domain_info: Dict[str, Any],
-    field_classification: Dict[str, Any],
+    memory: Dict[str, Any],
     focus_columns: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """
     执行列含义分析
     
+    功能描述：
+        深入分析每个列的业务含义，包括其计算逻辑、使用场景、约束条件等。
+        为后续的问题生成和SQL生成提供准确的业务上下文。
+    
     Args:
-        schema_info: 数据库结构信息
-        domain_info: 领域分析结果
-        field_classification: 字段分类结果
-        focus_columns: 可选，只分析特定列
+        memory: 包含数据库分析结果的记忆
+            - 使用 memory["db_analysis"]["schema_info"] 获取表结构
+            - 使用 memory["db_analysis"]["domain_analysis"] 获取领域信息
+            - 使用 memory["db_analysis"]["field_classification"] 获取字段分类
+        focus_columns: 可选，只分析特定列（格式：["table.column"]）
     
     Returns:
         Dict[str, Any]: 列含义分析结果

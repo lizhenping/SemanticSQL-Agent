@@ -40,15 +40,19 @@ def __init__(self, llm: ChatOpenAI):
 ```python
 def _run(
     self,
-    schema_info: Dict[str, Any],
-    domain_info: Dict[str, Any]
+    memory: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
     执行字段分类
     
+    功能描述：
+        对数据库中的每个字段进行语义分类，识别字段的业务类型和用途。
+        基于字段名称、数据类型、约束条件等信息，结合领域知识进行智能分类。
+    
     Args:
-        schema_info: 数据库结构信息
-        domain_info: 领域分析结果
+        memory: 包含数据库分析结果的记忆
+            - 使用 memory["db_analysis"]["schema_info"] 获取表结构
+            - 使用 memory["db_analysis"]["domain_analysis"] 获取领域信息
     
     Returns:
         Dict[str, Any]: 字段分类结果

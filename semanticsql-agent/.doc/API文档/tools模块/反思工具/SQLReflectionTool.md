@@ -50,13 +50,18 @@ def _run(
     """
     执行反思分析
     
+    功能描述：
+        基于SQL执行结果评估生成质量，识别问题根源，并推荐修正方案。
+        这是质量保证的关键步骤，确保生成的数据符合要求。
+    
     Args:
-        sql: 生成的 SQL 语句
-        execution_result: SQL 执行结果
-        question: 原始自然语言问题
-        scenario: 使用的场景
-        operations: 选择的操作
-        memory_usage: 记忆使用情况
+        sql: 生成的 SQL 语句（来自 sql_generation_tool）
+        execution_result: SQL 执行结果（来自 sql_execution_tool）
+            - 必须包含: success, data, row_count, error
+        question: 原始自然语言问题（来自 question_generation_tool）
+        scenario: 使用的场景（来自 scenario_tool）
+        operations: 选择的操作（来自 operation_selection_tool）
+        memory_usage: 记忆使用情况（完整的 memory 对象）
     
     Returns:
         Dict[str, Any]: 反思结果

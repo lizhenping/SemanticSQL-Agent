@@ -45,9 +45,15 @@ def _run(
     """
     选择一个查询场景
     
+    功能描述：
+        从预定义的场景模板库中选择一个适合当前数据库的查询场景。
+        通过轮转机制确保场景的多样性，为生成多样化的训练数据奠定基础。
+    
     Args:
-        memory: 数据库分析记忆（使用 schema_info 和 domain_analysis）
-        iteration: 当前迭代次数，用于场景轮转
+        memory: 数据库分析记忆
+            - 使用 memory["db_analysis"]["schema_info"] 验证场景所需的表
+            - 使用 memory["db_analysis"]["domain_analysis"] 选择相关场景
+        iteration: 当前迭代次数，用于场景轮转（从0开始）
     
     Returns:
         Dict[str, Any]: 选中的场景
