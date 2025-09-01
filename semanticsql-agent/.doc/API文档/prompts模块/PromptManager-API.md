@@ -137,6 +137,46 @@ prompts/templates/
     └── table_meaning.j2
 ```
 
+## 模板结构
+
+```
+prompts/templates/
+├── system/                    # 系统提示词
+│   ├── sql_agent.j2          # SQL Agent 主提示词
+│   ├── react_agent.j2        # ReAct 模式提示词
+│   └── base_agent.j2         # 基础 Agent 提示词
+│
+├── tools/                     # 工具描述模板
+│   ├── analysis/             # 分析工具
+│   │   ├── schema_extraction.j2
+│   │   ├── domain_analysis.j2
+│   │   ├── field_classification.j2
+│   │   ├── column_meaning.j2
+│   │   ├── table_meaning.j2
+│   │   └── er_analysis.j2
+│   │
+│   ├── generation/           # 生成工具
+│   │   ├── scenario_tool.j2
+│   │   ├── operation_selection.j2
+│   │   ├── question_generation.j2
+│   │   └── sql_generation.j2
+│   │
+│   ├── validation/           # 验证工具
+│   │   ├── sql_validation.j2
+│   │   └── sql_execution.j2
+│   │
+│   ├── reflection/           # 反思工具
+│   │   └── sql_reflection.j2
+│   │
+│   └── thinking/             # 思考工具
+│       └── sequential_thinking.j2
+│
+└── analysis/                  # 分析提示词
+    ├── database_analysis.j2   # 数据库分析策略
+    ├── error_analysis.j2      # 错误分析模板
+    └── quality_criteria.j2    # 质量评估标准
+```
+
 ## 模板语法
 
 ### 系统提示词模板示例
