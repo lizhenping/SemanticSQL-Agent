@@ -81,11 +81,20 @@ def _run(
                     "missing": []
                 }
             },
-            "root_cause": null,  # Agent会根据此信息决定是否调用sequential_thinking
+            "problem_source": null,  # 问题来源：question_generation/sql_generation/memory_usage/database_analysis
+            "root_cause_analysis": {
+                "component": null,  # 出问题的组件/工具
+                "reason": null,     # 问题原因
+                "affected_tool": null  # 需要重新执行的工具
+            },
+            "recommended_action": {
+                "tool_to_call": null,  # 建议调用的工具：如 sql_generation, er_analysis 等
+                "reason": null,        # 为什么需要调用这个工具
+                "parameters_hint": {}  # 调用时的参数建议
+            },
             "suggestions": [
                 "Consider adding index on orders.created_at"
-            ],
-            "problem_source": null  # 如果有问题：question/sql/memory_usage/analysis
+            ]
         }
         ```
     """
@@ -135,6 +144,54 @@ def analyze_root_cause(self, issues: List[Dict]) -> str:
     Returns:
         问题源头：question_generation/sql_generation/memory_usage/database_analysis
     """
+```
+
+## 反思结果示例
+
+### 示例1：SQL生成错误
+```python
+# 当SQL使用了错误的表名
+{
+    "needs_revision": true,
+    "quality_score": 0.3,
+    "issues": ["Table 'orders' doesn't exist"],
+    "problem_source": "sql_generation",
+    "root_cause_analysis": {
+        "component": "sql_generation",
+        "reason": "使用了orders表，但schema中只有order_info表",
+        "affected_tool": "sql_generation"
+    },
+    "recommended_action": {
+        "tool_to_call": "sql_generation",
+        "reason": "需要使用正确的表名重新生成SQL",
+        "parameters_hint": {
+            "focus": "使用memory中的schema_info获取正确表名"
+        }
+    }
+}
+```
+
+### 示例2：数据库分析不足
+```python
+# 当缺少必要的表关系导致SQL错误
+{
+    "needs_revision": true,
+    "quality_score": 0.5,
+    "issues": ["Missing JOIN between orders and customers"],
+    "problem_source": "database_analysis", 
+    "root_cause_analysis": {
+        "component": "er_analysis",
+        "reason": "ER分析未能识别orders和customers的关系",
+        "affected_tool": "er_analysis"
+    },
+    "recommended_action": {
+        "tool_to_call": "er_analysis",
+        "reason": "需要重新分析表关系",
+        "parameters_hint": {
+            "focus_tables": ["orders", "customers"]
+        }
+    }
+}
 ```
 
 ## 使用示例
