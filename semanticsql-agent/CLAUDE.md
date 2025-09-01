@@ -3,190 +3,216 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
-SemanticSQL Agent is a natural language to SQL query system built with Python, refactored to follow trae_agent design patterns. It uses an LLM-based agent architecture with ReAct pattern for converting natural language queries into SQL and executing them against databases.
-我的conda 环境是：source activate alphasql
-模型数据库配置是
---model "Qwen3-14B"
---api-key "not-needed"
---base-url "http://192.168.200.216:9991/v1"
---host "192.168.200.216" --port "13306" --user "testuser"
---password "testpass" --database "testdb"
-generate --count "20" --output "test_ddd.json"
-## Core Architecture (trae_agent Style)
+SemanticSQL Agent is a LangChain-based intelligent SQL training data generation system. It uses autonomous agent architecture with ReAct pattern for analyzing databases and generating high-quality NL2SQL training pairs.
+
+## Environment Setup
+```bash
+# Activate conda environment
+source activate alphasql
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Start LLM service (required for agent operation)
+CUDA_VISIBLE_DEVICES=2 vllm serve /root/autodl-tmp/model/Qwen3-14B \
+  --host 0.0.0.0 --port 9991 \
+  --trust-remote-code \
+  --served-model-name "Qwen3-14B"
+```
+
+## Core Architecture (LangChain-Based)
 
 ### Agent System (`agent/`)
-- **BaseAgent (`base_agent.py`)**: Abstract ReAct pattern implementation with tool calling
-- **SQLAgent (`sql_agent.py`)**: Synchronous SQL query agent with `SQLQueryResult` response format
-- **SyncSQLAgent (`sync_sql_agent.py`)**: Alternative synchronous implementation
-- **AgentExecution/AgentStep**: State management classes
+- **BaseAgent (`base_agent.py`)**: Abstract LangChain agent base class with ReAct pattern
+- **SQLAgent (`sql_agent.py`)**: Main SQL generation agent for interactive queries
+- **DataGenerationAgent** (legacy): Training data generation agent
+- Uses LangChain's `AgentExecutor` with `ChatOpenAI` LLM integration
 
-### Tools (`tools/`)
-- **TraeBaseTool (`trae_base_tool.py`)**: Standardized tool interface with `ToolParameter` definitions
-- **Schema Tools**: `SyncSchemaExtractionTool` for database structure analysis
-- **SQL Tools**: `SyncSQLGenerationTool`, `SyncSQLValidationTool`, `SyncSQLExecutionTool`
-- **Analysis Tools**: Domain analysis, field classification, ER analysis, sequential thinking
-- All tools follow sync/async patterns with consistent naming
+### Tools System (`tools/`)
+All tools inherit from LangChain's `BaseTool` with standardized interfaces:
+
+#### Analysis Tools (`analysis_tools/`)
+- **SchemaExtractionTool**: Extract database structure
+- **DomainAnalysisTool**: Analyze business domain from schema
+- **FieldClassificationTool**: Classify field semantic types
+- **ERAnalysisTool**: Entity relationship analysis
+
+#### Generation Tools (`generation_tools/`)
+- **ScenarioTool**: Generate query scenarios
+- **QuestionGenerationTool**: Generate natural language questions
+- **SQLGenerationTool**: Generate SQL queries
+
+#### Validation Tools (`validation_tools/`)
+- **SQLValidationTool**: Syntax validation
+- **SQLExecutionTool**: Execute SQL against database
+
+#### Reflection Tools (`reflection_tools/`)
+- **SQLReflectionTool**: Quality analysis and improvement suggestions
+
+#### Thinking Tools (`thinking_tools/`)
+- **SequentialThinkingTool**: Complex analysis and reasoning
 
 ### Configuration System (`config/`)
-- **TraeConfig (`trae_config.py`)**: Main configuration dataclass with nested configs
-- **DatabaseConfig**: Database connection and pool settings
-- **LLMConfig**: LLM client parameters (model, base_url, temperature, etc.)
-- **AgentConfig**: Agent-specific settings
-- Environment variable loading with fallback to defaults
+- **Settings (`settings.py`)**: Pydantic-based global configuration
+- **DatabaseConfig (`database.py`)**: Database connection settings
+- Environment variable support with defaults
 
-### Database Management (`database/`)
-- **ConnectionManager**: Async database connection handling
-- Connection pooling and lifecycle management
-- Database support (MySQL)
+### Memory System (`utils/memory.py`)
+- **DatabaseAnalysisMemory**: LangChain memory for storing analysis results
+- Persistent storage of schema, domain, and field analysis across agent execution
 
 ## Development Commands
 
-### Essential Commands
+### Primary CLI Interface
 ```bash
-# Install dependencies
-pip install click pyyaml sqlalchemy langchain-community aiomysql aiosqlite asyncpg
+# Entry point is cli.py (NOT main.py)
+python cli.py --help
 
-# Initialize configuration
-python main.py init --database-type mysql --host 192.168.200.216 --port 13306 --database testdb --model Qwen3-14B
+# Generate training data
+python cli.py generate -n 100 -o training_data.jsonl
 
-# Run single query
-python main.py run "查询所有用户的数量" --config trae_config.yaml --verbose
+# Generate with custom config
+python cli.py generate -n 50 -c config.yaml -o output.jsonl
 
-# Interactive mode
-python main.py interactive --config trae_config.yaml
+# Database analysis only  
+python cli.py analyze -d testdb -o analysis.json
 
-# Test database connection
-python main.py test --config trae_config.yaml
+# Configuration template (copy and modify)
+python cli.py config-template > config.yaml
+cp config.example.yaml config.yaml
+```
 
-# View schema
-python main.py schema --config trae_config.yaml
+### Configuration Setup
+```bash
+# Use environment variables or config file
+# Config file takes precedence over environment variables
+# Environment variables:
+export SEMANTICSQL_LLM_MODEL="Qwen3-14B"
+export SEMANTICSQL_LLM_BASE_URL="http://127.0.0.1:9991/v1"
+export SEMANTICSQL_DB_HOST="192.168.200.216"
+export SEMANTICSQL_DB_DATABASE="testdb"
+
+# Or use config.yaml (recommended for development)
+cp config.example.yaml config.yaml
+# Edit config.yaml as needed
 ```
 
 ### Testing
 ```bash
-# Run specific tests
-python -m pytest tests/test_config.py -v
-
 # Run all tests
 python -m pytest tests/ -v
+
+# Run specific test files
+python -m pytest tests/test_agent.py -v
+python -m pytest tests/test_tools.py -v
+python -m pytest tests/test_data_generation_agent.py -v
+
+# Run single test method
+python -m pytest tests/test_agent.py::TestBaseAgent::test_initialization -v
+
+# Run with coverage
+python -m pytest tests/ --cov=. --cov-report=html
 ```
 
-### Quick Development Flow
+### Development Tools
 ```bash
-# 1. Generate config
-python main.py init --database-type mysql --host localhost --port 3306 --database mydb --model Qwen3-14B
+# Code formatting
+black .
 
-# 2. Test connection
-python main.py test --config trae_config.yaml
+# Linting
+flake8 .
 
-# 3. Verify schema
-python main.py schema --config trae_config.yaml
-
-# 4. Test query
-python main.py run "count users" --config trae_config.yaml --verbose
+# Type checking (if configured)
+mypy .
 ```
 
-## Code Architecture Patterns
+## Current System Configuration
 
-### Data Flow (Three-Step Process)
-1. **Database Connection** (`database/connection_manager.py`): 
-   - `DatabaseManager` handles connection pooling and validation
-   - Supports MySQL, PostgreSQL, SQLite with async/await patterns
-
-2. **Schema Analysis** (`tools/sql_tools.py`):
-   - `SyncSchemaExtractionTool` extracts table structures and relationships
-   - Caches schema information for performance
-
-3. **Query Generation** (`agent/sql_agent.py`):
-   - `SQLAgent` coordinates tool execution using ReAct pattern
-   - Returns `SQLQueryResult` with structured response data
-
-### Tool System Design
-- All tools inherit from `TraeBaseTool` with standardized interfaces
-- Tools use `ToolParameter` for type-safe parameter definitions
-- Consistent sync/async patterns across tool implementations
-- Factory pattern for tool creation and registration
-
-### Configuration Hierarchy
+### LLM Configuration
+```yaml
+settings:
+  llm_model: "Qwen3-14B"
+  llm_base_url: "http://127.0.0.1:9991/v1"
+  llm_api_key: "not-needed"
+  llm_temperature: 0.7
+  llm_max_tokens: 20000
 ```
-TraeConfig (root)
-├── DatabaseConfig (connection settings)
-├── LLMConfig (model parameters)  
-├── AgentConfig (agent behavior)
-└── Environment variable overrides
-```
-
-## Key Implementation Details
-
-### Entry Point
-- `main.py` → `cli/cli.py` → Command handlers
-- All CLI commands route through unified configuration loading
-
-### Agent Execution Flow
-1. Load configuration from YAML + environment variables
-2. Initialize `DatabaseManager` and test connection
-3. Create tool instances with database config
-4. Execute ReAct loop: Observe → Think → Act → Repeat
-5. Return structured `SQLQueryResult`
-
-## Configuration Reference
 
 ### Database Configuration
-- **MySQL**: `mysql+aiomysql://user:pass@host:port/db`
-
-### Environment Variables
-```bash
-# LLM Settings
-LLM_MODEL=Qwen3-14B
-LLM_BASE_URL=http://192.168.200.216:9991/v1
-LLM_API_KEY=not-needed
-
-# Database Settings  
-DB_TYPE=mysql
-DB_HOST=192.168.200.216
-DB_PORT=13306
-DB_NAME=testdb
-DB_USER=your_user
-DB_PASSWORD=your_password
-```
-
-### Default Configuration Template (`trae_config.yaml`)
 ```yaml
-app:
-  name: "SemanticSQL Agent"
-  version: "1.0.0"
-  environment: "development"
-
 database:
-  type: "mysql"
   host: "192.168.200.216"
   port: 13306
   database: "testdb"
-  username: "your_user"
-  password: "your_password"
-  connection_timeout: 30
+  username: "testuser"
+  password: "testpass"
   pool_size: 5
-
-llm:
-  model: "Qwen3-14B"
-  base_url: "http://192.168.200.216:9991/v1"
-  api_key: "not-needed"
-  temperature: 0.1
-  max_tokens: 20000
-  timeout: 30
 ```
 
-## Key Files for Development
+## Agent Execution Flow
 
-### Core Implementation Files
-- `agent/sql_agent.py` - Main SQL agent with `SQLQueryResult` response format
-- `tools/trae_base_tool.py` - Base tool class with `ToolParameter` system
-- `config/trae_config.py` - Configuration management with dataclasses
-- `database/connection_manager.py` - Database connection and pooling
+### LangChain Integration
+1. **Initialization**: Create `ChatOpenAI` client + `AgentExecutor`
+2. **Tool Registration**: All tools auto-registered as LangChain tools
+3. **Memory Setup**: `DatabaseAnalysisMemory` for persistent context
+4. **Execution**: LangChain handles ReAct loop with tool calling
+5. **Trajectory Recording**: Custom callbacks save execution history
 
-### Important Implementation Notes
-- All tools follow `Sync*Tool` naming convention for synchronous operations
-- Configuration loading supports environment variable overrides
-- Database connections use async patterns but tools provide sync wrappers
-- CLI entry point is `main.py` which delegates to `cli/cli.py`
-- Error handling preserves context throughout the execution chain
+### Key Execution Patterns
+- **ReAct Loop**: Thought → Action → Action Input → Observation → (repeat)
+- **Memory Persistence**: Analysis results stored in LangChain memory
+- **Tool Chaining**: Sequential tool execution with shared context
+- **Error Handling**: Graceful degradation with trajectory preservation
+
+## Development Notes
+
+### Current Architecture Status
+- **Active Framework**: LangChain-based agent system
+- **Legacy Components**: Some references to trae_agent patterns remain
+- **Entry Point**: `cli.py` (main CLI interface)
+- **Configuration**: Pydantic Settings + YAML overrides
+
+### Key Implementation Files
+- `agent/base_agent.py` - LangChain agent base class with ReAct pattern
+- `agent/data_generation_agent.py` - Main training data generation agent
+- `agent/sql_agent.py` - Interactive SQL query agent
+- `config/settings.py` - Pydantic configuration models with env variable support
+- `utils/memory.py` - LangChain memory for persistent database analysis
+- `utils/trajectory.py` - Execution tracking for debugging
+- `tools/` - Complete tool ecosystem (14+ tools organized by category)
+- `cli.py` - Primary entry point (NOT main.py)
+
+### Tool Parameter Patterns
+- All tools use `memory: Dict[str, Any]` as primary input
+- Memory contains: `db_analysis`, `schema_info`, `domain_info`, etc.
+- Tools auto-extract needed information from memory structure
+- No direct schema/table passing - use memory mechanism
+
+### Common Issues
+- **Context Length**: LLM has 32K token limit, long conversations may fail
+- **Tool Parameters**: Ensure tools receive expected parameter names
+- **Memory State**: Analysis tools must store results in memory for later use
+- **Serialization**: Complex objects (like slice) need special handling
+
+### Debugging
+- **Trajectory Files**: Saved in `trajectories/` directory with execution details
+- **Logging**: Structured logging with tool execution details (use `-v` flag)
+- **Memory Inspection**: Use `agent.memory.load_memory_variables({})` 
+- **Tool Debugging**: Check tool parameter validation in base_tool.py
+- **LLM Service Check**: `curl -X POST http://localhost:9991/v1/chat/completions -H "Content-Type: application/json" -d '{"model": "Qwen3-14B", "messages": [{"role": "user", "content": "Hello"}]}'`
+- **Database Check**: `mysql -h 192.168.200.216 -P 13306 -u testuser -p testdb`
+
+### Quick Development Workflow
+```bash
+# 1. Ensure LLM service is running
+curl -s http://localhost:9991/v1/models
+
+# 2. Test basic functionality
+python cli.py generate -n 2 -o test_output.jsonl -v
+
+# 3. Run tests after changes
+python -m pytest tests/test_data_generation_agent.py -v
+
+# 4. Format and lint code
+black . && flake8 .
+```

@@ -1,134 +1,197 @@
 """
 数据库结构提取工具 - 提取完整的数据库模式信息
+基于 LangChain BaseTool
 """
 
-from typing import Dict, Any, List, Optional
-from sqlalchemy import create_engine, inspect, MetaData
-from sqlalchemy.engine import Engine
+from typing import Dict, Any, Type, List, Optional
+from langchain.tools import BaseTool
+from pydantic import BaseModel, Field
 
-from tools.base_tool import BaseTool, ToolParameter
 from models.schemas import DatabaseSchema, TableInfo, ColumnInfo, ForeignKey
-from models.exceptions import SchemaExtractionError
+from models.exceptions import (
+    ToolExecutionError, 
+    DatabaseConnectionError,
+    SchemaExtractionError
+)
+from utils.database import DatabaseManager
+
+
+class SchemaExtractionInput(BaseModel):
+    """Schema提取输入参数"""
+    database_name: str = Field(description="数据库名称")
+    include_views: bool = Field(default=False, description="是否包含视图")
+    include_indexes: bool = Field(default=True, description="是否包含索引信息")
+    sample_data: bool = Field(default=False, description="是否包含样本数据")
+    tables: List[str] = Field(default_factory=list, description="指定要提取的表（空则提取所有）")
 
 
 class SchemaExtractionTool(BaseTool):
     """数据库结构提取工具"""
     
-    def __init__(self, settings):
-        super().__init__(settings)
-        # This tool will receive database connection from agent
-        self.db_manager = None
+    name: str = "schema_extraction"
+    description: str = "提取数据库的完整结构信息，包括表、列、索引、外键等"
+    args_schema: Type[BaseModel] = SchemaExtractionInput
     
-    def set_database_manager(self, db_manager):
-        """Set database manager from agent"""
-        self.db_manager = db_manager
+    def __init__(self, db_manager: DatabaseManager):
+        super().__init__()
+        # 直接设置为实例属性，避开Pydantic验证
+        object.__setattr__(self, 'db_manager', db_manager)
     
-    @property
-    def name(self) -> str:
-        return "extract_schema"
-    
-    @property
-    def description(self) -> str:
-        return "提取数据库的完整结构信息，包括表、列、索引、外键等"
-    
-    @property
-    def category(self) -> str:
-        return "analysis"
-    
-    @property
-    def parameters(self) -> List[ToolParameter]:
-        return [
-            ToolParameter(
-                name="include_views",
-                type="boolean",
-                description="是否包含视图",
-                required=False,
-                default=False
-            ),
-            ToolParameter(
-                name="include_indexes",
-                type="boolean",
-                description="是否包含索引信息",
-                required=False,
-                default=True
-            ),
-            ToolParameter(
-                name="sample_data",
-                type="boolean",
-                description="是否包含样本数据",
-                required=False,
-                default=False
-            ),
-            ToolParameter(
-                name="tables",
-                type="array",
-                description="指定要提取的表（空则提取所有）",
-                required=False,
-                default=[]
-            )
-        ]
-    
-    def _execute(self, include_views: bool = False, include_indexes: bool = True,
-                 sample_data: bool = False, tables: List[str] = None, **kwargs) -> DatabaseSchema:
-        """
-        Execute database schema extraction
-        
-        Returns:
-            DatabaseSchema object
-        """
-        if not self.db_manager:
-            raise SchemaExtractionError("Database manager not initialized")
-        
+    def _run(
+        self, 
+        database_name: str,
+        include_views: bool = False, 
+        include_indexes: bool = True,
+        sample_data: bool = False, 
+        tables: List[str] = None
+    ) -> Dict[str, Any]:
+        """执行数据库结构提取"""
         try:
-            # Get basic table information
-            all_tables = self.db_manager.get_tables()
+            if not self.db_manager:
+                raise ToolExecutionError(
+                    tool_name=self.name,
+                    reason="数据库管理器未初始化"
+                )
             
-            # Filter tables if specified
-            if tables:
-                all_tables = [t for t in all_tables if t in tables]
+            # 获取数据库引擎
+            engine = self.db_manager.engine
+            if not engine:
+                raise DatabaseConnectionError(
+                    host=self.db_manager.db_config.host,
+                    database=database_name,
+                    original_error="数据库连接未建立"
+                )
             
-            # Create database schema object
-            db_schema = DatabaseSchema(
-                database_name=self.db_manager.config.database
-            )
+            # 提取表信息
+            table_infos = {}
             
-            # Extract information for each table
-            for table_name in all_tables:
-                table_info = self._extract_table_info(table_name, include_indexes, sample_data)
-                db_schema.tables[table_name] = table_info
+            # 获取表列表
+            table_names = tables if tables else self.db_manager.get_tables()
             
-            return db_schema
+            # 提取每个表的详细信息
+            for table_name in table_names:
+                table_info = self.db_manager.get_table_info(table_name)
+                
+                # 获取样本数据
+                if sample_data:
+                    samples = self._get_sample_data(table_name, limit=5)
+                    table_info["sample_data"] = samples
+                
+                table_infos[table_name] = table_info
             
+            # 构建返回结果
+            result = {
+                "database_name": database_name,
+                "tables": table_infos,
+                "table_count": len(table_infos),
+                "extraction_params": {
+                    "include_views": include_views,
+                    "include_indexes": include_indexes,
+                    "sample_data": sample_data
+                }
+            }
+            
+            return result
+            
+        except DatabaseConnectionError:
+            raise
         except Exception as e:
-            raise SchemaExtractionError(f"Failed to extract schema: {e}")
-    
-    def _extract_table_info(self, table_name: str,
-                           include_indexes: bool, sample_data: bool) -> TableInfo:
-        """Extract single table information"""
-        # Use database manager to get table info
-        table_data = self.db_manager.get_table_info(table_name)
-        
-        table_info = TableInfo(name=table_name)
-        
-        # Extract column information
-        for col in table_data.get('columns', []):
-            column_info = ColumnInfo(
-                name=col['name'],
-                data_type=col['type'],
-                nullable=col.get('nullable', True),
-                default=col.get('default'),
-                is_primary=col.get('key') == 'PRI' if 'key' in col else False
+            raise SchemaExtractionError(
+                database=database_name,
+                error=str(e)
             )
-            table_info.columns.append(column_info)
-        
-        # Get row count if requested
-        if sample_data:
-            try:
-                result = self.db_manager._execute_query(f"SELECT COUNT(*) as count FROM {table_name}")
-                if result.get("success") and result.get("data"):
-                    table_info.row_count = result["data"][0]["count"]
-            except:
-                table_info.row_count = None
-        
-        return table_info
     
+    def _extract_table_info(
+        self, 
+        inspector, 
+        table_name: str, 
+        include_indexes: bool
+    ) -> Dict[str, Any]:
+        """提取单个表的信息"""
+        # 获取列信息
+        columns = []
+        for col in inspector.get_columns(table_name):
+            column_info = {
+                "name": col["name"],
+                "type": str(col["type"]),
+                "nullable": col.get("nullable", True),
+                "default": col.get("default"),
+                "autoincrement": col.get("autoincrement", False),
+                "comment": col.get("comment", "")
+            }
+            columns.append(column_info)
+        
+        # 获取主键
+        pk_constraint = inspector.get_pk_constraint(table_name)
+        primary_keys = pk_constraint.get("constrained_columns", [])
+        
+        # 获取外键
+        foreign_keys = []
+        for fk in inspector.get_foreign_keys(table_name):
+            foreign_key_info = {
+                "name": fk.get("name"),
+                "constrained_columns": fk.get("constrained_columns", []),
+                "referred_table": fk.get("referred_table"),
+                "referred_columns": fk.get("referred_columns", [])
+            }
+            foreign_keys.append(foreign_key_info)
+        
+        # 获取索引
+        indexes = []
+        if include_indexes:
+            for idx in inspector.get_indexes(table_name):
+                index_info = {
+                    "name": idx.get("name"),
+                    "columns": idx.get("column_names", []),
+                    "unique": idx.get("unique", False)
+                }
+                indexes.append(index_info)
+        
+        # 获取表注释
+        table_comment = ""
+        try:
+            # 尝试获取表注释（MySQL特定）
+            result = self.db_manager.execute_query(
+                f"SELECT table_comment FROM information_schema.tables "
+                f"WHERE table_schema = DATABASE() AND table_name = '{table_name}'"
+            )
+            if result and len(result) > 0:
+                table_comment = result[0].get("table_comment", "")
+        except:
+            pass
+        
+        return {
+            "table_name": table_name,
+            "columns": columns,
+            "primary_keys": primary_keys,
+            "foreign_keys": foreign_keys,
+            "indexes": indexes,
+            "comment": table_comment,
+            "column_count": len(columns)
+        }
+    
+    def _get_sample_data(self, table_name: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """获取表的样本数据"""
+        try:
+            query = f"SELECT * FROM {table_name} LIMIT {limit}"
+            result = self.db_manager.execute_query(query)
+            return result if result else []
+        except:
+            return []
+    
+    async def _arun(
+        self,
+        database_name: str,
+        include_views: bool = False,
+        include_indexes: bool = True,
+        sample_data: bool = False,
+        tables: List[str] = None
+    ) -> Dict[str, Any]:
+        """异步执行（当前实现为同步）"""
+        return self._run(
+            database_name=database_name,
+            include_views=include_views,
+            include_indexes=include_indexes,
+            sample_data=sample_data,
+            tables=tables
+        )

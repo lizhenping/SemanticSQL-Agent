@@ -184,17 +184,23 @@ class TrajectoryRecorder:
             return False
     
     def _serialize_tool_output(self, output: Any) -> Any:
-        """Serialize tool output to JSON-compatible format"""
+        """序列化工具输出为JSON兼容格式"""
         if output is None:
             return None
         
         try:
-            # If it's a Pydantic model, use model_dump
+            # 如果是Pydantic模型，使用model_dump
             if hasattr(output, 'model_dump'):
                 return output.model_dump()
-            # If it's already JSON serializable, return as-is
+            # 如果是字典，递归处理
+            elif isinstance(output, dict):
+                return {k: self._serialize_tool_output(v) for k, v in output.items()}
+            # 如果是列表，递归处理
+            elif isinstance(output, list):
+                return [self._serialize_tool_output(item) for item in output]
+            # 测试是否可以JSON序列化
             json.dumps(output)
             return output
         except (TypeError, ValueError):
-            # If it can't be serialized, convert to string representation
+            # 无法序列化时，转换为字符串表示
             return str(output)

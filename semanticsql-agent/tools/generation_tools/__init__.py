@@ -1,5 +1,5 @@
 """
-生成工具模块 - 用于生成场景、问题和SQL
+生成工具 - 场景、问题和SQL生成
 """
 
 from .scenario_tool import ScenarioTool
@@ -8,8 +8,8 @@ from .question_generation_tool import QuestionGenerationTool
 from .sql_generation_tool import SQLGenerationTool
 
 __all__ = [
-    'ScenarioTool',
-    'OperationSelectionTool',
-    'QuestionGenerationTool',
-    'SQLGenerationTool'
+    "ScenarioTool",
+    "OperationSelectionTool",
+    "QuestionGenerationTool",
+    "SQLGenerationTool"
 ]

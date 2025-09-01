@@ -183,7 +183,7 @@ class QueryScenario(BaseModel):
     business_purpose: str = ""  # Business purpose
     complexity: DifficultyLevel = DifficultyLevel.MEDIUM
     applicable_tables: List[str] = Field(default_factory=list)
-    required_operations: List[SQLOperation] = Field(default_factory=list)
+    suggested_operations: List[SQLOperation] = Field(default_factory=list)  # 改为 suggested_operations
     description: str = ""
 
 
@@ -316,3 +316,47 @@ class ToolOutput(BaseModel):
     data: Any
     error: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+# 新增的模型
+class TaskConfig(BaseModel):
+    """任务配置"""
+    task_type: str = Field(description="任务类型")
+    count: int = Field(description="生成数量")
+    output_format: str = Field(default="jsonl", description="输出格式")
+    config: Dict[str, Any] = Field(default_factory=dict, description="其他配置")
+
+
+class TrainingDataResult(BaseModel):
+    """训练数据生成结果"""
+    total: int = Field(description="总数")
+    successful: int = Field(description="成功数")
+    failed: int = Field(description="失败数")
+    output_file: str = Field(description="输出文件")
+    examples: List[Dict[str, Any]] = Field(default_factory=list, description="示例数据")
+
+
+class ColumnMeaning(BaseModel):
+    """列业务含义"""
+    column_name: str = Field(description="列名")
+    table_name: str = Field(description="表名")
+    business_meaning: str = Field(description="业务含义")
+    data_type: str = Field(description="数据类型")
+    examples: List[str] = Field(default_factory=list, description="示例值")
+
+
+class TableMeaning(BaseModel):
+    """表业务含义"""
+    table_name: str = Field(description="表名")
+    business_purpose: str = Field(description="业务用途")
+    entity_type: str = Field(description="实体类型")
+    relationships: List[str] = Field(default_factory=list, description="关联关系")
+
+
+class ERRelation(BaseModel):
+    """实体关系"""
+    from_table: str = Field(description="源表")
+    to_table: str = Field(description="目标表")
+    relation_type: str = Field(description="关系类型")
+    foreign_key: str = Field(description="外键")
+    description: str = Field(description="关系描述")

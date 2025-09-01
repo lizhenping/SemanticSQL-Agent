@@ -1,118 +1,157 @@
 # SemanticSQL Agent API 文档
 
-欢迎使用 SemanticSQL Agent API 文档。本文档提供了系统所有模块的详细 API 说明。
+基于 LangChain 框架的智能 SQL 生成系统 API 文档。
 
 ## 📚 文档结构
 
-### 综合文档
-- [**SemanticSQL Agent API 手册**](./SemanticSQL-Agent-API手册.md) - 完整的 API 参考手册
+### 核心文档
+- [**API 总览**](./API总览.md) - 系统架构和快速开始指南
+- [**LangChain 集成指南**](./LangChain集成指南.md) - 如何使用 LangChain 组件
+- [**CLI 使用指南**](./CLI-API.md) - 命令行接口文档
+- [**数据格式规范**](./数据格式.md) - 训练数据输出格式
 
 ### 模块文档
 
-#### 1. Agent 模块
-智能体核心实现，包括基础架构和具体实现。
+#### 1. Agent 模块（基于 LangChain）
+智能体核心实现，使用 LangChain AgentExecutor。
 
-- [BaseAgent 类 API 文档](./agent模块/BaseAgent类API文档.md) - 智能体基类
-- [SmartSQLAgent 类 API 文档](./agent模块/SmartSQLAgent类API文档.md) - SQL 生成智能体
-- [DataGenerationAgent 类 API 文档](./agent模块/DataGenerationAgent类API文档.md) - 数据生成智能体
-- [回调系统 API 文档](./agent模块/回调系统API文档.md) - 执行监控和回调
+- [BaseAgent API](./agent模块/BaseAgent-API.md) - 基于 LangChain 的智能体基类
+- [SQLAgent API](./agent模块/SQLAgent-API.md) - SQL 查询生成智能体
 
-#### 2. Models 模块
-数据模型和异常定义。
+#### 2. Tools 模块（基于 LangChain Tools）
+所有工具继承自 `langchain.tools.BaseTool`。
 
-- [数据模型 API 文档](./models模块/数据模型API文档.md) - 所有数据结构定义
-- [异常类 API 文档](./models模块/异常类API文档.md) - 自定义异常体系
+##### 分析工具（6个）
+- [SchemaExtractionTool](./tools模块/分析工具/SchemaExtractionTool.md) - 数据库结构提取
+- [DomainAnalysisTool](./tools模块/分析工具/DomainAnalysisTool.md) - 业务领域分析
+- [FieldClassificationTool](./tools模块/分析工具/FieldClassificationTool.md) - 字段语义分类
+- [ColumnMeaningTool](./tools模块/分析工具/ColumnMeaningTool.md) - 列业务含义分析
+- [TableMeaningTool](./tools模块/分析工具/TableMeaningTool.md) - 表业务含义分析
+- [ERAnalysisTool](./tools模块/分析工具/ERAnalysisTool.md) - 实体关系分析
 
-#### 3. Tools 模块
-各种专门的工具实现。
+##### 生成工具（4个）
+- [ScenarioTool](./tools模块/生成工具/ScenarioTool.md) - 场景生成（基于预定义模板）
+- [OperationSelectionTool](./tools模块/生成工具/OperationSelectionTool.md) - SQL操作选择
+- [QuestionGenerationTool](./tools模块/生成工具/QuestionGenerationTool.md) - 自然语言问题生成
+- [SQLGenerationTool](./tools模块/生成工具/SQLGenerationTool.md) - SQL 查询生成
 
-- [BaseTool 基类 API 文档](./tools模块/BaseTool基类API文档.md) - 工具基类
+##### 验证工具（2个）
+- [SQLValidationTool](./tools模块/验证工具/SQLValidationTool.md) - SQL 语法验证
+- [SQLExecutionTool](./tools模块/验证工具/SQLExecutionTool.md) - SQL 执行测试
 
-##### 分析工具
-- [SchemaExtractionTool 文档](./tools模块/分析工具/SchemaExtractionTool文档.md) - 数据库结构提取
-- [DomainAnalysisTool 文档](./tools模块/分析工具/DomainAnalysisTool文档.md) - 业务领域分析
+##### 反思工具（1个）
+- [SQLReflectionTool](./tools模块/反思工具/SQLReflectionTool.md) - SQL 执行结果反思
 
-##### 生成工具
-- [SQLGenerationTool 文档](./tools模块/生成工具/SQLGenerationTool文档.md) - SQL 生成
+##### 思考工具（1个）
+- [SequentialThinkingTool](./tools模块/思考工具/SequentialThinkingTool.md) - 深度思考和问题分析
 
-##### 验证工具
-- [SQLValidationTool 文档](./tools模块/验证工具/SQLValidationTool文档.md) - SQL 验证
-- [SQLExecutionTool 文档](./tools模块/验证工具/SQLExecutionTool文档.md) - SQL 执行
+#### 3. Prompts 模块
+提示词管理系统（基于 Jinja2）。
 
-##### 反思工具
-- [SQLReflectionTool 文档](./tools模块/反思工具/SQLReflectionTool文档.md) - SQL 反思优化
+- [PromptManager API](./prompts模块/PromptManager-API.md) - 提示词管理器
 
 #### 4. Utils 模块
 系统工具类。
 
-- [DatabaseManager 文档](./utils模块/DatabaseManager文档.md) - 数据库管理
-- [LLMClient 文档](./utils模块/LLMClient文档.md) - LLM 客户端
-- [TrajectoryRecorder 文档](./utils模块/TrajectoryRecorder文档.md) - 轨迹记录
+- [DatabaseManager](./utils模块/DatabaseManager-API.md) - MySQL 数据库管理
+- [LLMClient](./utils模块/LLMClient-API.md) - 基于 LangChain 的 LLM 客户端
+- [MemoryManager](./utils模块/MemoryManager-API.md) - 记忆管理工具
+- [TrajectoryRecorder](./utils模块/TrajectoryRecorder-API.md) - 执行轨迹记录
+- [CallbackHandler](./utils模块/CallbackHandler-API.md) - LangChain 回调处理器
 
 #### 5. Config 模块
-配置管理。
+配置管理（基于 Pydantic）。
 
-- [Settings 配置文档](./config模块/Settings配置文档.md) - 全局配置
-- [DatabaseConfig 配置文档](./config模块/DatabaseConfig配置文档.md) - 数据库配置
+- [Settings](./config模块/Settings-API.md) - 全局配置
+- [DatabaseConfig](./config模块/DatabaseConfig-API.md) - MySQL 数据库配置
+
+#### 6. Models 模块
+数据模型定义（Pydantic）。
+
+- [数据模型](./models模块/数据模型.md) - 所有数据结构定义
 
 ## 🚀 快速导航
 
-### 按功能查找
+### 核心流程
 
-**SQL 生成流程**
-1. [数据库结构提取](./tools模块/分析工具/SchemaExtractionTool文档.md)
-2. [领域分析](./tools模块/分析工具/DomainAnalysisTool文档.md)
-3. [SQL 生成](./tools模块/生成工具/SQLGenerationTool文档.md)
-4. [SQL 验证](./tools模块/验证工具/SQLValidationTool文档.md)
-5. [SQL 执行](./tools模块/验证工具/SQLExecutionTool文档.md)
-6. [结果反思](./tools模块/反思工具/SQLReflectionTool文档.md)
+**1. 初始化系统**
+```python
+from semanticsql_agent.agent import SQLAgent
+from semanticsql_agent.config import Settings, DatabaseConfig
 
-**系统配置**
-1. [创建配置](./config模块/Settings配置文档.md)
-2. [数据库连接](./config模块/DatabaseConfig配置文档.md)
-3. [初始化智能体](./agent模块/SmartSQLAgent类API文档.md)
+# 配置
+settings = Settings()
+db_config = DatabaseConfig(
+    host="localhost",
+    database="ecommerce",
+    username="root",
+    password="password"
+)
 
-**扩展开发**
-1. [创建新工具](./tools模块/BaseTool基类API文档.md)
-2. [添加回调](./agent模块/回调系统API文档.md)
-3. [自定义智能体](./agent模块/BaseAgent类API文档.md)
+# 创建 Agent
+agent = SQLAgent(settings, db_config)
+```
 
-### 按使用场景查找
+**2. 数据库分析流程**
+1. [提取数据库结构](./tools模块/分析工具/SchemaExtractionTool.md)
+2. [识别业务领域](./tools模块/分析工具/DomainAnalysisTool.md)
+3. [字段分类](./tools模块/分析工具/FieldClassificationTool.md)
+4. [列含义分析](./tools模块/分析工具/ColumnMeaningTool.md)
+5. [表含义分析](./tools模块/分析工具/TableMeaningTool.md)
+6. [关系分析](./tools模块/分析工具/ERAnalysisTool.md)
 
-**基础使用**
-- 开始使用：查看 [API 手册](./SemanticSQL-Agent-API手册.md) 的快速开始部分
-- SQL 查询：使用 [SmartSQLAgent](./agent模块/SmartSQLAgent类API文档.md)
-- 结果处理：查看 [数据模型](./models模块/数据模型API文档.md) 中的 SQLQueryResult
+**3. SQL 生成流程**
+1. 接收自然语言问题
+2. 利用数据库分析记忆
+3. [生成 SQL 查询](./tools模块/生成工具/SQLGenerationTool.md)
+4. [验证 SQL](./tools模块/验证工具/SQLValidationTool.md)
+5. [执行测试](./tools模块/验证工具/SQLExecutionTool.md)
+6. [反思优化](./tools模块/反思工具/SQLReflectionTool.md)
 
-**高级功能**
-- 训练数据生成：使用 [DataGenerationAgent](./agent模块/DataGenerationAgent类API文档.md)
-- 执行监控：使用 [回调系统](./agent模块/回调系统API文档.md)
-- 性能分析：使用 [TrajectoryRecorder](./utils模块/TrajectoryRecorder文档.md)
+### 使用场景
 
-**故障排查**
-- 错误处理：查看 [异常类](./models模块/异常类API文档.md)
-- 日志配置：查看 [Settings 配置](./config模块/Settings配置文档.md)
-- 数据库问题：查看 [DatabaseManager](./utils模块/DatabaseManager文档.md)
+**单次查询**
+```python
+result = agent.query("查询最近一周的销售额")
+print(f"SQL: {result.sql}")
+print(f"结果: {result.result}")
+```
+
+**命令行使用**
+```bash
+# 查询
+semanticsql query -q "查询订单总数" -d ecommerce -u root
+
+# 数据库分析
+semanticsql analyze -d ecommerce -u root -o analysis.json
+```
+
+**自定义工具开发**
+- 继承 `langchain.tools.BaseTool`
+- 实现 `_run` 方法
+- 定义输入参数模式
 
 ## 📖 阅读建议
 
-1. **新手用户**：先阅读 [API 手册](./SemanticSQL-Agent-API手册.md) 了解整体架构
-2. **开发者**：重点关注 [BaseAgent](./agent模块/BaseAgent类API文档.md) 和 [BaseTool](./tools模块/BaseTool基类API文档.md)
-3. **运维人员**：关注 [配置文档](./config模块/) 和 [数据库管理](./utils模块/DatabaseManager文档.md)
+1. **新手用户**：先阅读 [API 总览](./API总览.md) 了解整体架构
+2. **开发者**：重点关注 [LangChain 集成指南](./LangChain集成指南.md)
+3. **工具开发**：参考各工具的 API 文档和 LangChain 文档
+4. **命令行用户**：查看 [CLI 使用指南](./CLI-API.md)
 
-## 🔄 更新说明
+## 🔄 版本信息
 
-- 文档版本：2.0.0
-- 最后更新：2024年
-- 适用版本：SemanticSQL Agent v2.0.0
+- 文档版本：1.0.0
+- 最后更新：2024-01
+- 框架版本：基于 LangChain 0.1.x
 
-## 📝 反馈
+## 📝 注意事项
 
-如有任何问题或建议，请通过以下方式反馈：
-- 提交 Issue
-- 发送邮件
-- 提交 PR
+1. 所有工具都基于 LangChain 的 `BaseTool`
+2. 使用 LangChain 的 Memory 系统管理数据库分析结果
+3. Agent 执行基于 `AgentExecutor`
+4. 仅支持 MySQL 数据库
+5. 支持 LangChain 的回调和调试功能
 
 ---
 
-*本文档由 SemanticSQL Agent 团队维护*
+*本文档严格遵循项目架构设计*

@@ -11,12 +11,12 @@
 ### 1.2 技术栈
 - **编程语言**: Python 3.8+
 - **核心框架**:
-  - LangChain: Agent 框架
+  - LangChain: Agent 框架、记忆管理、工具集成、LLM 调用
   - SQLAlchemy: 数据库操作
   - Pydantic: 数据模型验证
   - Jinja2: 提示词模板
   - Click: CLI 框架
-- **LLM支持**: Qwen (OpenAI 兼容 API)
+- **LLM支持**: Qwen (通过 LangChain 的 OpenAI 兼容接口)
 
 ## 2. 项目结构设计
 
@@ -29,25 +29,28 @@ semanticsql-agent/
 │
 ├── models/
 │   ├── __init__.py
-│   └── schemas.py               # Pydantic 模型定义
+│   ├── schemas.py               # Pydantic 模型定义
+│   └── exceptions.py            # 异常定义
 │
 ├── tools/
 │   ├── __init__.py
 │   ├── base_tool.py                  # 工具基类
 │   │
-│   ├── analysis_tools/          # 分析工具（核心）
+│   ├── analysis_tools/          # 分析工具（可重新执行更新记忆）
 │   │   ├── __init__.py
 │   │   ├── schema_extraction_tool.py    # 数据库结构提取
-│   │   ├── domain_analysis_tool.py      # 领域分析
-│   │   ├── field_classification_tool.py # 字段分类
+│   │   ├── domain_analysis_tool.py      # 业务领域分析
+│   │   ├── field_classification_tool.py # 字段语义分类
+│   │   ├── column_meaning_tool.py       # 列业务含义分析
+│   │   ├── table_meaning_tool.py        # 表业务含义分析
 │   │   └── er_analysis_tool.py          # 实体关系分析
 │   │
 │   ├── generation_tools/        # 生成工具
 │   │   ├── __init__.py
-│   │   ├── scenario_generation_tool.py  # 场景生成
-│   │   ├── operation_selection_tool.py  # 操作选择
-│   │   ├── question_generation_tool.py  # 问题生成
-│   │   └── sql_generation_tool.py       # SQL生成
+│   │   ├── scenario_tool.py             # 场景生成（基于预定义模板）
+│   │   ├── operation_selection_tool.py  # 操作选择（基于预定义规则）
+│   │   ├── question_generation_tool.py  # 问题生成（使用场景+操作+记忆）
+│   │   └── sql_generation_tool.py       # SQL生成（使用问题+记忆）
 │   │
 │   ├── validation_tools/        # 验证工具
 │   │   ├── __init__.py
@@ -56,11 +59,11 @@ semanticsql-agent/
 │   │
 │   ├── reflection_tools/        # 反思工具
 │   │   ├── __init__.py
-│   │   └── sql_reflection_tool.py       # SQL执行反思
+│   │   └── sql_reflection_tool.py       # SQL执行反思（评估质量和问题诊断）
 │   │
-│   └── thinking_tools/          # 思考工具（可选）
+│   └── thinking_tools/          # 思考工具
 │       ├── __init__.py
-│       └── sequential_thinking_tool.py   # 深度思考
+│       └── sequential_thinking_tool.py   # 深度思考（分析问题源头和修正策略）
 │
 ├── prompts/
 │   ├── __init__.py
@@ -72,15 +75,16 @@ semanticsql-agent/
 │
 ├── agent/
 │   ├── __init__.py
-│   ├── base_agent.py           # 基础Agent（含执行记录）
-│   ├── smart_sql_agent.py      # 主 SQL Agent
-│   └── callbacks.py            # 轨迹记录回调
+│   ├── base_agent.py           # 基础Agent（含执行流程控制和ReAct循环）
+│   └── sql_agent.py            # SQL智能体（批量训练数据生成）
 │
 ├── utils/
 │   ├── __init__.py
 │   ├── database.py              # 数据库连接管理
-│   ├── llm_client.py            # LLM客户端（支持使用标准OpenAI库 调用 Qwen 和 tool）
-│   └── trajectory.py            # 轨迹记录
+│   ├── llm_client.py            # LLM客户端（支持使用标准OpenAI库调用Qwen）
+│   ├── memory.py                # 记忆管理（存储和更新数据库分析结果）
+│   ├── trajectory.py            # 执行轨迹记录（保存执行历史）
+│   └── callbacks.py             # 执行回调（轨迹记录、进度通知等）
 │
 └── cli.py                       # 命令行接口
 ```
@@ -89,839 +93,441 @@ semanticsql-agent/
 
 ### 3.1 配置管理 (config/)
 
-#### settings.py - 全局配置
-```python
-from pydantic_settings import BaseSettings
+#### settings.py
+- 使用 Pydantic BaseSettings，支持环境变量覆盖
+- 管理 LLM 配置、Agent 参数、工具开关等
+- 支持多环境配置（开发、测试、生产）
 
-class Settings(BaseSettings):
-    """全局配置"""
-    # 应用配置
-    app_name: str = "SemanticSQL Agent"
-    debug: bool = False
-    
-    # LLM配置
-    llm_model: str = "Qwen3-14B"
-    llm_base_url: str = "http://localhost:9991/v1"
-    llm_api_key: str = "not-needed"
-    llm_temperature: float = 0.7
-    
-    # Agent配置
-    max_iterations: int = 20
-    enable_reflection: bool = True
-    
-    class Config:
-        env_file = ".env"
-```
-
-#### database.py - 数据库配置
-```python
-from pydantic import BaseModel
-
-class DatabaseConfig(BaseModel):
-    """数据库配置"""
-    type: str  # mysql
-    host: str
-    port: int
-    database: str
-    username: str
-    password: str
-    pool_size: int = 5
-```
+#### database.py
+- 数据库连接配置，专注于 MySQL
+- 连接池管理
+- 数据库连接参数管理
 
 ### 3.2 数据模型 (models/)
 
-#### schemas.py - 核心数据模型
-```python
-from pydantic import BaseModel
-from typing import List, Dict, Optional
-from datetime import datetime
+#### schemas.py
+- 使用 Pydantic 定义所有数据模型
+- 包括 QueryScenario、SQLQueryResult、TrainingExample 等
+- 提供数据验证和序列化功能
 
-class TableSchema(BaseModel):
-    """表结构模型"""
-    name: str
-    columns: List[Dict[str, str]]
-    primary_key: Optional[str]
-    foreign_keys: List[Dict[str, str]]
-
-class DomainAnalysis(BaseModel):
-    """领域分析结果"""
-    domain: str
-    confidence: float
-    key_entities: List[str]
-    business_features: List[str]
-
-class QueryScenario(BaseModel):
-    """查询场景"""
-    id: str
-    category: str
-    description: str
-    difficulty: str
-    business_value: str
-
-class GeneratedQuestion(BaseModel):
-    """生成的问题"""
-    scenario_id: str
-    question: str
-    question_type: str
-    complexity: str
-
-class GeneratedSQL(BaseModel):
-    """生成的SQL"""
-    question_id: str
-    sql: str
-    tables_used: List[str]
-    sql_type: str  # SELECT/JOIN/AGGREGATE等
-
-class ValidationResult(BaseModel):
-    """验证结果"""
-    sql_id: str
-    is_valid: bool
-    execution_time: Optional[float]
-    row_count: Optional[int]
-    error_message: Optional[str]
-
-class ReflectionResult(BaseModel):
-    """反思结果"""
-    original_sql: str
-    issues: List[str]
-    suggestions: List[str]
-    improved_sql: Optional[str]
-```
+#### exceptions.py
+- 定义所有自定义异常类
+- 继承自 SemanticSQLException 基类
+- 包括配置错误、数据库错误、LLM错误、工具错误等
+- 统一的错误代码和消息格式
 
 ### 3.3 工具系统 (tools/)
 
-#### 基类设计 (base.py)
+#### 3.3.1 基础设计（基于 LangChain）
+- **BaseTool**: 继承自 `langchain.tools.BaseTool`
+  - 统一的 `_run()` 接口实现
+  - 利用 LangChain 的参数验证机制
+  - 自动的错误处理和日志
+  - 与 LangChain Agent 无缝集成
+  - 支持同步和异步执行
+
+#### 3.3.2 工具分类
+
+**分析工具** (analysis_tools/)
+- **schema_extraction_tool**: 提取表结构、列信息、约束
+- **domain_analysis_tool**: 识别业务领域特征（电商、金融、医疗等）
+- **field_classification_tool**: 字段语义分类（ID、时间、金额、状态等）
+- **column_meaning_tool**: 分析列的业务含义和用途
+- **table_meaning_tool**: 分析表的业务含义和职责
+- **er_analysis_tool**: 分析表关系（主外键、隐式关联）
+- 特点：可重新执行，结果更新到记忆模块
+
+**生成工具** (generation_tools/)
+- **scenario_tool**: 基于预定义模板生成查询场景
+- **operation_selection_tool**: 根据场景复杂度选择SQL操作
+- **question_generation_tool**: 生成自然语言问题
+- **sql_generation_tool**: 将问题转换为SQL
+- 特点：使用记忆模块中的数据库分析结果
+
+**验证工具** (validation_tools/)
+- **sql_validation_tool**: 语法验证
+- **sql_execution_tool**: 安全执行SQL并返回结果
+
+**反思工具** (reflection_tools/)
+- **sql_reflection_tool**: 评估执行结果质量，定位问题源头，推荐修正工具
+
+**思考工具** (thinking_tools/)
+- **sequential_thinking_tool**: 深度分析问题，制定修正策略
+
+### 3.4 智能体系统 (agent/)
+
+#### base_agent.py（基于 LangChain AgentExecutor）
+- 使用 `langchain.agents.AgentExecutor` 实现 ReAct 模式
+- 利用 `langchain.agents.create_react_agent` 创建智能体
+- 集成 LangChain 的工具管理机制
+- 使用 `langchain.callbacks` 进行执行跟踪
+- 支持自定义的 OutputParser 处理响应
+
+#### sql_agent.py
+- 继承 BaseAgent，配置专门的 SQL 生成系统提示词
+- 系统提示词引导 Agent 自主决策执行流程
+- Agent 根据工具输出和反思结果决定下一步行动
+- 集成 LangChain 的错误处理机制
+
+### 3.5 记忆管理（基于 LangChain Memory）
+
+#### 使用 LangChain 的记忆组件
+- **ConversationSummaryMemory**: 存储数据库分析摘要
+- **VectorStoreMemory**: 存储和检索相关的表结构信息
+- **自定义 AnalysisMemory**: 继承 `BaseMemory`，专门管理分析结果
+
 ```python
-from abc import ABC, abstractmethod
-from pydantic import BaseModel
-from typing import Any, Dict, List
+from langchain.memory import BaseMemory
 
-class ToolInput(BaseModel):
-    """工具输入基类"""
-    pass
-
-class ToolOutput(BaseModel):
-    """工具输出基类"""
-    success: bool
-    data: Any
-    error: Optional[str]
-
-class BaseTool(ABC):
-    """工具基类"""
-    name: str
-    description: str
+class DatabaseAnalysisMemory(BaseMemory):
+    """专门用于存储数据库分析结果的记忆"""
+    memory_variables = ["schema_info", "domain_analysis", 
+                       "field_classification", "column_meanings",
+                       "table_meanings", "er_analysis"]
     
-    @abstractmethod
-    def get_input_schema(self) -> type[ToolInput]:
-        """获取输入模式"""
-        pass
+    def load_memory_variables(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """加载相关的分析结果"""
+        # 返回与当前任务相关的记忆内容
     
-    @abstractmethod
-    def run(self, input_data: ToolInput) -> ToolOutput:
-        """执行工具"""
-        pass
+    def save_context(self, inputs: Dict[str, Any], outputs: Dict[str, Any]) -> None:
+        """保存或更新分析结果"""
+        # 更新记忆中的分析内容
 ```
 
-#### 分析工具 (analysis_tools/)
+- 与 LangChain Agent 自动集成
+- 支持持久化到文件或数据库
+- 可以使用 LangChain 的记忆链功能
 
-**1. schema_extraction_tool.py**
+### 3.6 提示词管理（集成 LangChain）
+
+#### 使用 LangChain 的提示词组件
+- **PromptTemplate**: 基础提示词模板
+- **ChatPromptTemplate**: 对话式提示词
+- **FewShotPromptTemplate**: 少样本学习提示词
+- **SystemMessagePromptTemplate**: 系统消息模板
+
 ```python
-class SchemaExtractionTool(BaseTool):
-    """数据库结构提取工具"""
-    name = "schema_extraction"
-    description = "提取数据库表结构、字段信息、约束关系"
-    
-    def run(self, input_data: DatabaseConfig) -> SchemaOutput:
-        # 连接数据库
-        # 提取所有表信息
-        # 提取字段信息
-        # 提取约束关系
-        return SchemaOutput(tables=tables)
+from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
+
+# 系统提示词
+system_prompt = SystemMessagePromptTemplate.from_template(
+    "你是一个SQL生成专家，负责分析数据库并生成高质量的训练数据..."
+)
+
+# 工具使用提示词
+tool_prompt = ChatPromptTemplate.from_template(
+    "使用 {tool_name} 工具来 {task_description}"
+)
 ```
 
-**2. domain_analysis_tool.py**
+#### 提示词管理器
+- 继承 LangChain 的 `BasePromptTemplate`
+- 支持动态变量注入
+- 与 LangChain Chain 无缝集成
+
+### 3.6 工具类 (utils/)
+
+#### database.py
+- DatabaseManager: MySQL 数据库访问接口
+- 连接池管理
+- 安全的SQL执行
+
+#### llm_client.py（基于 LangChain LLM）
+- 使用 `langchain.chat_models.ChatOpenAI` 
+- 配置 Qwen 的 API endpoint
+- 利用 LangChain 的重试和错误处理机制
+- 支持流式输出和回调
+
 ```python
-class DomainAnalysisTool(BaseTool):
-    """领域分析工具"""
-    name = "domain_analysis"
-    description = "基于表名、字段名分析业务领域"
-    
-    def run(self, input_data: SchemaInput) -> DomainOutput:
-        # 分析表名模式
-        # 识别业务关键词
-        # 判断领域类型
-        return DomainOutput(domain=domain, confidence=0.95)
+from langchain.chat_models import ChatOpenAI
+
+llm = ChatOpenAI(
+    model_name="Qwen",
+    openai_api_base="http://localhost:9991/v1",
+    temperature=0.7
+)
 ```
 
-**3. field_classification_tool.py**
-```python
-class FieldClassificationTool(BaseTool):
-    """字段分类工具"""
-    name = "field_classification"
-    description = "对数据库字段进行语义分类"
-    
-    def run(self, input_data: FieldsInput) -> ClassificationOutput:
-        # 识别ID字段
-        # 识别时间字段
-        # 识别金额字段
-        # 识别状态字段
-        return ClassificationOutput(classifications=results)
-```
+#### trajectory.py（集成 LangChain Callbacks）
+- 实现 `langchain.callbacks.BaseCallbackHandler`
+- 自动记录 Agent 的思考和行动
+- 支持导出为 LangSmith 格式
+- 与 LangChain 的调试工具集成
 
-**4. er_analysis_tool.py**
-```python
-class ERAnalysisTool(BaseTool):
-    """实体关系分析工具"""
-    name = "er_analysis"
-    description = "分析表之间的关联关系"
-    
-    def run(self, input_data: TablesInput) -> EROutput:
-        # 分析外键关系
-        # 推断隐式关系
-        # 构建ER图
-        return EROutput(relationships=relationships)
-```
-
-#### 生成工具 (generation_tools/)
-
-**1. scenario_generation_tool.py**
-```python
-class ScenarioGenerationTool(BaseTool):
-    """场景生成工具"""
-    name = "scenario_generation"
-    description = "基于领域和表结构生成查询场景"
-    
-    def run(self, input_data: AnalysisResults) -> ScenariosOutput:
-        # 根据领域选择场景模板
-        # 基于表结构生成具体场景
-        # 分配难度等级
-        scenarios = self._generate_scenarios(
-            domain=input_data.domain,
-            tables=input_data.tables,
-            relationships=input_data.relationships
-        )
-        return ScenariosOutput(scenarios=scenarios)
-    
-    def _generate_scenarios(self, domain, tables, relationships):
-        """基于规则生成场景"""
-        templates = self._get_domain_templates(domain)
-        scenarios = []
-        
-        for template in templates:
-            scenario = QueryScenario(
-                id=generate_id(),
-                category=template.category,
-                description=template.render(tables=tables),
-                difficulty=template.difficulty,
-                business_value=template.value
-            )
-            scenarios.append(scenario)
-            
-        return scenarios
-```
-
-**2. question_generation_tool.py**
-```python
-class QuestionGenerationTool(BaseTool):
-    """问题生成工具"""
-    name = "question_generation"
-    description = "基于场景生成自然语言问题"
-    
-    def run(self, input_data: ScenarioInput) -> QuestionsOutput:
-        questions = []
-        
-        for scenario in input_data.scenarios:
-            # 基于场景生成多个问题变体
-            question_variants = self._generate_questions(scenario)
-            questions.extend(question_variants)
-            
-        return QuestionsOutput(questions=questions)
-    
-    def _generate_questions(self, scenario):
-        """为一个场景生成多个问题"""
-        templates = self._get_question_templates(scenario.category)
-        questions = []
-        
-        for template in templates:
-            question = GeneratedQuestion(
-                scenario_id=scenario.id,
-                question=template.render(scenario=scenario),
-                question_type=template.type,
-                complexity=scenario.difficulty
-            )
-            questions.append(question)
-            
-        return questions
-```
-
-**3. sql_generation_tool.py**
-```python
-class SQLGenerationTool(BaseTool):
-    """SQL生成工具"""
-    name = "sql_generation"
-    description = "根据问题生成SQL查询"
-    
-    def run(self, input_data: QuestionSQLInput) -> SQLOutput:
-        # 一步生成SQL
-        sql = self._generate_sql(
-            question=input_data.question,
-            schema=input_data.schema,
-            context=input_data.context
-        )
-        
-        return SQLOutput(
-            sql=GeneratedSQL(
-                question_id=input_data.question.id,
-                sql=sql,
-                tables_used=self._extract_tables(sql),
-                sql_type=self._classify_sql(sql)
-            )
-        )
-```
-
-#### 验证工具 (validation_tools/)
-
-**1. sql_validation_tool.py**
-```python
-class SQLValidationTool(BaseTool):
-    """SQL验证工具"""
-    name = "sql_validation"
-    description = "验证SQL语法和逻辑正确性"
-    
-    def run(self, input_data: SQLValidationInput) -> ValidationOutput:
-        # 语法检查
-        # 表名字段验证
-        # 逻辑合理性检查
-        return ValidationOutput(is_valid=True, issues=[])
-```
-
-**2. sql_execution_tool.py**
-```python
-class SQLExecutionTool(BaseTool):
-    """SQL执行测试工具"""
-    name = "sql_execution"
-    description = "执行SQL并获取结果"
-    
-    def run(self, input_data: SQLExecutionInput) -> ExecutionOutput:
-        # 执行SQL
-        # 记录执行时间
-        # 获取结果行数
-        return ExecutionOutput(
-            success=True,
-            execution_time=0.125,
-            row_count=42
-        )
-```
-
-#### 反思工具 (reflection_tools/)
-
-**sql_reflection_tool.py**
-```python
-class SQLReflectionTool(BaseTool):
-    """SQL反思工具"""
-    name = "sql_reflection"
-    description = "根据执行结果反思SQL质量并提出改进"
-    
-    def run(self, input_data: ReflectionInput) -> ReflectionOutput:
-        reflection = ReflectionResult(
-            original_sql=input_data.sql,
-            issues=[],
-            suggestions=[]
-        )
-        
-        # 分析执行时间
-        if input_data.execution_time > 1.0:
-            reflection.issues.append("查询时间过长")
-            reflection.suggestions.append("考虑添加索引或优化查询")
-        
-        # 分析结果集大小
-        if input_data.row_count > 10000:
-            reflection.issues.append("结果集过大")
-            reflection.suggestions.append("考虑添加分页或限制")
-        
-        # 分析SQL复杂度
-        complexity_issues = self._analyze_complexity(input_data.sql)
-        reflection.issues.extend(complexity_issues)
-        
-        # 生成改进的SQL
-        if reflection.issues:
-            reflection.improved_sql = self._improve_sql(
-                input_data.sql,
-                reflection.suggestions
-            )
-        
-        return ReflectionOutput(reflection=reflection)
-```
-
-### 3.4 提示词管理 (prompts/)
-
-#### 模板结构
-```
-templates/
-├── system/
-│   ├── agent_system.j2         # Agent系统提示词
-│   └── tool_system.j2          # 工具系统提示词
-├── tools/
-│   ├── analysis/               # 分析工具提示词
-│   ├── generation/             # 生成工具提示词
-│   └── reflection/             # 反思工具提示词
-└── analysis/
-    ├── domain_analysis.j2      # 领域分析提示词
-    └── scenario_analysis.j2    # 场景分析提示词
-```
-
-#### manager.py - 提示词管理器
-```python
-from jinja2 import Environment, FileSystemLoader
-
-class PromptManager:
-    """提示词管理器"""
-    
-    def __init__(self, template_dir: str):
-        self.env = Environment(
-            loader=FileSystemLoader(template_dir)
-        )
-    
-    def get_prompt(self, template_name: str, **kwargs) -> str:
-        """获取渲染后的提示词"""
-        template = self.env.get_template(template_name)
-        return template.render(**kwargs)
-```
-
-### 3.5 Agent 实现 (agent/)
-
-#### sql_agent.py - 主Agent
-```python
-from langchain.agents import AgentExecutor
-from langchain.tools import Tool
-
-class SQLAgent:
-    """SQL生成Agent"""
-    
-    def __init__(self, config: Settings):
-        self.config = config
-        self.tools = self._initialize_tools()
-        self.agent = self._create_agent()
-        
-    def _initialize_tools(self) -> List[Tool]:
-        """初始化所有工具"""
-        tools = []
-        
-        # 分析工具
-        tools.extend([
-            SchemaExtractionTool(),
-            DomainAnalysisTool(),
-            FieldClassificationTool(),
-            ERAnalysisTool()
-        ])
-        
-        # 生成工具
-        tools.extend([
-            ScenarioGenerationTool(),
-            QuestionGenerationTool(),
-            SQLGenerationTool()
-        ])
-        
-        # 验证和反思工具
-        tools.extend([
-            SQLValidationTool(),
-            SQLExecutionTool(),
-            SQLReflectionTool()
-        ])
-        
-        return tools
-    
-    def generate_training_data(self, database_config: DatabaseConfig):
-        """生成训练数据的主流程"""
-        # 1. 分析阶段
-        schema = self.extract_schema(database_config)
-        domain = self.analyze_domain(schema)
-        fields = self.classify_fields(schema)
-        relationships = self.analyze_er(schema)
-        
-        # 2. 生成阶段
-        scenarios = self.generate_scenarios(domain, schema, relationships)
-        questions = self.generate_questions(scenarios)
-        sql_queries = self.generate_sql(questions, schema)
-        
-        # 3. 验证和反思阶段
-        validated_queries = []
-        for sql in sql_queries:
-            validation = self.validate_sql(sql)
-            if validation.is_valid:
-                execution = self.execute_sql(sql)
-                reflection = self.reflect_on_sql(sql, execution)
-                
-                if reflection.improved_sql:
-                    sql.sql = reflection.improved_sql
-                    
-                validated_queries.append(sql)
-        
-        return TrainingData(
-            questions=questions,
-            sql_queries=validated_queries
-        )
+#### callbacks.py（基于 LangChain Callbacks）
+- 继承 `AsyncCallbackHandler` 支持异步操作
+- 实现 `on_tool_start`, `on_tool_end` 等钩子
+- 与 LangChain 的事件系统集成
+- 支持自定义的进度通知
 ```
 
 ## 4. 执行流程
 
-### 4.1 智能体驱动流程图
+### 4.1 初始化流程（LangChain 集成）
 ```
-用户任务："生成N条训练数据"
+1. 加载配置 (Settings)
+2. 初始化数据库连接 (DatabaseManager)
+3. 创建 LangChain LLM 实例 (ChatOpenAI)
+4. 初始化 LangChain Memory (DatabaseAnalysisMemory)
+5. 创建 LangChain Tools 列表
+6. 使用 create_react_agent 创建 Agent
+7. 配置 AgentExecutor 与 Callbacks
+```
+
+```python
+# 示例代码
+from langchain.agents import create_react_agent, AgentExecutor
+from langchain.chat_models import ChatOpenAI
+
+# 初始化 LLM
+llm = ChatOpenAI(openai_api_base=config.llm_base_url)
+
+# 初始化记忆
+memory = DatabaseAnalysisMemory()
+
+# 创建工具列表
+tools = [SchemaExtractionTool(), DomainAnalysisTool(), ...]
+
+# 创建 Agent
+agent = create_react_agent(llm, tools, prompt)
+agent_executor = AgentExecutor(
+    agent=agent,
+    tools=tools,
+    memory=memory,
+    callbacks=[TrajectoryCallback()]
+)
+```
+
+### 4.2 数据库分析阶段（只执行一次）
+```
+开始任务
     ↓
-┌─────────────────────────────────────┐
-│          ReAct 智能决策循环          │
-├─────────────────────────────────────┤
-│ Agent Thought: "我需要先了解数据库"  │
-│ Agent Action: extract_schema        │
-│ Agent Observation: [数据库结构]     │
-│ ├─────────────────────────────────  │
-│ Agent Thought: "分析业务领域特征"   │
-│ Agent Action: domain_analysis       │
-│ Agent Observation: [领域信息]       │
-│ ├─────────────────────────────────  │
-│ Agent Thought: "现在生成查询场景"   │
-│ Agent Action: scenario_generation   │
-│ Agent Observation: [业务场景]       │
-│ ├─────────────────────────────────  │
-│ Agent Thought: "为场景生成问题"     │
-│ Agent Action: question_generation   │
-│ Agent Observation: [自然语言问题]   │
-│ ├─────────────────────────────────  │
-│ Agent Thought: "生成对应的SQL"      │
-│ Agent Action: sql_generation        │
-│ Agent Observation: [SQL查询]        │
-│ ├─────────────────────────────────  │
-│ Agent Thought: "执行SQL验证"        │
-│ Agent Action: sql_execution         │
-│ Agent Observation: [执行结果]       │
-│ ├─────────────────────────────────  │
-│ Agent Thought: "反思结果质量"       │
-│ Agent Action: sql_reflection        │
-│ Agent Observation: [反思分析]       │
-│ ├─────────────────────────────────  │
-│ Agent Thought: "继续生成更多..."    │
-│ [重复上述循环直到完成N条数据]        │
-│ ├─────────────────────────────────  │
-│ Agent Thought: "任务完成，输出数据" │
-│ Agent Action: finish                │
-└─────────────────────────────────────┘
-                ↓
-        输出训练数据文件
+sequential_thinking（规划执行策略）
+    ↓
+按顺序执行分析工具：
+1. extract_schema → 记忆模块（提取基础结构）
+2. domain_analysis → 记忆模块（识别业务领域）
+3. field_classification → 记忆模块（字段语义分类）
+4. column_meaning → 记忆模块（分析列业务含义）
+5. table_meaning → 记忆模块（分析表业务职责）
+6. er_analysis → 记忆模块（分析表间关系）
 ```
 
-### 4.2 智能体自主决策特点
-
-#### 动态策略调整
-- **数据库复杂度适应**：Agent根据表的数量和复杂度调整生成策略
-- **领域特征识别**：自动识别业务特征，生成相关场景
-- **质量反馈循环**：根据执行结果自主决定是否重新生成
-
-#### 智能工具协调
+### 4.3 问题生成流程
 ```
-Agent思考："这个数据库是电商领域的，我应该生成订单、用户、商品相关的查询场景"
-↓
-Agent行动：scenario_generation(domain="ecommerce", focus="orders,users,products")
-↓
-Agent观察：生成了10个电商场景
-↓
-Agent思考："现在为每个场景生成多样化的问题"
-↓
-Agent行动：question_generation(scenarios=scenarios, variety=high)
-...
-```
-
-#### 执行后反思机制
-```
-Agent执行SQL → 获得结果 → 自主分析：
-- 执行时间是否合理？
-- 结果集大小是否适中？
-- SQL复杂度是否匹配问题？
-- 是否需要优化或重新生成？
-```
-
-### 4.2 执行流程详解
-
-#### 阶段一：数据库智能分析（1-4步）
-**目标**：全面理解数据库结构和业务特征
-
-1. **extract_schema**：提取完整的数据库结构
-   - 表信息：表名、列定义、主键、外键、索引
-   - 约束信息：NOT NULL、UNIQUE、CHECK约束
-   - 统计信息：表行数、列分布、数据类型分布
-
-2. **domain_analysis**：识别业务领域
-   - 基于表名模式识别（如：user_*, order_*, product_*）
-   - 基于字段名语义识别（如：price → 电商，patient_id → 医疗）
-   - 返回领域标签和置信度
-
-3. **field_classification**：字段语义分类
-   - 标识符字段：ID、编号、代码类
-   - 时间字段：创建时间、更新时间、业务时间
-   - 数值字段：金额、数量、得分、比率
-   - 分类字段：状态、类型、级别
-   - 描述字段：名称、描述、备注
-
-4. **er_analysis**：实体关系分析
-   - 显式关系：基于外键约束
-   - 隐式关系：基于命名模式推断
-   - 关系类型：一对一、一对多、多对多
-   - 关系强度：强关系、弱关系
-
-#### 阶段二：场景化数据生成（5-8步）
-**目标**：基于分析结果生成多样化的查询场景和问题
-
-5. **scenario_generation**：业务场景生成
-   - 基于领域选择场景模板
-   - 根据表关系生成关联场景
-   - 按难度分布生成不同复杂度场景
-
-6. **operation_selection**：SQL操作类型选择
-   - 基础查询：SELECT、WHERE、ORDER BY
-   - 关联查询：JOIN、子查询
-   - 聚合查询：GROUP BY、聚合函数
-   - 高级查询：窗口函数、CTE、UNION
-
-7. **question_generation**：自然语言问题生成
-   - 基于场景模板生成问题变体
-   - 确保问题表述自然流畅
-   - 涵盖不同问题类型和表达方式
-
-8. **sql_generation**：对应SQL查询生成
-   - 一步到位生成完整SQL
-   - 确保SQL与问题语义完全匹配
-   - 考虑数据库特定语法
-
-#### 阶段三：质量验证与优化（9-12步）
-**目标**：确保生成数据的正确性和高质量
-
-9. **sql_validation**：SQL语法和逻辑验证
-   - 语法正确性检查
-   - 表名和字段名验证
-   - 约束条件合理性检查
-
-10. **sql_execution**：实际执行测试
-    - 连接数据库执行SQL
-    - 记录执行时间和资源消耗
-    - 获取结果集信息
-
-11. **sql_reflection**：执行结果智能反思
-    - 性能分析：执行时间、资源使用
-    - 结果分析：行数、数据分布
-    - 质量评估：SQL复杂度、可读性
-    - 改进建议：索引优化、查询重写
-
-12. **quality_assessment**：综合质量评分
-    - 语法正确性权重：30%
-    - 执行成功率权重：25%
-    - 语义匹配度权重：25%
-    - 性能表现权重：20%
-
-#### 阶段四：数据输出与格式化（13-15步）
-**目标**：输出标准化的训练数据集
-
-13. **数据清洗和去重**：移除低质量和重复样本
-14. **格式化为训练数据集**：转换为标准training format
-15. **输出文件**：保存为JSON/JSONL/CSV格式
-
-**❌ 错误做法**：硬编码执行步骤
-
-以下是**错误的硬编码实现方式**，违背了Agent自主决策原则：
-
-```python
-# ❌ 错误：硬编码的固定流程
-def generate_training_data(self):
-    schema = self.call_tool('extract_schema')    # 硬编码顺序
-    domain = self.call_tool('domain_analysis')   # 硬编码顺序
-    # ... 更多硬编码步骤
+根据设定的问题生成数量N，循环遍历预定义场景模板：
+    ↓
+for i in range(N):  # 生成N个问题
+    ├─ scenario_tool（从预定义模板中选择一个场景）【不可修正】
+    ├─ operation_selection（基于场景选择SQL操作）【不可修正】
+    ├─ question_generation（生成自然语言问题）【可修正】
+    ├─ sql_generation（生成SQL语句）【可修正】
+    ├─ sql_validation（验证语法）
+    ├─ sql_execution（执行测试）
+    └─ sql_reflection（基于执行结果反思，定位问题）
+         ↓
+    需要修正？
+    ├─ 否 → 保存生成的问题和SQL，继续下一个
+    └─ 是 → Agent根据recommended_action决定：
+            ├─ 直接调用建议的工具（如sql_generation）
+            └─ 调用sequential_thinking深度分析
+                    ↓
+       基于分析结果执行修正：
+       ├─ 数据库分析有误 → 重新执行相应分析工具 → 更新记忆
+       │   ├─ 领域理解错误 → 重新执行 domain_analysis
+       │   ├─ 字段分类错误 → 重新执行 field_classification
+       │   ├─ 列含义错误 → 重新执行 column_meaning
+       │   ├─ 表含义错误 → 重新执行 table_meaning
+       │   └─ 关系理解错误 → 重新执行 er_analysis
+       ├─ 问题生成有误 → 重新执行 question_generation
+       └─ SQL生成有误 → 重新执行 sql_generation
 ```
 
-**✅ 正确做法**：提示词引导Agent自主决策
+### 4.4 Agent 自主决策机制
 
-```python
-class DataGenerationAgent(BaseAgent):
-    """
-    数据生成Agent - 完全依赖提示词引导的自主决策
-    
-    核心特点：
-    1. 提示词引导：通过精心设计的提示词引导Agent步骤
-    2. 自主决策：Agent根据情况自主决定工具调用顺序
-    3. 反思循环：执行后反思，发现问题时自主回退修正
-    4. 记忆机制：数据库分析结果贯穿整个过程
-    """
-    
-    def __init__(self, settings, db_config):
-        # 初始化所有必要的工具
-        self._initialize_complete_toolchain()
-        # 初始化分析结果记忆
-        self.analysis_memory = {}
-    
-    def _initialize_complete_toolchain(self):
-        """初始化完整工具链"""
-        # 分析工具
-        self.register_tool("extract_schema", ...)
-        self.register_tool("domain_analysis", ...)
-        self.register_tool("field_classification", ...)
-        self.register_tool("er_analysis", ...)
-        
-        # 生成工具（基于提示词规则）
-        self.register_tool("scenario_generation", ...)
-        self.register_tool("question_generation", ...)
-        self.register_tool("sql_generation", ...)
-        
-        # 验证工具
-        self.register_tool("sql_execution", ...)
-        self.register_tool("sql_reflection", ...)
-        
-        # 思考工具
-        self.register_tool("sequential_thinking", ...)
-    
-    def generate_training_data(self, count: int, output_file: str):
-        """
-        完全由Agent根据提示词自主执行，无硬编码流程
-        """
-        task = f"生成{count}条NL2SQL训练数据"
-        execution = self.new_task(task)  # 进入ReAct循环
-        return self._extract_results(execution)
-    
-    def get_system_prompt(self) -> str:
-        """
-        关键：通过提示词引导Agent执行完整流程
-        """
-        return """
-        你是NL2SQL训练数据生成专家。必须按以下原则工作：
-        
-        🎯 执行原则：
-        1. 首先必须完整分析数据库并记忆结果（analysis阶段）
-        2. 生成SQL后必须执行验证（execution阶段）
-        3. 执行后必须反思分析（reflection阶段）
-        4. 反思发现问题时回到相应步骤修正
-        5. 复杂情况下调用thinking工具深度分析
-        
-        📋 可用工具：
-        - extract_schema: 提取数据库结构
-        - domain_analysis: 分析业务领域
-        - field_classification: 字段语义分类
-        - er_analysis: 实体关系分析
-        - scenario_generation: 场景生成（基于提示词规则）
-        - question_generation: 问题生成（基于提示词规则）
-        - sql_generation: SQL生成
-        - sql_execution: SQL执行验证
-        - sql_reflection: 执行结果反思
-        - sequential_thinking: 深度思考分析
-        
-        🔄 反思后修正指导：
-        - SQL错误 → 回到sql_generation重新生成
-        - 问题不合理 → 回到question_generation重新生成
-        - 场景不适合 → 回到scenario_generation重新设计
-        - 需要深度分析 → 调用sequential_thinking
-        
-        记住：数据库分析结果要记忆并在后续步骤中使用！
-        """
+**核心原则**：
+- Agent 通过系统提示词引导，自主决定执行流程
+- 不是硬编码的步骤，而是基于工具输出的智能决策
+- 反思工具提供建议，Agent 决定是否采纳
+
+**决策示例**：
+1. **反思后的决策**：
+   - sql_reflection 返回 `recommended_action.tool_to_call = "sql_generation"`
+   - Agent 可以：
+     - 直接调用 sql_generation 重新生成SQL
+     - 先调用 sequential_thinking 深入分析
+     - 如果是数据库分析问题，重新执行相应分析工具
+
+2. **不可修改的内容**：
+   - 场景选择（scenario_tool的结果固定）
+   - 操作选择（operation_selection的结果固定）
+   - 这两个是预定义的，确保生成的多样性和覆盖性
+
+3. **可修正的内容**：
+   - 数据库分析结果（如果理解有误）
+   - 问题生成（如果不够清晰）
+   - SQL生成（如果有错误）
+
+### 4.5 ReAct 执行模式
+```
+用户输入/工具结果
+    ↓
+Thought（分析当前状态，决定下一步）
+    ↓
+Action（选择工具）
+    ↓
+Action Input（准备参数，可能使用记忆）
+    ↓
+执行工具
+    ↓
+Observation（观察结果）
+    ↓
+[判断是否完成]
+├─ 否 → 继续 Thought
+└─ 是 → Final Result
 ```
 
-### 4.3 Agent设计指导原则
-
-#### 关键设计原则
-```python
-# ✅ 正确的Agent设计
-class DataGenerationAgent(BaseAgent):
-    """
-    核心原则：
-    1. 提示词驱动：所有步骤由提示词引导，不硬编码
-    2. 自主决策：Agent根据情况自主决定工具调用
-    3. 记忆机制：分析结果存储在上下文中贯穿使用
-    4. 反思循环：执行后必须反思，发现问题主动修正
-    5. 思考工具：复杂情况下调用深度思考
-    """
-    
-    def get_system_prompt(self):
-        # 返回完整的引导提示词
-        # 包含：流程指导、工具使用、反思修正、思考时机
-    
-    def generate_training_data(self, count, output_file):
-        # 只调用 self.new_task() 进入ReAct循环
-        # 所有具体步骤由Agent根据提示词自主决定
-        
-class SmartSQLAgent(BaseAgent):
-    """保留用于单次查询和调试"""
-    # 简化的查询功能
+### 4.5 反思-修正机制
+```
+SQL执行结果
+    ↓
+sql_reflection 评估：
+├─ 执行成功性
+├─ 结果合理性
+├─ 语义匹配度
+├─ 问题清晰度
+└─ 记忆使用情况
+    ↓
+发现问题？
+├─ 否 → 继续
+└─ 是 → sequential_thinking 分析
+        ├─ 确定问题步骤
+        ├─ 制定修正策略
+        └─ 执行修正（只修正出问题的步骤）
 ```
 
-## 5. 配置示例
 
-### 5.1 环境配置 (.env)
-```bash
-# 应用配置
-APP_NAME=SemanticSQL-Agent
-DEBUG=false
 
-# 数据库配置
-DB_TYPE=mysql
-DB_HOST=localhost
-DB_PORT=3306
-DB_NAME=testdb
-DB_USER=root
-DB_PASSWORD=password
+## 5. LangChain 集成优势
 
-# LLM配置
-LLM_MODEL=Qwen3-14B
-LLM_BASE_URL=http://localhost:9991/v1
-LLM_API_KEY=not-needed
-LLM_TEMPERATURE=0.7
+### 5.1 使用 LangChain 的好处
+- **统一的 Agent 框架**：利用成熟的 ReAct 实现，减少自定义代码
+- **强大的记忆管理**：多种记忆类型，支持向量存储和持久化
+- **丰富的工具生态**：可以轻松集成 LangChain 社区的工具
+- **完善的回调系统**：内置的执行跟踪和调试功能
+- **错误处理机制**：自动重试、超时控制、错误恢复
+- **提示词工程**：结构化的提示词模板和管理
+- **LLM 抽象**：轻松切换不同的 LLM 提供商
 
-# Agent配置
-MAX_ITERATIONS=20
-ENABLE_REFLECTION=true
-```
+### 5.2 LangChain 组件映射
+| 我们的组件 | LangChain 组件 | 说明 |
+|---------|--------------|------|
+| BaseTool | langchain.tools.BaseTool | 工具基类 |
+| BaseAgent | langchain.agents.AgentExecutor | Agent 执行器 |
+| Memory | langchain.memory.BaseMemory | 记忆基类 |
+| LLMClient | langchain.chat_models.ChatOpenAI | LLM 客户端 |
+| Callbacks | langchain.callbacks.BaseCallbackHandler | 回调处理器 |
+| PromptManager | langchain.prompts.BasePromptTemplate | 提示词模板 |
 
-### 5.2 场景模板配置
-```yaml
-# config/scenario_templates.yaml
-domains:
-  ecommerce:
-    scenarios:
-      - name: "用户行为分析"
-        category: "user_analysis"
-        difficulty: "medium"
-        template: "分析{time_period}内{user_segment}的{behavior}"
-        
-      - name: "销售统计"
-        category: "sales_analysis"
-        difficulty: "easy"
-        template: "统计{product_category}在{time_period}的销售{metric}"
-```
+### 5.3 自定义扩展
+虽然使用 LangChain，但我们仍需要自定义：
+- **DatabaseAnalysisMemory**: 专门管理数据库分析结果
+- **SQL 专用工具**: 针对 SQL 生成的特定工具
+- **批量生成 Chain**: 处理大规模数据生成的流程
+- **质量评估组件**: SQL 质量评分和优化建议
 
-## 6. 扩展点
+## 6. 核心特性
 
-### 6.1 添加新工具
-1. 在相应的工具目录创建新工具类
-2. 继承 `BaseTool`
-3. 实现 `run` 方法
-4. 在 Agent 中注册工具
+### 6.1 记忆模块
+- 存储数据库分析结果供后续使用
+- 支持动态更新（根据反思结果）
+- 跨工具共享上下文
 
-### 6.2 添加新领域
-1. 在配置中添加领域模板
-2. 扩展领域分析规则
-3. 添加领域特定的场景模板
+### 6.2 反思-修正循环
+- 自动评估生成质量
+- 精确定位问题源头
+- 只重新执行出错步骤
+- 支持分析工具重新执行
 
-### 6.3 自定义反思规则
-1. 扩展 `SQLReflectionTool`
-2. 添加新的分析维度
-3. 实现相应的优化策略
+### 6.3 执行轨迹
+- 记录完整的执行历史
+- 支持调试和分析
+- JSON格式持久化
 
-## 7. 最佳实践
-
-### 7.1 工具设计原则
+### 6.4 工具设计原则
 - 单一职责：每个工具只做一件事
-- 明确接口：清晰的输入输出定义
+- 标准接口：统一的输入输出格式
 - 错误处理：优雅的错误处理机制
-- 可测试性：易于单元测试
+- 可组合性：工具间可以灵活组合
 
-### 7.2 提示词管理
-- 使用模板引擎管理提示词
-- 版本控制提示词变更
-- 支持多语言提示词
+
+
+## 7. 部署和运行
+
+### 7.1 环境准备
+```bash
+# 安装依赖
+pip install -r requirements.txt
+
+# 配置环境变量
+cp .env.example .env
+# 编辑 .env 设置数据库和LLM连接信息
+```
+
+### 7.2 命令行使用
+```bash
+# 生成训练数据
+python cli.py generate --count 100 --output data.json
+
+# 查看执行轨迹
+python cli.py trajectory --latest
+```
+
+### 7.3 API使用（基于 LangChain）
+```python
+from semanticsql_agent import SQLAgent
+from langchain.callbacks import StdOutCallbackHandler
+from config import Settings, DatabaseConfig
+
+# 初始化
+settings = Settings()
+db_config = DatabaseConfig.from_env()
+
+# 创建 Agent（内部使用 LangChain）
+agent = SQLAgent(
+    settings=settings,
+    callbacks=[StdOutCallbackHandler()]  # LangChain 回调
+)
+
+# 生成训练数据（使用 AgentExecutor）
+result = agent.generate_training_data(
+    count=100,
+    output_file="training_data.json"
+)
+
+# 获取执行轨迹（通过 LangChain Callbacks）
+trajectory = agent.get_trajectory()
+```
+
+## 8. 最佳实践
+
+### 8.1 Agent设计原则
+- **提示词驱动**：通过提示词引导行为，避免硬编码流程
+- **自主决策**：让Agent根据上下文自主选择工具
+- **记忆机制**：利用记忆模块在工具间共享上下文
+- **反思循环**：执行后评估质量，必要时自动修正
+
+### 8.2 工具开发指南
+- **单一职责**：每个工具专注一个任务
+- **标准接口**：统一的输入输出格式
+- **错误处理**：提供清晰的错误信息
+- **可测试性**：便于单元测试和集成测试
+
+### 8.3 部署建议
+- **环境配置**：使用环境变量管理敏感信息
+- **日志记录**：详细的执行日志便于调试
+- **错误处理**：完善的异常处理机制
+- **监控指标**：生成成功率、执行时间等
 
 
 

@@ -1,306 +1,270 @@
 """
-场景生成工具 - 基于数据库结构生成业务场景
+场景生成工具 - 基于预定义模板选择业务场景
+基于 LangChain BaseTool
 """
 
 import random
-from typing import Dict, Any, List
+from typing import Dict, Any, Type, List, Optional
 from datetime import datetime
 
-from tools.base_tool import BaseTool, ToolParameter
+from langchain.tools import BaseTool
+from pydantic import BaseModel, Field
+
 from models.schemas import QueryScenario, DifficultyLevel, SQLOperation
-from config.settings import Settings
+from models.exceptions import ToolExecutionError
+
+
+class ScenarioToolInput(BaseModel):
+    """场景工具输入"""
+    iteration: int = Field(default=0, description="当前迭代次数")
 
 
 class ScenarioTool(BaseTool):
-    """基于规则的业务场景生成工具"""
+    """基于预定义模板选择业务场景"""
     
-    def __init__(self, settings: Settings):
-        super().__init__(settings)
-        # 定义场景类别和难度分布
-        self.scenario_categories = [
-            "销售分析", "客户分析", "产品分析", "库存管理", 
-            "财务报表", "员工管理", "系统监控", "数据统计"
-        ]
-        self.difficulty_distribution = {
-            "easy": 0.4,
-            "medium": 0.4, 
-            "hard": 0.2
-        }
+    name: str = "scenario_tool"
+    description: str = "从预定义的场景模板中选择一个适合当前数据库的业务场景"
+    # 暂时移除args_schema，让工具接受任意参数
+    # args_schema: Type[BaseModel] = ScenarioToolInput
     
-    @property
-    def name(self) -> str:
-        return "scenario_generation"
+    def __init__(self):
+        super().__init__()
+        # 使用object.__setattr__避开Pydantic验证
+        object.__setattr__(self, 'scenario_templates', self._initialize_scenario_templates())
+        object.__setattr__(self, 'difficulty_weights', {
+            DifficultyLevel.EASY: 0.4,
+            DifficultyLevel.MEDIUM: 0.4,
+            DifficultyLevel.HARD: 0.15,
+            DifficultyLevel.EXPERT: 0.05
+        })
     
-    @property
-    def description(self) -> str:
-        return "基于数据库结构和业务领域生成查询场景"
+    def _run(self, tool_input: str = "", **kwargs) -> Dict[str, Any]:
+        """选择一个场景"""
+        try:
+            # 解析JSON输入参数
+            import json
+            try:
+                if tool_input:
+                    input_data = json.loads(tool_input)
+                    iteration = input_data.get('iteration', 0)
+                else:
+                    iteration = 0
+            except:
+                iteration = 0
+            
+            # ScenarioTool基于预定义模板工作，不需要数据库分析结果
+            # 它会返回通用的业务场景，供后续工具使用
+            
+            # 基于迭代次数选择不同的场景模板（避免重复）
+            scenario_index = iteration % len(self.scenario_templates)
+            selected_template = self.scenario_templates[scenario_index]
+            
+            # 创建场景实例（简化版本，不依赖具体表信息）
+            scenario_id = f"scenario_{iteration}_{datetime.now().strftime('%H%M%S')}"
+            
+            return {
+                "scenario_id": scenario_id,
+                "category": selected_template["category"],
+                "business_purpose": selected_template["business_purpose"],
+                "complexity": selected_template["complexity"].value,
+                "applicable_operations": [op.value for op in selected_template["suggested_operations"]],
+                "description": selected_template["description"],
+                "template_id": selected_template["id"]
+            }
+            
+        except Exception as e:
+            raise ToolExecutionError(
+                tool_name=self.name,
+                reason=f"场景选择失败: {str(e)}"
+            )
     
-    @property
-    def category(self) -> str:
-        return "generation"
-    
-    @property
-    def parameters(self) -> List[ToolParameter]:
+    def _initialize_scenario_templates(self) -> List[Dict[str, Any]]:
+        """初始化预定义的场景模板"""
         return [
-            ToolParameter(
-                name="schema_info",
-                type="object",
-                description="数据库结构信息",
-                required=True
-            ),
-            ToolParameter(
-                name="domain_info",
-                type="object",
-                description="业务领域信息",
-                required=False,
-                default={}
-            ),
-            ToolParameter(
-                name="count",
-                type="integer",
-                description="生成场景数量",
-                required=False,
-                default=10
-            ),
-            ToolParameter(
-                name="difficulty",
-                type="string",
-                description="指定难度级别",
-                required=False,
-                enum=["easy", "medium", "hard", "mixed"]
-            )
+            # 电商领域场景
+            {
+                "id": "ecom_sales_daily",
+                "domain": "电商",
+                "category": "销售分析",
+                "business_purpose": "统计每日销售情况",
+                "required_tables": ["order"],
+                "optional_tables": ["product", "customer"],
+                "complexity": DifficultyLevel.EASY,
+                "suggested_operations": [SQLOperation.SELECT, SQLOperation.GROUP],
+                "description": "统计指定日期范围内的销售额、订单数等基础指标"
+            },
+            {
+                "id": "ecom_top_products",
+                "domain": "电商",
+                "category": "产品分析",
+                "business_purpose": "查找热销商品",
+                "required_tables": ["order", "product"],
+                "optional_tables": ["category"],
+                "complexity": DifficultyLevel.MEDIUM,
+                "suggested_operations": [SQLOperation.SELECT, SQLOperation.JOIN, SQLOperation.GROUP],
+                "description": "分析销量最高的商品，包含商品信息和销售数据"
+            },
+            {
+                "id": "ecom_customer_value",
+                "domain": "电商",
+                "category": "客户分析",
+                "business_purpose": "客户价值分析",
+                "required_tables": ["order", "customer"],
+                "optional_tables": ["payment"],
+                "complexity": DifficultyLevel.HARD,
+                "suggested_operations": [SQLOperation.SELECT, SQLOperation.JOIN, SQLOperation.GROUP, SQLOperation.WINDOW],
+                "description": "计算客户生命周期价值，识别高价值客户"
+            },
+            
+            # 金融领域场景
+            {
+                "id": "fin_account_balance",
+                "domain": "金融",
+                "category": "账户分析",
+                "business_purpose": "账户余额查询",
+                "required_tables": ["account"],
+                "optional_tables": ["transaction"],
+                "complexity": DifficultyLevel.EASY,
+                "suggested_operations": [SQLOperation.SELECT],
+                "description": "查询账户当前余额和基本信息"
+            },
+            {
+                "id": "fin_transaction_summary",
+                "domain": "金融",
+                "category": "交易分析",
+                "business_purpose": "交易汇总统计",
+                "required_tables": ["transaction"],
+                "optional_tables": ["account"],
+                "complexity": DifficultyLevel.MEDIUM,
+                "suggested_operations": [SQLOperation.SELECT, SQLOperation.GROUP],
+                "description": "按时间、类型等维度统计交易数据"
+            },
+            
+            # 通用场景
+            {
+                "id": "gen_data_overview",
+                "domain": "通用",
+                "category": "数据统计",
+                "business_purpose": "数据概览",
+                "required_tables": [],
+                "optional_tables": [],
+                "complexity": DifficultyLevel.EASY,
+                "suggested_operations": [SQLOperation.SELECT],
+                "description": "统计表的记录数、数据分布等基础信息"
+            },
+            {
+                "id": "gen_date_analysis",
+                "domain": "通用",
+                "category": "时间分析",
+                "business_purpose": "时间序列分析",
+                "required_tables": [],
+                "optional_tables": [],
+                "complexity": DifficultyLevel.MEDIUM,
+                "suggested_operations": [SQLOperation.SELECT, SQLOperation.GROUP],
+                "description": "按时间维度分析数据变化趋势"
+            },
+            {
+                "id": "gen_join_analysis",
+                "domain": "通用",
+                "category": "关联分析",
+                "business_purpose": "多表关联查询",
+                "required_tables": [],
+                "optional_tables": [],
+                "complexity": DifficultyLevel.MEDIUM,
+                "suggested_operations": [SQLOperation.SELECT, SQLOperation.JOIN],
+                "description": "通过关联多个表获取综合信息"
+            },
+            {
+                "id": "gen_complex_analysis",
+                "domain": "通用",
+                "category": "复杂分析",
+                "business_purpose": "高级数据分析",
+                "required_tables": [],
+                "optional_tables": [],
+                "complexity": DifficultyLevel.EXPERT,
+                "suggested_operations": [SQLOperation.SELECT, SQLOperation.JOIN, SQLOperation.SUBQUERY, SQLOperation.WINDOW],
+                "description": "使用子查询、窗口函数等高级特性进行复杂分析"
+            }
         ]
     
-    def _execute(self, schema_info: Dict[str, Any], domain_info: Dict[str, Any] = None, 
-                 count: int = 10, difficulty: str = "mixed") -> List[QueryScenario]:
-        """
-        生成查询场景
+    def _filter_applicable_scenarios(
+        self, 
+        tables: List[str], 
+        domain: str
+    ) -> List[Dict[str, Any]]:
+        """筛选适用的场景"""
+        applicable = []
+        table_names_lower = [t.lower() for t in tables]
         
-        Args:
-            schema_info: 数据库结构信息
-            domain_info: 业务领域信息
-            count: 生成数量
-            difficulty: 难度级别
+        for template in self.scenario_templates:
+            # 检查领域匹配
+            if template["domain"] != "通用" and template["domain"] != domain:
+                continue
             
-        Returns:
-            场景列表
-        """
-        scenarios = []
-        tables = schema_info.get("tables", {})
-        
-        if not tables:
-            raise ValueError("No tables found in schema info")
-        
-        # 根据表结构生成场景模板
-        scenario_templates = self._create_scenario_templates(tables, domain_info)
-        
-        # 根据难度分布生成场景
-        for i in range(count):
-            # 确定难度
-            if difficulty == "mixed":
-                scenario_difficulty = self._select_difficulty()
-            else:
-                scenario_difficulty = DifficultyLevel[difficulty.upper()]
+            # 检查必需表
+            required_tables = template.get("required_tables", [])
+            if required_tables:
+                # 检查是否包含所有必需表（模糊匹配）
+                all_found = True
+                for req_table in required_tables:
+                    found = any(
+                        req_table.lower() in table_name 
+                        for table_name in table_names_lower
+                    )
+                    if not found:
+                        all_found = False
+                        break
+                
+                if not all_found:
+                    continue
             
-            # 选择合适的模板
-            template = self._select_template(scenario_templates, scenario_difficulty)
-            
-            # 生成场景
-            scenario = self._generate_scenario_from_template(
-                template, 
-                tables,
-                scenario_difficulty
-            )
-            scenarios.append(scenario)
+            applicable.append(template)
         
-        return scenarios
+        return applicable
     
-    def _create_scenario_templates(self, tables: Dict[str, Any], 
-                                  domain_info: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """创建场景模板"""
-        templates = []
-        table_names = list(tables.keys())
+    def _create_scenario_from_template(
+        self, 
+        template: Dict[str, Any],
+        tables: List[str],
+        iteration: int
+    ) -> QueryScenario:
+        """从模板创建场景实例"""
+        # 确定适用的表
+        applicable_tables = []
+        table_names_lower = [t.lower() for t in tables]
         
-        # 基础查询模板
-        for table in table_names:
-            templates.append({
-                "type": "basic_select",
-                "category": self._infer_category(table),
-                "tables": [table],
-                "operations": [SQLOperation.SELECT],
-                "business_purpose": f"查询{self._get_table_alias(table)}基本信息"
-            })
+        # 添加必需表
+        for req_table in template.get("required_tables", []):
+            for i, table_name in enumerate(table_names_lower):
+                if req_table.lower() in table_name:
+                    applicable_tables.append(tables[i])
+                    break
         
-        # 关联查询模板
-        relationships = self._find_relationships(tables)
-        for rel in relationships:
-            templates.append({
-                "type": "join_query",
-                "category": self._infer_category(rel["from_table"]),
-                "tables": [rel["from_table"], rel["to_table"]],
-                "operations": [SQLOperation.JOIN],
-                "business_purpose": f"关联查询{self._get_table_alias(rel['from_table'])}和{self._get_table_alias(rel['to_table'])}"
-            })
+        # 添加一些可选表
+        optional_tables = template.get("optional_tables", [])
+        for opt_table in optional_tables[:2]:  # 最多添加2个可选表
+            for i, table_name in enumerate(table_names_lower):
+                if opt_table.lower() in table_name and tables[i] not in applicable_tables:
+                    applicable_tables.append(tables[i])
+                    break
         
-        # 聚合查询模板
-        for table in table_names:
-            if self._has_numeric_columns(tables[table]):
-                templates.append({
-                    "type": "aggregation",
-                    "category": self._infer_category(table),
-                    "tables": [table],
-                    "operations": [SQLOperation.GROUP],
-                    "business_purpose": f"统计分析{self._get_table_alias(table)}数据"
-                })
+        # 如果没有找到特定表，随机选择一些
+        if not applicable_tables and tables:
+            num_tables = min(3, len(tables))
+            applicable_tables = random.sample(tables, num_tables)
         
-        # 复杂查询模板
-        if len(table_names) >= 2:
-            templates.append({
-                "type": "complex_query",
-                "category": "综合分析",
-                "tables": random.sample(table_names, min(3, len(table_names))),
-                "operations": [SQLOperation.SUBQUERY, SQLOperation.JOIN],
-                "business_purpose": "多表综合分析"
-            })
-        
-        return templates
-    
-    def _select_difficulty(self) -> DifficultyLevel:
-        """根据分布选择难度"""
-        rand = random.random()
-        cumulative = 0
-        
-        for level, prob in self.difficulty_distribution.items():
-            cumulative += prob
-            if rand <= cumulative:
-                return DifficultyLevel[level.upper()]
-        
-        return DifficultyLevel.MEDIUM
-    
-    def _select_template(self, templates: List[Dict[str, Any]], 
-                        difficulty: DifficultyLevel) -> Dict[str, Any]:
-        """根据难度选择模板"""
-        # 根据难度过滤模板
-        if difficulty == DifficultyLevel.EASY:
-            filtered = [t for t in templates if t["type"] == "basic_select"]
-        elif difficulty == DifficultyLevel.MEDIUM:
-            filtered = [t for t in templates if t["type"] in ["join_query", "aggregation"]]
-        else:  # HARD
-            filtered = [t for t in templates if t["type"] == "complex_query"]
-        
-        if not filtered:
-            filtered = templates
-        
-        return random.choice(filtered)
-    
-    def _generate_scenario_from_template(self, template: Dict[str, Any],
-                                        tables: Dict[str, Any],
-                                        difficulty: DifficultyLevel) -> QueryScenario:
-        """从模板生成具体场景"""
+        # 创建场景
         scenario = QueryScenario(
             category=template["category"],
             business_purpose=template["business_purpose"],
-            complexity=difficulty,
-            applicable_tables=template["tables"],
-            required_operations=template["operations"]
-        )
-        
-        # 添加更详细的描述
-        scenario.description = self._generate_scenario_description(
-            template, 
-            tables,
-            difficulty
+            complexity=template["complexity"],
+            applicable_tables=applicable_tables,
+            suggested_operations=template["suggested_operations"],
+            description=f"{template['description']} (迭代 {iteration + 1})"
         )
         
         return scenario
     
-    def _generate_scenario_description(self, template: Dict[str, Any],
-                                      tables: Dict[str, Any],
-                                      difficulty: DifficultyLevel) -> str:
-        """生成场景描述"""
-        desc_parts = []
-        
-        # 基础描述
-        desc_parts.append(f"业务场景：{template['business_purpose']}")
-        desc_parts.append(f"涉及表：{', '.join(template['tables'])}")
-        desc_parts.append(f"难度级别：{difficulty.value}")
-        
-        # 根据类型添加特定描述
-        if template["type"] == "basic_select":
-            desc_parts.append("查询类型：基础单表查询，包含条件筛选")
-        elif template["type"] == "join_query":
-            desc_parts.append("查询类型：多表关联查询，需要JOIN操作")
-        elif template["type"] == "aggregation":
-            desc_parts.append("查询类型：聚合统计查询，使用GROUP BY和聚合函数")
-        elif template["type"] == "complex_query":
-            desc_parts.append("查询类型：复杂查询，可能包含子查询、多表关联等")
-        
-        return " | ".join(desc_parts)
-    
-    def _infer_category(self, table_name: str) -> str:
-        """推断业务类别"""
-        table_lower = table_name.lower()
-        
-        # 根据表名推断类别
-        category_keywords = {
-            "销售分析": ["order", "sale", "revenue"],
-            "客户分析": ["customer", "client", "user", "member"],
-            "产品分析": ["product", "item", "goods", "sku"],
-            "库存管理": ["inventory", "stock", "warehouse"],
-            "财务报表": ["payment", "invoice", "transaction", "finance"],
-            "员工管理": ["employee", "staff", "hr", "department"]
-        }
-        
-        for category, keywords in category_keywords.items():
-            if any(keyword in table_lower for keyword in keywords):
-                return category
-        
-        # 默认类别
-        return random.choice(self.scenario_categories)
-    
-    def _get_table_alias(self, table_name: str) -> str:
-        """获取表的中文别名"""
-        aliases = {
-            "user": "用户",
-            "customer": "客户",
-            "order": "订单",
-            "product": "产品",
-            "employee": "员工",
-            "department": "部门",
-            "payment": "支付",
-            "inventory": "库存"
-        }
-        
-        table_lower = table_name.lower()
-        for key, alias in aliases.items():
-            if key in table_lower:
-                return alias
-        
-        return table_name
-    
-    def _find_relationships(self, tables: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """查找表之间的关系"""
-        relationships = []
-        
-        for table_name, table_info in tables.items():
-            # 查找外键关系
-            for column in table_info.get("columns", []):
-                if column.get("is_foreign_key"):
-                    relationships.append({
-                        "from_table": table_name,
-                        "to_table": column.get("referenced_table", "unknown"),
-                        "join_column": column["name"]
-                    })
-        
-        return relationships
-    
-    def _has_numeric_columns(self, table_info: Dict[str, Any]) -> bool:
-        """检查表是否有数值列"""
-        numeric_types = ["int", "decimal", "float", "double", "numeric", "number"]
-        
-        for column in table_info.get("columns", []):
-            col_type = column.get("data_type", "").lower()
-            if any(num_type in col_type for num_type in numeric_types):
-                return True
-        
-        return False
+    async def _arun(self, memory: Dict[str, Any], iteration: int = 0) -> Dict[str, Any]:
+        """异步执行（当前实现为同步）"""
+        return self._run(memory, iteration)

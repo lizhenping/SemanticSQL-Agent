@@ -1,88 +1,81 @@
 """
 领域分析工具 - 分析数据库的业务领域
+基于 LangChain BaseTool
 """
 
-from typing import Dict, Any, List, Optional
-import re
+from typing import Dict, Any, Type, List
+from langchain.tools import BaseTool
+from pydantic import BaseModel, Field
 
-from tools.base_tool import BaseTool, ToolParameter
+from models.exceptions import ToolExecutionError
+
+
+class DomainAnalysisInput(BaseModel):
+    """领域分析输入"""
+    memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
 
 
 class DomainAnalysisTool(BaseTool):
     """业务领域分析工具"""
     
-    @property
-    def name(self) -> str:
-        return "domain_analysis"
+    name: str = "domain_analysis"
+    description: str = "分析数据库的业务领域，识别主要业务场景和数据特征"
+    args_schema: Type[BaseModel] = DomainAnalysisInput
     
-    @property
-    def description(self) -> str:
-        return "分析数据库的业务领域，识别主要业务场景"
-    
-    @property
-    def category(self) -> str:
-        return "analysis"
-    
-    @property
-    def parameters(self) -> List[ToolParameter]:
-        return [
-            ToolParameter(
-                name="schema_info",
-                type="object",
-                description="数据库结构信息",
-                required=True
-            ),
-            ToolParameter(
-                name="sample_data",
-                type="object",
-                description="各表的样本数据",
-                required=False,
-                default={}
+    def _run(self, memory: Dict[str, Any]) -> Dict[str, Any]:
+        """执行领域分析"""
+        try:
+            # 从记忆中获取schema信息
+            db_analysis = memory.get("db_analysis", {})
+            schema_info = db_analysis.get("schema_info", {})
+            
+            if not schema_info:
+                raise ToolExecutionError(
+                    tool_name=self.name,
+                    reason="未找到数据库结构信息，请先执行schema_extraction"
+                )
+            
+            result = {
+                "primary_domain": "",
+                "sub_domains": [],
+                "business_entities": {},
+                "business_processes": [],
+                "data_characteristics": {},
+                "domain_confidence": 0.0,
+                "recommendations": []
+            }
+            
+            tables = schema_info.get("tables", {})
+            
+            # 分析主要领域
+            domain_scores = self._analyze_domain_patterns(tables)
+            if domain_scores:
+                primary = max(domain_scores, key=domain_scores.get)
+                result["primary_domain"] = primary
+                result["domain_confidence"] = domain_scores[primary]
+                result["sub_domains"] = [d for d in domain_scores if d != primary][:3]
+            
+            # 识别业务实体
+            result["business_entities"] = self._identify_business_entities(tables)
+            
+            # 识别业务流程
+            result["business_processes"] = self._identify_business_processes(
+                tables, result["business_entities"]
             )
-        ]
-    
-    def _execute(self, schema_info: Dict[str, Any], 
-                 sample_data: Dict[str, List] = None) -> Dict[str, Any]:
-        """
-        执行领域分析
-        """
-        result = {
-            "primary_domain": "",
-            "sub_domains": [],
-            "business_entities": {},
-            "business_processes": [],
-            "data_characteristics": {},
-            "domain_confidence": 0.0,
-            "recommendations": []
-        }
-        
-        tables = schema_info.get("tables", {})
-        
-        # 分析主要领域
-        domain_scores = self._analyze_domain_patterns(tables)
-        if domain_scores:
-            primary = max(domain_scores, key=domain_scores.get)
-            result["primary_domain"] = primary
-            result["domain_confidence"] = domain_scores[primary]
-            result["sub_domains"] = [d for d in domain_scores if d != primary][:3]
-        
-        # 识别业务实体
-        result["business_entities"] = self._identify_business_entities(tables)
-        
-        # 识别业务流程
-        result["business_processes"] = self._identify_business_processes(
-            tables, result["business_entities"]
-        )
-        
-        # 分析数据特征
-        result["data_characteristics"] = self._analyze_data_characteristics(
-            tables, sample_data
-        )
-        
-        # 生成建议
-        result["recommendations"] = self._generate_domain_recommendations(result)
-        
-        return result
+            
+            # 分析数据特征
+            result["data_characteristics"] = self._analyze_data_characteristics(tables)
+            
+            # 生成建议
+            result["recommendations"] = self._generate_domain_recommendations(result)
+            
+            return result
+            
+        except Exception as e:
+            raise ToolExecutionError(
+                tool_name=self.name,
+                reason=f"领域分析失败: {str(e)}"
+            )
     
     def _analyze_domain_patterns(self, tables: Dict[str, Any]) -> Dict[str, float]:
         """分析领域模式"""
@@ -99,253 +92,200 @@ class DomainAnalysisTool(BaseTool):
             "内容管理": ["article", "page", "category", "tag", "media", "content", "publish"]
         }
         
-        scores = {}
+        domain_scores = {}
         table_names = [name.lower() for name in tables.keys()]
         all_columns = []
-        for table_info in tables.values():
-            all_columns.extend([col["name"].lower() for col in table_info.get("columns", [])])
         
+        # 收集所有列名
+        for table_info in tables.values():
+            columns = table_info.get("columns", [])
+            all_columns.extend([col["name"].lower() for col in columns])
+        
+        # 计算每个领域的匹配分数
         for domain, keywords in domain_patterns.items():
-            score = 0
-            matches = 0
+            score = 0.0
+            matched_keywords = 0
             
             for keyword in keywords:
                 # 检查表名
-                for table_name in table_names:
-                    if keyword in table_name:
-                        score += 2
-                        matches += 1
-                
+                table_matches = sum(1 for t in table_names if keyword in t)
                 # 检查列名
-                for column in all_columns:
-                    if keyword in column:
-                        score += 1
-                        matches += 1
+                column_matches = sum(1 for c in all_columns if keyword in c)
+                
+                if table_matches > 0 or column_matches > 0:
+                    matched_keywords += 1
+                    score += table_matches * 2 + column_matches  # 表名权重更高
             
-            if matches > 0:
+            if matched_keywords > 0:
                 # 归一化分数
-                scores[domain] = min(score / len(keywords) * 100, 100)
+                domain_scores[domain] = score / (len(keywords) * len(tables))
         
-        return scores
+        return domain_scores
     
-    def _identify_business_entities(self, tables: Dict[str, Any]) -> Dict[str, Dict]:
+    def _identify_business_entities(self, tables: Dict[str, Any]) -> Dict[str, List[str]]:
         """识别业务实体"""
-        entities = {}
+        entities = {
+            "核心实体": [],
+            "关联实体": [],
+            "配置实体": [],
+            "日志实体": []
+        }
         
         for table_name, table_info in tables.items():
-            entity_type = self._classify_business_entity(table_name, table_info)
+            columns = table_info.get("columns", [])
+            column_names = [col["name"].lower() for col in columns]
             
-            if entity_type != "unknown":
-                entities[table_name] = {
-                    "type": entity_type,
-                    "attributes": [col["name"] for col in table_info.get("columns", [])],
-                    "key_field": self._find_key_field(table_info),
-                    "relationships": len(table_info.get("foreign_keys", [])),
-                    "importance": self._calculate_importance(table_info)
-                }
+            # 判断实体类型
+            has_id = any("id" in col for col in column_names)
+            has_timestamps = any(
+                any(ts in col for ts in ["created", "updated", "time"])
+                for col in column_names
+            )
+            has_status = any("status" in col or "state" in col for col in column_names)
+            
+            # 核心实体：有ID、时间戳和状态
+            if has_id and has_timestamps and has_status:
+                entities["核心实体"].append(table_name)
+            # 关联实体：多对多关系表
+            elif table_name.count("_") >= 2 or any(
+                kw in table_name.lower() for kw in ["_to_", "_map", "_rel"]
+            ):
+                entities["关联实体"].append(table_name)
+            # 配置实体
+            elif any(
+                cfg in table_name.lower() 
+                for cfg in ["config", "setting", "parameter", "option"]
+            ):
+                entities["配置实体"].append(table_name)
+            # 日志实体
+            elif any(
+                log in table_name.lower() 
+                for log in ["log", "history", "audit", "track"]
+            ):
+                entities["日志实体"].append(table_name)
+            # 其他有ID的作为核心实体
+            elif has_id:
+                entities["核心实体"].append(table_name)
         
         return entities
     
-    def _classify_business_entity(self, table_name: str, table_info: Dict) -> str:
-        """分类业务实体"""
-        name_lower = table_name.lower()
-        
-        # 核心业务实体
-        if any(word in name_lower for word in ["user", "customer", "member", "client"]):
-            return "actor"
-        elif any(word in name_lower for word in ["product", "item", "service", "goods"]):
-            return "product"
-        elif any(word in name_lower for word in ["order", "transaction", "purchase", "sale"]):
-            return "transaction"
-        elif any(word in name_lower for word in ["payment", "invoice", "receipt", "bill"]):
-            return "financial"
-        
-        # 辅助实体
-        elif any(word in name_lower for word in ["category", "type", "status", "config"]):
-            return "reference"
-        elif any(word in name_lower for word in ["log", "history", "audit", "track"]):
-            return "audit"
-        elif "_" in name_lower and any(word in name_lower for word in ["map", "rel", "link"]):
-            return "relationship"
-        
-        return "entity"
-    
-    def _find_key_field(self, table_info: Dict) -> Optional[str]:
-        """查找主键字段"""
-        for col in table_info.get("columns", []):
-            if col.get("is_primary"):
-                return col["name"]
-        return None
-    
-    def _calculate_importance(self, table_info: Dict) -> float:
-        """计算实体重要性"""
-        score = 0.0
-        
-        # 有主键更重要
-        if any(col.get("is_primary") for col in table_info.get("columns", [])):
-            score += 3
-        
-        # 外键关系
-        score += len(table_info.get("foreign_keys", [])) * 2
-        
-        # 字段数量
-        score += min(len(table_info.get("columns", [])) * 0.5, 5)
-        
-        # 索引
-        score += len(table_info.get("indexes", [])) * 0.5
-        
-        return min(score, 10)
-    
-    def _identify_business_processes(self, tables: Dict[str, Any],
-                                    entities: Dict[str, Dict]) -> List[Dict]:
+    def _identify_business_processes(
+        self, 
+        tables: Dict[str, Any], 
+        entities: Dict[str, List[str]]
+    ) -> List[str]:
         """识别业务流程"""
         processes = []
+        table_names = list(tables.keys())
         
-        # 查找事务性表
-        transaction_tables = [
-            name for name, entity in entities.items()
-            if entity["type"] in ["transaction", "financial"]
-        ]
+        # 基于表名模式识别流程
+        process_patterns = {
+            "订单流程": ["order", "payment", "delivery", "refund"],
+            "用户管理": ["user", "role", "permission", "auth"],
+            "库存管理": ["inventory", "stock", "purchase", "supplier"],
+            "内容发布": ["content", "article", "publish", "review"],
+            "财务流程": ["invoice", "payment", "billing", "accounting"],
+            "客户服务": ["ticket", "support", "feedback", "complaint"]
+        }
         
-        for trans_table in transaction_tables:
-            process = {
-                "name": self._infer_process_name(trans_table),
-                "main_entity": trans_table,
-                "participants": self._find_process_participants(
-                    trans_table, tables[trans_table], entities
-                ),
-                "type": self._classify_process_type(trans_table),
-                "complexity": "simple"
-            }
+        for process_name, keywords in process_patterns.items():
+            matching_tables = []
+            for keyword in keywords:
+                matching_tables.extend([
+                    t for t in table_names 
+                    if keyword in t.lower()
+                ])
             
-            # 评估复杂度
-            if len(process["participants"]) > 3:
-                process["complexity"] = "complex"
-            elif len(process["participants"]) > 1:
-                process["complexity"] = "moderate"
-            
-            processes.append(process)
+            if len(matching_tables) >= 2:  # 至少匹配2个相关表
+                processes.append(process_name)
         
         return processes
     
-    def _infer_process_name(self, table_name: str) -> str:
-        """推断流程名称"""
-        name_lower = table_name.lower()
-        
-        if "order" in name_lower:
-            return "订单处理流程"
-        elif "payment" in name_lower:
-            return "支付流程"
-        elif "delivery" in name_lower or "shipment" in name_lower:
-            return "配送流程"
-        elif "registration" in name_lower or "signup" in name_lower:
-            return "注册流程"
-        elif "transaction" in name_lower:
-            return "交易流程"
-        else:
-            return f"{table_name}流程"
-    
-    def _find_process_participants(self, table_name: str, table_info: Dict,
-                                  entities: Dict[str, Dict]) -> List[str]:
-        """查找流程参与者"""
-        participants = []
-        
-        # 通过外键找相关实体
-        for fk in table_info.get("foreign_keys", []):
-            ref_table = fk.get("referenced_table")
-            if ref_table and ref_table in entities:
-                participants.append(ref_table)
-        
-        return participants
-    
-    def _classify_process_type(self, table_name: str) -> str:
-        """分类流程类型"""
-        name_lower = table_name.lower()
-        
-        if any(word in name_lower for word in ["order", "purchase", "sale"]):
-            return "transactional"
-        elif any(word in name_lower for word in ["payment", "invoice", "bill"]):
-            return "financial"
-        elif any(word in name_lower for word in ["delivery", "shipment"]):
-            return "logistical"
-        elif any(word in name_lower for word in ["registration", "enrollment"]):
-            return "onboarding"
-        else:
-            return "operational"
-    
-    def _analyze_data_characteristics(self, tables: Dict[str, Any],
-                                     sample_data: Dict[str, List] = None) -> Dict:
+    def _analyze_data_characteristics(self, tables: Dict[str, Any]) -> Dict[str, Any]:
         """分析数据特征"""
         characteristics = {
-            "table_count": len(tables),
-            "total_columns": sum(len(t.get("columns", [])) for t in tables.values()),
+            "total_tables": len(tables),
+            "total_columns": 0,
+            "avg_columns_per_table": 0,
             "has_timestamps": False,
             "has_soft_delete": False,
             "has_versioning": False,
-            "has_multi_tenant": False,
             "common_patterns": []
         }
         
-        # 检查时间戳字段
-        timestamp_patterns = ["created", "updated", "modified", "_at", "_time"]
-        soft_delete_patterns = ["deleted", "is_active", "status"]
-        version_patterns = ["version", "revision", "_v"]
-        tenant_patterns = ["tenant", "org", "company", "client_id"]
+        total_columns = 0
+        timestamp_tables = 0
+        soft_delete_tables = 0
+        version_tables = 0
         
         for table_info in tables.values():
-            columns = [col["name"].lower() for col in table_info.get("columns", [])]
+            columns = table_info.get("columns", [])
+            total_columns += len(columns)
             
-            # 检查模式
-            if any(any(pattern in col for pattern in timestamp_patterns) for col in columns):
-                characteristics["has_timestamps"] = True
+            column_names = [col["name"].lower() for col in columns]
             
-            if any(any(pattern in col for pattern in soft_delete_patterns) for col in columns):
-                characteristics["has_soft_delete"] = True
+            # 检查时间戳
+            if any("created" in col or "updated" in col for col in column_names):
+                timestamp_tables += 1
             
-            if any(any(pattern in col for pattern in version_patterns) for col in columns):
-                characteristics["has_versioning"] = True
+            # 检查软删除
+            if any(
+                col in column_names 
+                for col in ["deleted_at", "is_deleted", "deleted"]
+            ):
+                soft_delete_tables += 1
             
-            if any(any(pattern in col for pattern in tenant_patterns) for col in columns):
-                characteristics["has_multi_tenant"] = True
+            # 检查版本控制
+            if any("version" in col for col in column_names):
+                version_tables += 1
         
-        # 识别通用模式
+        characteristics["total_columns"] = total_columns
+        characteristics["avg_columns_per_table"] = (
+            total_columns / len(tables) if tables else 0
+        )
+        characteristics["has_timestamps"] = timestamp_tables > len(tables) * 0.5
+        characteristics["has_soft_delete"] = soft_delete_tables > 0
+        characteristics["has_versioning"] = version_tables > 0
+        
+        # 识别常见模式
         if characteristics["has_timestamps"]:
-            characteristics["common_patterns"].append("审计追踪")
+            characteristics["common_patterns"].append("时间戳审计")
         if characteristics["has_soft_delete"]:
             characteristics["common_patterns"].append("软删除")
         if characteristics["has_versioning"]:
             characteristics["common_patterns"].append("版本控制")
-        if characteristics["has_multi_tenant"]:
-            characteristics["common_patterns"].append("多租户")
         
         return characteristics
     
-    def _generate_domain_recommendations(self, analysis_result: Dict) -> List[str]:
+    def _generate_domain_recommendations(self, analysis: Dict[str, Any]) -> List[str]:
         """生成领域相关建议"""
         recommendations = []
         
+        domain = analysis.get("primary_domain", "")
+        entities = analysis.get("business_entities", {})
+        processes = analysis.get("business_processes", [])
+        
         # 基于领域的建议
-        domain = analysis_result.get("primary_domain", "")
         if domain == "电商":
-            recommendations.append("建议添加库存管理、促销活动等电商核心功能表")
+            recommendations.append("关注订单、商品、库存相关的查询")
+            recommendations.append("考虑销售统计、库存预警等场景")
         elif domain == "金融":
-            recommendations.append("建议加强数据加密和审计日志功能")
-        elif domain == "社交":
-            recommendations.append("建议优化用户关系表和消息表的索引")
+            recommendations.append("重点关注交易、账户余额相关查询")
+            recommendations.append("注意数据精度和事务一致性")
         
-        # 基于数据特征的建议
-        characteristics = analysis_result.get("data_characteristics", {})
-        if not characteristics.get("has_timestamps"):
-            recommendations.append("建议为主要表添加created_at和updated_at时间戳字段")
+        # 基于实体的建议
+        if len(entities.get("核心实体", [])) > 10:
+            recommendations.append("系统较复杂，建议分模块生成查询")
         
-        if not characteristics.get("has_soft_delete"):
-            recommendations.append("考虑实现软删除机制以保留历史数据")
+        if entities.get("日志实体"):
+            recommendations.append("可以生成日志分析和审计相关的查询")
         
-        # 基于业务实体的建议
-        entities = analysis_result.get("business_entities", {})
-        if len(entities) < 5:
-            recommendations.append("数据模型较简单，考虑是否需要扩展业务实体")
-        elif len(entities) > 20:
-            recommendations.append("数据模型较复杂，建议进行模块化设计")
+        # 基于流程的建议
+        if "订单流程" in processes:
+            recommendations.append("生成订单全流程跟踪的查询")
         
         return recommendations
+    
+    async def _arun(self, memory: Dict[str, Any]) -> Dict[str, Any]:
+        """异步执行（当前实现为同步）"""
+        return self._run(memory)
