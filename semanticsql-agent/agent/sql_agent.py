@@ -9,7 +9,7 @@ import logging
 from datetime import datetime
 
 from langchain.tools import BaseTool
-from langchain.memory import BaseMemory
+# Memory is handled by custom DatabaseAnalysisMemory
 from langchain.callbacks.base import BaseCallbackHandler
 
 from agent.base_agent import BaseAgent
@@ -105,7 +105,7 @@ class SQLAgent(BaseAgent):
         self.logger.info(f"Initialized {len(tools)} tools")
         return tools
     
-    def _initialize_memory(self) -> BaseMemory:
+    def _initialize_memory(self) -> DatabaseAnalysisMemory:
         """初始化记忆系统"""
         return DatabaseAnalysisMemory()
     

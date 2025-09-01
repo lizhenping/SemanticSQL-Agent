@@ -9,7 +9,8 @@ from datetime import datetime
 from uuid import UUID
 
 from langchain.callbacks.base import BaseCallbackHandler
-from langchain.schema import AgentAction, AgentFinish, LLMResult
+from langchain_core.agents import AgentAction, AgentFinish
+from langchain_core.outputs import LLMResult
 
 from models.schemas import AgentExecution, AgentStep, AgentStepType
 from utils.trajectory import TrajectoryRecorder

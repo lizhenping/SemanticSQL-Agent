@@ -11,7 +11,7 @@ from langchain.agents import AgentExecutor, create_react_agent
 from langchain.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from langchain.tools import BaseTool
-from langchain.memory import BaseMemory
+# Memory is handled by custom DatabaseAnalysisMemory
 
 from config.settings import Settings
 from config.database import DatabaseConfig
@@ -59,7 +59,7 @@ class BaseAgent(ABC):
         pass
     
     @abstractmethod
-    def _initialize_memory(self) -> BaseMemory:
+    def _initialize_memory(self) -> Any:
         """初始化记忆系统"""
         pass
     
@@ -113,7 +113,6 @@ Begin!"""),
         return AgentExecutor(
             agent=agent,
             tools=self.tools,
-            memory=self.memory,
             verbose=True,
             max_iterations=self.settings.max_steps,
             handle_parsing_errors=True,
@@ -135,10 +134,19 @@ Begin!"""),
         try:
             # 执行任务
             self.logger.info(f"Starting task: {task}")
-            result = self.agent_executor.invoke({
+            
+            # 准备输入，包含记忆内容
+            agent_input = {
                 "input": task,
                 **kwargs
-            })
+            }
+            
+            # 如果有记忆系统，添加记忆内容
+            if hasattr(self, 'memory') and self.memory:
+                memory_vars = self.memory.load_memory_variables({})
+                agent_input.update(memory_vars)
+            
+            result = self.agent_executor.invoke(agent_input)
             
             # 更新执行状态
             execution.status = "completed"
@@ -179,7 +187,9 @@ Begin!"""),
     
     def get_memory_state(self) -> Dict[str, Any]:
         """获取当前记忆状态"""
-        return self.memory.load_memory_variables({})
+        if hasattr(self, 'memory') and self.memory:
+            return self.memory.load_memory_variables({})
+        return {}
     
     def clear_memory(self):
         """清空记忆"""

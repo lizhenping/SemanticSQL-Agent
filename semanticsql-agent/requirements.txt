@@ -1,9 +1,10 @@
 # SemanticSQL Agent Requirements
 
 # Core dependencies
-langchain==0.2.16
-langchain-openai==0.1.25
-langchain-community==0.2.16
+langchain>=0.2.0,<0.3.0
+langchain-core>=0.2.0,<0.3.0
+langchain-openai>=0.1.0,<0.2.0
+langchain-community>=0.2.0,<0.3.0
 
 # Database
 sqlalchemy>=1.4.0
