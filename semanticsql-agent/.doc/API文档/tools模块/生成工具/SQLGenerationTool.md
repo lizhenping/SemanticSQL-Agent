@@ -58,18 +58,14 @@ args_schema = InputSchema
 def _run(
     self,
     question: str,
-    schema_info: Dict[str, Any],
-    context: Optional[Dict[str, Any]] = None,
-    sql_type: Optional[str] = None
+    memory: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
     生成 SQL 查询
     
     Args:
         question: 自然语言问题
-        schema_info: 数据库结构信息（从记忆中获取）
-        context: 额外上下文（领域信息、示例等）
-        sql_type: 期望的 SQL 类型
+        memory: 完整的数据库分析记忆（包含schema_info, er_analysis, domain_analysis等）
     
     Returns:
         Dict[str, Any]: 生成结果

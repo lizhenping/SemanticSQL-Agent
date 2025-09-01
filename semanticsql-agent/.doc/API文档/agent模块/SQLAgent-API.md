@@ -104,6 +104,44 @@ def _analyze_database(self) -> None:
     """
 ```
 
+### generate_questions
+
+```python
+def generate_questions(self, count: int, output_file: str) -> Dict[str, Any]:
+    """
+    生成指定数量的问题-SQL对
+    
+    基于预定义场景模板，循环生成自然语言问题和对应的SQL。
+    
+    Args:
+        count: 要生成的问题数量
+        output_file: 输出文件路径（JSON/JSONL格式）
+    
+    Returns:
+        Dict[str, Any]: 生成结果统计
+        
+    Return Format:
+        ```python
+        {
+            "total_generated": 100,
+            "successful": 95,
+            "failed": 5,
+            "scenarios_used": ["销售分析", "库存查询", "客户统计"],
+            "time_elapsed": 120.5
+        }
+        ```
+    
+    Example:
+        ```python
+        result = agent.generate_questions(
+            count=100,
+            output_file="training_data.jsonl"
+        )
+        print(f"Generated: {result['successful']} questions")
+        ```
+    """
+```
+
 ## 辅助方法
 
 ```python

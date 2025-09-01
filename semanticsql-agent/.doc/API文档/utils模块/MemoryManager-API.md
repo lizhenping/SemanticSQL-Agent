@@ -191,35 +191,64 @@ def clear(self, analysis_types: Optional[List[str]] = None) -> None:
 
 ```python
 {
-    "schema_info": {
-        "database": "ecommerce",
-        "tables": {...},
-        "relationships": [...]
-    },
-    "domain_analysis": {
-        "domain": "电商",
-        "sub_domains": ["订单管理", "库存管理"],
-        "key_entities": ["订单", "产品", "客户"]
-    },
-    "field_classification": {
-        "classifications": {...},
-        "field_types": {...}
-    },
-    "column_meanings": {
-        "table.column": {
-            "business_meaning": "...",
-            "usage_scenarios": [...]
+    "db_analysis": {
+        "schema_info": {
+            "database": "ecommerce",
+            "tables": {
+                "orders": {
+                    "columns": [...],
+                    "indexes": [...],
+                    "foreign_keys": [...]
+                }
+            }
+        },
+        "domain_analysis": {
+            "domain": "电商",
+            "sub_domains": ["订单管理", "库存管理"],
+            "key_entities": ["订单", "产品", "客户"],
+            "business_processes": ["下单", "支付", "发货"],
+            "industry_terms": {...}
+        },
+        "field_classification": {
+            "classifications": {
+                "orders": {
+                    "order_id": {"type": "identifier", "business_type": "订单编号"},
+                    "total_amount": {"type": "measure", "business_type": "订单金额"}
+                }
+            },
+            "field_types": {
+                "identifier": ["order_id", "customer_id"],
+                "measure": ["total_amount", "price"]
+            }
+        },
+        "column_meanings": {
+            "orders.total_amount": {
+                "business_meaning": "订单总金额，包含税费",
+                "calculation_logic": "商品总价 + 运费 + 税费 - 折扣",
+                "usage_scenarios": ["销售统计", "财务报表"]
+            }
+        },
+        "table_meanings": {
+            "orders": {
+                "business_purpose": "存储客户订单信息",
+                "data_lifecycle": "创建 -> 支付 -> 发货 -> 完成",
+                "key_operations": ["创建订单", "更新状态", "查询历史"]
+            }
+        },
+        "er_analysis": {
+            "relationships": [
+                {
+                    "from_table": "orders",
+                    "to_table": "customers",
+                    "type": "many_to_one",
+                    "from_column": "customer_id",
+                    "to_column": "customer_id"
+                }
+            ],
+            "entities": {
+                "orders": {"type": "transactional", "key": "order_id"}
+            }
         }
-    },
-    "table_meanings": {
-        "table_name": {
-            "business_purpose": "...",
-            "key_operations": [...]
-        }
-    },
-    "er_analysis": {
-        "relationships": [...],
-        "entities": {...}
     }
 }
 ```

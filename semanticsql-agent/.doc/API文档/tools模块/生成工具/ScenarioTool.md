@@ -39,16 +39,14 @@ def __init__(self):
 ```python
 def _run(
     self,
-    schema_info: Dict[str, Any],
-    domain_info: Dict[str, Any],
+    memory: Dict[str, Any],
     iteration: int = 0
 ) -> Dict[str, Any]:
     """
     选择一个查询场景
     
     Args:
-        schema_info: 数据库结构信息
-        domain_info: 领域分析结果
+        memory: 数据库分析记忆（使用 schema_info 和 domain_analysis）
         iteration: 当前迭代次数，用于场景轮转
     
     Returns:
@@ -110,9 +108,8 @@ tool = ScenarioTool()
 for i in range(100):  # 生成100个问题
     # 选择一个场景
     scenario = tool.run({
-        "schema_info": schema_info,
-        "domain_info": {"domain": "电商"},
-        "iteration": i  # 用于场景轮转
+        "memory": memory,  # 传入完整的记忆
+        "iteration": i     # 用于场景轮转
     })
     
     print(f"选中场景: {scenario['description']}")

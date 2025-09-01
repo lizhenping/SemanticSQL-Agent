@@ -40,14 +40,14 @@ def __init__(self):
 def _run(
     self,
     scenario: Dict[str, Any],
-    schema_info: Dict[str, Any]
+    memory: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
     选择 SQL 操作
     
     Args:
         scenario: 查询场景
-        schema_info: 数据库结构信息
+        memory: 数据库分析记忆（主要使用 schema_info）
     
     Returns:
         Dict[str, Any]: 选择的操作组合
@@ -152,7 +152,7 @@ scenario = {
 
 operations = tool.run({
     "scenario": scenario,
-    "schema_info": schema_info
+    "memory": memory  # 使用记忆中的schema_info
 })
 
 print(f"选择的操作: {operations['operations']}")
