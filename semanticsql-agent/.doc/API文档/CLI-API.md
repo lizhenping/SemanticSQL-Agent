@@ -19,6 +19,33 @@ def cli():
 
 ## 核心命令
 
+### generate
+
+```python
+@cli.command()
+@click.option('--count', '-c', required=True, type=int, help='生成数量')
+@click.option('--output', '-o', required=True, help='输出文件路径')
+@click.option('--host', '-h', default='localhost', help='数据库主机')
+@click.option('--port', '-p', default=3306, help='数据库端口')
+@click.option('--database', '-d', required=True, help='数据库名称')
+@click.option('--user', '-u', required=True, help='数据库用户名')
+@click.option('--password', '-P', prompt=True, hide_input=True, help='数据库密码')
+@click.option('--verbose', '-v', is_flag=True, help='显示详细信息')
+def generate(count, output, host, port, database, user, password, verbose):
+    """
+    批量生成训练数据
+    
+    Example:
+        ```bash
+        # 生成100条训练数据
+        semanticsql generate -c 100 -o training_data.jsonl -d ecommerce -u root
+        
+        # 详细模式
+        semanticsql generate -c 50 -o data.json -d ecommerce -u root -v
+        ```
+    """
+```
+
 ### analyze
 
 ```python

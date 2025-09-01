@@ -353,7 +353,7 @@ new_sql = sql_generation(
 | 工具类别 | 工具名称 | 执行次数 | 使用时机 | 说明 |
 |---------|---------|---------|---------|------|
 | 分析工具 | extract_schema<br>domain_analysis<br>field_classification<br>column_meaning<br>table_meaning<br>er_analysis | 初始一次 | 任务开始时 | 结果保存在记忆中，必要时可重新执行 |
-| 生成工具 | scenario_generation | 每个问题一次 | 从预定义模板选择场景 | 基于问题数量循环调用 |
+| 生成工具 | scenario_tool | 每个问题一次 | 从预定义模板选择场景 | 基于问题数量循环调用 |
 | 生成工具 | operation_selection | 每场景一次 | 为每个场景选择SQL操作 | 根据场景复杂度选择 |
 | 生成工具 | question_generation<br>sql_generation | 每场景多次 | 基于场景和操作生成 | 可能因反思而重新生成 |
 | 验证工具 | sql_validation<br>sql_execution | 每SQL一次 | 每个SQL必须验证执行 | 确保SQL正确可执行 |

@@ -16,7 +16,7 @@ class ScenarioTool(BaseTool):
     基于预定义的场景模板和数据库结构选择合适的查询场景。
     
     Attributes:
-        name: "scenario_generation"
+        name: "scenario_tool"
         description: "生成查询场景"
     """
 ```
