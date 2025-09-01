@@ -18,8 +18,8 @@ class DomainAnalysisInput(BaseModel):
 class DomainAnalysisTool(BaseTool):
     """业务领域分析工具"""
     
-    name = "domain_analysis"
-    description = "分析数据库的业务领域，识别主要业务场景和数据特征"
+    name: str = "domain_analysis"
+    description: str = "分析数据库的业务领域，识别主要业务场景和数据特征"
     args_schema: Type[BaseModel] = DomainAnalysisInput
     
     def _run(self, memory: Dict[str, Any]) -> Dict[str, Any]:

@@ -18,8 +18,8 @@ class ColumnMeaningInput(BaseModel):
 class ColumnMeaningTool(BaseTool):
     """分析数据库列的业务含义"""
     
-    name = "column_meaning_analysis"
-    description = "分析数据库列的业务含义，识别列的业务用途、数据模式和常见值"
+    name: str = "column_meaning_analysis"
+    description: str = "分析数据库列的业务含义，识别列的业务用途、数据模式和常见值"
     args_schema: Type[BaseModel] = ColumnMeaningInput
     
     def _run(self, memory: Dict[str, Any]) -> Dict[str, Any]:

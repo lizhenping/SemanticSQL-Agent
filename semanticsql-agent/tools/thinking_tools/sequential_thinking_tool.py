@@ -21,8 +21,8 @@ class SequentialThinkingInput(BaseModel):
 class SequentialThinkingTool(BaseTool):
     """深度思考和分析工具"""
     
-    name = "sequential_thinking"
-    description = "进行深度分析，制定问题解决策略"
+    name: str = "sequential_thinking"
+    description: str = "进行深度分析，制定问题解决策略"
     args_schema: Type[BaseModel] = SequentialThinkingInput
     
     def __init__(self, llm: ChatOpenAI):

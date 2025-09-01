@@ -21,8 +21,8 @@ class QuestionGenerationInput(BaseModel):
 class QuestionGenerationTool(BaseTool):
     """生成自然语言问题"""
     
-    name = "question_generation"
-    description = "根据场景和数据库结构生成自然语言问题"
+    name: str = "question_generation"
+    description: str = "根据场景和数据库结构生成自然语言问题"
     args_schema: Type[BaseModel] = QuestionGenerationInput
     
     def __init__(self, llm: ChatOpenAI):

@@ -18,8 +18,8 @@ class FieldClassificationInput(BaseModel):
 class FieldClassificationTool(BaseTool):
     """字段语义分类工具"""
     
-    name = "field_classification"
-    description = "对数据库字段进行语义分类，识别字段的业务含义和用途"
+    name: str = "field_classification"
+    description: str = "对数据库字段进行语义分类，识别字段的业务含义和用途"
     args_schema: Type[BaseModel] = FieldClassificationInput
     
     def _run(self, memory: Dict[str, Any]) -> Dict[str, Any]:

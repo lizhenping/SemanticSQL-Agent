@@ -14,14 +14,14 @@ from utils.database import DatabaseManager
 class SQLExecutionInput(BaseModel):
     """SQL执行输入"""
     sql: str = Field(description="要执行的SQL语句")
-    limit: int = Field(default=100, description="结果限制")
+    limit: int = Field(default=100, description: str = "结果限制")
 
 
 class SQLExecutionTool(BaseTool):
     """SQL执行工具"""
     
-    name = "sql_execution"
-    description = "执行SQL查询并返回结果"
+    name: str = "sql_execution"
+    description: str = "执行SQL查询并返回结果"
     args_schema: Type[BaseModel] = SQLExecutionInput
     
     def __init__(self, db_manager: DatabaseManager):

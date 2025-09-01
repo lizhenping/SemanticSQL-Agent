@@ -22,8 +22,8 @@ class SQLReflectionInput(BaseModel):
 class SQLReflectionTool(BaseTool):
     """SQL执行反思与优化工具"""
     
-    name = "sql_reflection"
-    description = "分析SQL执行结果，识别问题来源并建议下一步行动"
+    name: str = "sql_reflection"
+    description: str = "分析SQL执行结果，识别问题来源并建议下一步行动"
     args_schema: Type[BaseModel] = SQLReflectionInput
     
     def __init__(self, llm: ChatOpenAI):

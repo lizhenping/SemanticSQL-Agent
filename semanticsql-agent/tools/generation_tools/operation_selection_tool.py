@@ -20,8 +20,8 @@ class OperationSelectionInput(BaseModel):
 class OperationSelectionTool(BaseTool):
     """根据场景选择SQL操作"""
     
-    name = "operation_selection"
-    description = "根据场景复杂度和业务需求选择合适的SQL操作组合"
+    name: str = "operation_selection"
+    description: str = "根据场景复杂度和业务需求选择合适的SQL操作组合"
     args_schema: Type[BaseModel] = OperationSelectionInput
     
     def _run(self, scenario: Dict[str, Any], memory: Dict[str, Any]) -> Dict[str, Any]:

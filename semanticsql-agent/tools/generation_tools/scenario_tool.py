@@ -17,14 +17,14 @@ from models.exceptions import ToolExecutionError
 class ScenarioToolInput(BaseModel):
     """场景工具输入"""
     memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
-    iteration: int = Field(default=0, description="当前迭代次数")
+    iteration: int = Field(default=0, description: str = "当前迭代次数")
 
 
 class ScenarioTool(BaseTool):
     """基于预定义模板选择业务场景"""
     
-    name = "scenario_tool"
-    description = "从预定义的场景模板中选择一个适合当前数据库的业务场景"
+    name: str = "scenario_tool"
+    description: str = "从预定义的场景模板中选择一个适合当前数据库的业务场景"
     args_schema: Type[BaseModel] = ScenarioToolInput
     
     def __init__(self):

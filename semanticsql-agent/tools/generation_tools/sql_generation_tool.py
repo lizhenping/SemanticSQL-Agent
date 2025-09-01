@@ -18,15 +18,15 @@ class SQLGenerationInput(BaseModel):
     """SQL生成输入"""
     question: str = Field(description="自然语言问题")
     memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
-    operations: List[str] = Field(default_factory=list, description="建议的SQL操作")
-    dialect: str = Field(default="mysql", description="SQL方言")
+    operations: List[str] = Field(default_factory=list, description: str = "建议的SQL操作")
+    dialect: str = Field(default="mysql", description: str = "SQL方言")
 
 
 class SQLGenerationTool(BaseTool):
     """生成SQL查询语句"""
     
-    name = "sql_generation"
-    description = "根据自然语言问题和数据库结构生成对应的SQL查询"
+    name: str = "sql_generation"
+    description: str = "根据自然语言问题和数据库结构生成对应的SQL查询"
     args_schema: Type[BaseModel] = SQLGenerationInput
     
     def __init__(self, llm: ChatOpenAI, db_manager: Optional[DatabaseManager] = None):

@@ -15,15 +15,15 @@ from models.exceptions import ToolExecutionError
 class ERAnalysisInput(BaseModel):
     """ER分析输入"""
     memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
-    analyze_implicit: bool = Field(default=True, description="是否分析隐式关系")
-    depth: int = Field(default=2, description="关系分析深度")
+    analyze_implicit: bool = Field(default=True, description: str = "是否分析隐式关系")
+    depth: int = Field(default=2, description: str = "关系分析深度")
 
 
 class ERAnalysisTool(BaseTool):
     """实体关系分析工具"""
     
-    name = "er_analysis"
-    description = "分析数据库表之间的实体关系，识别外键关系和隐式关联"
+    name: str = "er_analysis"
+    description: str = "分析数据库表之间的实体关系，识别外键关系和隐式关联"
     args_schema: Type[BaseModel] = ERAnalysisInput
     
     def _run(

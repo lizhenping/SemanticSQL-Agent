@@ -18,8 +18,8 @@ class TableMeaningInput(BaseModel):
 class TableMeaningTool(BaseTool):
     """分析数据库表的业务含义"""
     
-    name = "table_meaning_analysis"
-    description = "分析数据库表的业务含义，识别表的业务用途、实体类型和表间关系"
+    name: str = "table_meaning_analysis"
+    description: str = "分析数据库表的业务含义，识别表的业务用途、实体类型和表间关系"
     args_schema: Type[BaseModel] = TableMeaningInput
     
     def _run(self, memory: Dict[str, Any]) -> Dict[str, Any]:

@@ -28,8 +28,8 @@ class SchemaExtractionInput(BaseModel):
 class SchemaExtractionTool(BaseTool):
     """数据库结构提取工具"""
     
-    name = "schema_extraction"
-    description = "提取数据库的完整结构信息，包括表、列、索引、外键等"
+    name: str = "schema_extraction"
+    description: str = "提取数据库的完整结构信息，包括表、列、索引、外键等"
     args_schema: Type[BaseModel] = SchemaExtractionInput
     
     def __init__(self, db_manager: DatabaseManager):

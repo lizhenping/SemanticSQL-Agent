@@ -21,8 +21,8 @@ class SQLValidationInput(BaseModel):
 class SQLValidationTool(BaseTool):
     """SQL语法验证工具"""
     
-    name = "sql_validation"
-    description = "验证SQL语句的语法正确性"
+    name: str = "sql_validation"
+    description: str = "验证SQL语句的语法正确性"
     args_schema: Type[BaseModel] = SQLValidationInput
     
     def __init__(self, db_manager: DatabaseManager):
