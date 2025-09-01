@@ -1,6 +1,6 @@
 # SQLAgent API 文档
 
-继承自 BaseAgent 的 SQL 查询智能体，根据自然语言问题生成 SQL。
+继承自 BaseAgent 的 SQL 训练数据生成智能体，批量生成高质量的 NL2SQL 训练数据。
 
 ## 类定义
 
@@ -11,9 +11,9 @@ from semanticsql_agent.models import SQLQueryResult, TrainingDataResult
 
 class SQLAgent(BaseAgent):
     """
-    SQL 查询智能体
+    SQL 训练数据生成智能体
     
-    根据自然语言问题生成对应的 SQL 查询。
+    批量生成高质量的自然语言问题和对应 SQL 查询对。
     
     Attributes:
         analysis_completed: 数据库分析是否完成
@@ -57,36 +57,6 @@ def __init__(
 ```
 
 ## 核心方法
-
-### query
-
-```python
-def query(self, question: str) -> SQLQueryResult:
-    """
-    单次 SQL 查询生成
-    
-    根据自然语言问题生成并执行 SQL 查询。
-    
-    Args:
-        question: 自然语言问题
-    
-    Returns:
-        SQLQueryResult: 包含问题、SQL、执行结果等信息
-    
-    Raises:
-        DatabaseNotAnalyzedError: 数据库未分析
-        SQLGenerationError: SQL 生成失败
-        SQLExecutionError: SQL 执行失败
-    
-    Example:
-        ```python
-        result = agent.query("查询所有订单的总金额")
-        print(f"SQL: {result.sql}")
-        print(f"Result: {result.result}")
-        print(f"Execution time: {result.execution_time}s")
-        ```
-    """
-```
 
 
 
@@ -188,7 +158,7 @@ def get_system_prompt(self) -> str:
     - 使用 sql_reflection 评估生成质量
     - 必要时调用 sequential_thinking 分析问题并修正
     
-    提示词专注于准确理解用户意图并生成正确的 SQL 查询。
+    提示词专注于批量生成高质量的训练数据。
     """
 ```
 
@@ -243,24 +213,22 @@ class TrainingDataResult:
 
 ## 使用示例
 
-### 基本查询
+### 批量生成训练数据
 
 ```python
 # 创建 Agent
 agent = SQLAgent(config, db_config)
 
-# 分析数据库（首次需要）
-agent.analyze_database()
-
-# 生成 SQL
-result = agent.query("查询今年销售额最高的10个产品")
+# 生成训练数据（会自动分析数据库）
+result = agent.generate_questions(
+    count=100,
+    output_file="training_data.jsonl"
+)
 
 # 使用结果
-if result.error:
-    print(f"Error: {result.error}")
-else:
-    print(f"SQL: {result.sql}")
-    print(f"Results: {result.result}")
+print(f"成功生成: {result['successful']} 条")
+print(f"失败: {result['failed']} 条")
+print(f"耗时: {result['time_elapsed']:.2f} 秒")
 ```
 
 

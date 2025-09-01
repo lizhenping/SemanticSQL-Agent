@@ -75,7 +75,7 @@ semanticsql-agent/
 ├── agent/
 │   ├── __init__.py
 │   ├── base_agent.py           # 基础Agent（含执行流程控制和ReAct循环）
-│   └── sql_agent.py            # SQL智能体（单次查询生成）
+│   └── sql_agent.py            # SQL智能体（批量训练数据生成）
 │
 ├── utils/
 │   ├── __init__.py
@@ -465,9 +465,6 @@ cp .env.example .env
 # 生成训练数据
 python cli.py generate --count 100 --output data.json
 
-# 单次SQL生成
-python cli.py query --question "查询所有订单的总金额"
-
 # 查看执行轨迹
 python cli.py trajectory --latest
 ```
@@ -493,10 +490,6 @@ result = agent.generate_training_data(
     count=100,
     output_file="training_data.json"
 )
-
-# 单次查询（使用 LLMChain）
-response = agent.query("查询最近一周的销售额")
-print(response.sql)
 
 # 获取执行轨迹（通过 LangChain Callbacks）
 trajectory = agent.get_trajectory()

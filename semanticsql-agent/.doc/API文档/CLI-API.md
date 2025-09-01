@@ -19,36 +19,6 @@ def cli():
 
 ## 核心命令
 
-### query
-
-```python
-@cli.command()
-@click.option('--question', '-q', required=True, help='自然语言查询问题')
-@click.option('--host', '-h', default='localhost', help='数据库主机')
-@click.option('--port', '-p', default=3306, help='数据库端口')
-@click.option('--database', '-d', required=True, help='数据库名称')
-@click.option('--user', '-u', required=True, help='数据库用户名')
-@click.option('--password', '-P', prompt=True, hide_input=True, help='数据库密码')
-@click.option('--execute', '-e', is_flag=True, help='执行生成的 SQL')
-@click.option('--verbose', '-v', is_flag=True, help='显示详细信息')
-def query(question, host, port, database, user, password, execute, verbose):
-    """
-    执行单次查询
-    
-    Example:
-        ```bash
-        # 基本查询
-        semanticsql query -q "查询所有订单" -d ecommerce -u root
-        
-        # 执行 SQL
-        semanticsql query -q "统计本月销售额" -d ecommerce -u root -e
-        
-        # 详细模式
-        semanticsql query -q "查询VIP客户" -d ecommerce -u root -v
-        ```
-    """
-```
-
 ### analyze
 
 ```python
@@ -151,7 +121,7 @@ export SEMANTICSQL_DB_HOST=localhost
 export SEMANTICSQL_DB_NAME=ecommerce
 
 # 使用环境变量
-semanticsql query -q "查询订单"
+semanticsql generate -c 100 -o data.json
 ```
 
 ## 交互模式
@@ -182,21 +152,17 @@ def interactive(database):
 
 ### JSON 输出
 ```bash
-semanticsql query -q "查询订单" -d ecommerce -u root --output-format json
+semanticsql generate -c 10 -o data.json -d ecommerce -u root --output-format json
 ```
 
 ```json
 {
-  "question": "查询订单",
-  "sql": "SELECT * FROM orders",
-  "execution_time": 0.5,
-  "success": true
+  "total_count": 10,
+  "success_count": 10,
+  "failed_count": 0,
+  "output_file": "data.json",
+  "execution_time": 45.3
 }
-```
-
-### 表格输出
-```bash
-semanticsql query -q "查询订单" -d ecommerce -u root -e
 ```
 
 ```
@@ -268,18 +234,13 @@ semanticsql interactive -d ecommerce
 ### 脚本集成
 ```bash
 #!/bin/bash
-# 批量查询脚本
+# 批量生成训练数据脚本
 
-QUERIES=(
-    "统计订单总数"
-    "查询今日销售额"
-    "列出VIP客户"
-)
-
-for query in "${QUERIES[@]}"; do
-    echo "执行查询: $query"
-    semanticsql query -q "$query" -d ecommerce -u root -e
-    echo "---"
+# 生成不同规模的训练数据集
+for count in 10 50 100 500; do
+    echo "生成 $count 条训练数据..."
+    semanticsql generate -c $count -o "training_${count}.json" -d ecommerce -u root
+    echo "完成: training_${count}.json"
 done
 ```
 
@@ -298,8 +259,8 @@ ENTRYPOINT ["semanticsql"]
 # 构建镜像
 docker build -t semanticsql .
 
-# 运行查询
-docker run -it semanticsql query -q "查询订单" -d ecommerce -u root
+# 生成训练数据
+docker run -v $(pwd):/data -it semanticsql generate -c 100 -o /data/training.json -d ecommerce -u root
 ```
 
 ## 注意事项

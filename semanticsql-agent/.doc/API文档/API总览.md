@@ -50,11 +50,6 @@ db_config = DatabaseConfig(
 # 创建 Agent
 agent = SQLAgent(settings, db_config)
 
-# 单次查询
-response = agent.query("查询所有订单的总金额")
-print(f"SQL: {response.sql}")
-print(f"结果: {response.result}")
-
 # 批量生成训练数据
 training_data = agent.generate_training_data(
     count=100,
@@ -68,7 +63,7 @@ training_data = agent.generate_training_data(
 
 #### SQLAgent
 
-主要的智能体类，支持两种模式：
+主要的智能体类，用于批量生成训练数据：
 
 ```python
 class SQLAgent:
@@ -85,17 +80,6 @@ class SQLAgent:
             settings: 系统配置
             db_config: 数据库配置
             callbacks: LangChain 回调处理器列表
-        """
-    
-    def query(self, question: str) -> SQLQueryResult:
-        """
-        单次 SQL 查询生成
-        
-        Args:
-            question: 自然语言问题
-            
-        Returns:
-            SQLQueryResult: 包含 SQL 和执行结果
         """
     
     def generate_training_data(
