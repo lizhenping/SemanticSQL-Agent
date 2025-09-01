@@ -3,7 +3,7 @@ SQL验证工具 - 验证SQL语法正确性
 基于 LangChain BaseTool
 """
 
-from typing import Dict, Any, Type
+from typing import Dict, Any, Type, List
 import sqlparse
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field

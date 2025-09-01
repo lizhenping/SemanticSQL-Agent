@@ -6,7 +6,7 @@ SQL生成工具 - 根据问题生成SQL查询
 import re
 from typing import Dict, Any, Type, List, Optional
 from langchain.tools import BaseTool
-from langchain_openai import ChatOpenAI
+from langchain_community.chat_models import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from models.schemas import SQLOperation

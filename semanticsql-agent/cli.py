@@ -15,7 +15,7 @@ import yaml
 
 from config.settings import Settings
 from config.database import DatabaseConfig
-from agent.sql_agent import SQLAgent
+from agent.data_generation_agent import DataGenerationAgent
 from models.exceptions import (
     DatabaseConnectionError,
     LLMError,
@@ -33,6 +33,9 @@ logging.basicConfig(
 
 def handle_errors(func):
     """统一的错误处理装饰器"""
+    import functools
+    
+    @functools.wraps(func)
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)
@@ -114,8 +117,8 @@ def generate(ctx, count: int, output: str, database: Optional[str],
         output = f"{output}.{format}"
     
     # 创建Agent
-    click.echo("初始化SQL Agent...")
-    agent = SQLAgent(settings, db_config)
+    click.echo("初始化数据生成Agent...")
+    agent = DataGenerationAgent(settings, db_config)
     
     # 生成数据
     with click.progressbar(length=count, label='生成进度') as bar:
@@ -177,7 +180,7 @@ def analyze(ctx, database: str, output: Optional[str], config: Optional[str]):
     db_config.database = database
     
     # 创建Agent
-    agent = SQLAgent(settings, db_config)
+    agent = DataGenerationAgent(settings, db_config)
     
     # 执行分析
     click.echo("执行数据库分析...")

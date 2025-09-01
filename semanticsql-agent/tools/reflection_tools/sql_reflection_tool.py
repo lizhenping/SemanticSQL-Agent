@@ -5,7 +5,7 @@ SQL反思工具 - 分析执行结果并提供优化建议
 
 from typing import Dict, Any, Type, List, Optional
 from langchain.tools import BaseTool
-from langchain_openai import ChatOpenAI
+from langchain_community.chat_models import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from models.exceptions import ToolExecutionError

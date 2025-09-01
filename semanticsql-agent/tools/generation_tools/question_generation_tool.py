@@ -5,7 +5,7 @@
 
 from typing import Dict, Any, Type, List
 from langchain.tools import BaseTool
-from langchain_openai import ChatOpenAI
+from langchain_community.chat_models import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from models.exceptions import ToolExecutionError

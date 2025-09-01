@@ -1,6 +1,4 @@
-"""
-思考工具 - 深度分析和策略制定
-"""
+"""思考工具模块"""
 
 from .sequential_thinking_tool import SequentialThinkingTool
 

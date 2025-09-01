@@ -9,7 +9,7 @@ import logging
 
 from langchain.agents import AgentExecutor, create_react_agent
 from langchain.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
+from langchain_community.chat_models import ChatOpenAI
 from langchain.tools import BaseTool
 from langchain_core.memory import BaseMemory
 
