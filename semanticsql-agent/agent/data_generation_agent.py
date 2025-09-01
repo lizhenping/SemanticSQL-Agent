@@ -247,7 +247,7 @@ class DataGenerationAgent(BaseAgent):
         - 数据库分析结果已保存在记忆中，请直接使用记忆中的信息
         - 确保每个工具都从记忆中获取所需的依赖信息
         - 反思失败时，只重新执行有问题的特定步骤
-        - 目标是生成 {count} 个高质量的训练样本
+        - 目标是生成 {{count}} 个高质量的训练样本
         """
         
         # 执行生成任务
@@ -293,21 +293,51 @@ class DataGenerationAgent(BaseAgent):
         examples = []
         
         try:
-            # 从result中获取输出
-            output = result.get("result", {})
-            if isinstance(output, str):
-                # 如果是字符串，尝试解析为JSON
-                import json
-                output = json.loads(output)
+            # 从result中获取输出 - 修正字段名
+            output = result.get("result", "")
             
-            # 如果输出直接是一个训练样本
-            if "question" in output and "sql" in output:
+            # 处理字符串输出（直接JSON格式）
+            if isinstance(output, str):
+                import json
+                
+                self.logger.debug(f"Processing string output: {output[:200]}...")
+                
+                # 尝试直接解析为JSON（Agent现在直接输出JSON格式）
+                try:
+                    parsed_output = json.loads(output)
+                    if isinstance(parsed_output, list):
+                        # 处理JSON数组
+                        for item in parsed_output:
+                            if isinstance(item, dict) and "question" in item and "sql" in item:
+                                examples.append(item)
+                                self.logger.debug(f"Successfully extracted training sample: {item.get('question', '')[:50]}...")
+                    elif isinstance(parsed_output, dict):
+                        # 处理包含training_samples的JSON对象
+                        if "training_samples" in parsed_output:
+                            for item in parsed_output["training_samples"]:
+                                if isinstance(item, dict) and "question" in item and "sql" in item:
+                                    examples.append(item)
+                                    self.logger.debug(f"Successfully extracted training sample: {item.get('question', '')[:50]}...")
+                        elif "question" in parsed_output and "sql" in parsed_output:
+                            # 处理单个JSON对象
+                            examples.append(parsed_output)
+                            self.logger.debug(f"Successfully extracted training sample: {parsed_output.get('question', '')[:50]}...")
+                            
+                except json.JSONDecodeError as e:
+                    self.logger.warning(f"Failed to parse output as JSON: {e}")
+                    # 回退到轨迹提取
+                    return self._extract_generated_examples()
+                    
+            # 处理字典输出
+            elif isinstance(output, dict) and "question" in output and "sql" in output:
                 examples.append(output)
                 
             self.logger.info(f"Extracted {len(examples)} training examples from agent output")
             
         except Exception as e:
             self.logger.error(f"Failed to extract examples from agent output: {e}")
+            # 回退到轨迹提取
+            return self._extract_generated_examples()
             
         return examples
     
