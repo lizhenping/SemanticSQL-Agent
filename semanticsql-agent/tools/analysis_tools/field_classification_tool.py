@@ -1,382 +1,274 @@
 """
-字段分类工具 - 对数据库字段进行智能分类
+字段分类工具 - 对数据库字段进行语义分类
+基于 LangChain BaseTool
 """
 
-import re
-from typing import Dict, Any, List, Optional
-from datetime import datetime
+from typing import Dict, Any, Type, List
+from langchain.tools import BaseTool
+from pydantic import BaseModel, Field
 
-from tools.base_tool import BaseTool, ToolParameter
+from models.exceptions import ToolExecutionError
 
-# 字段类型常量
-FIELD_TYPES = {
-    "ID": ["id", "uuid", "key", "编号", "代码", "标识"],
-    "TIMESTAMP": ["time", "date", "created", "updated", "timestamp", "时间", "日期"],
-    "AMOUNT": ["amount", "price", "cost", "fee", "money", "金额", "价格", "费用"],
-    "STATUS": ["status", "state", "flag", "type", "种类", "状态", "类型"],
-    "DESCRIPTION": ["name", "title", "desc", "comment", "remark", "名称", "描述", "备注"]
-}
+
+class FieldClassificationInput(BaseModel):
+    """字段分类输入"""
+    memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
 
 
 class FieldClassificationTool(BaseTool):
-    """字段智能分类工具"""
+    """字段语义分类工具"""
     
-    @property
-    def name(self) -> str:
-        return "field_classification"
+    name = "field_classification"
+    description = "对数据库字段进行语义分类，识别字段的业务含义和用途"
+    args_schema: Type[BaseModel] = FieldClassificationInput
     
-    @property
-    def description(self) -> str:
-        return "对数据库表的字段进行智能分类，识别字段的业务含义"
-    
-    @property
-    def category(self) -> str:
-        return "analysis"
-    
-    @property
-    def parameters(self) -> List[ToolParameter]:
-        return [
-            ToolParameter(
-                name="table_info",
-                type="object",
-                description="表结构信息",
-                required=True
-            ),
-            ToolParameter(
-                name="sample_data",
-                type="array",
-                description="样本数据（可选）",
-                required=False,
-                default=[]
-            ),
-            ToolParameter(
-                name="custom_patterns",
-                type="object",
-                description="自定义分类模式",
-                required=False,
-                default={}
-            )
-        ]
-    
-    def _execute(self, table_info: Dict[str, Any], sample_data: List[Dict] = None,
-                 custom_patterns: Dict[str, List[str]] = None) -> Dict[str, Any]:
-        """
-        执行字段分类
-        
-        Returns:
-            分类结果
-        """
-        classification_result = {
-            "table_name": table_info.get("name", "unknown"),
-            "field_classifications": {},
-            "statistics": {},
-            "recommendations": []
-        }
-        
-        # 合并自定义模式
-        patterns = self._merge_patterns(FIELD_TYPES, custom_patterns)
-        
-        # 对每个字段进行分类
-        for column in table_info.get("columns", []):
-            field_name = column.get("name", "")
-            field_type = column.get("data_type", "")
+    def _run(self, memory: Dict[str, Any]) -> Dict[str, Any]:
+        """执行字段分类"""
+        try:
+            # 从记忆中获取必要信息
+            db_analysis = memory.get("db_analysis", {})
+            schema_info = db_analysis.get("schema_info", {})
+            domain_info = db_analysis.get("domain_info", {})
             
-            # 基于名称和类型分类
-            classification = self._classify_field(
-                field_name, field_type, patterns
-            )
-            
-            # 如果有样本数据，进行数据分析
-            if sample_data:
-                data_analysis = self._analyze_field_data(
-                    field_name, sample_data
+            if not schema_info:
+                raise ToolExecutionError(
+                    tool_name=self.name,
+                    reason="未找到数据库结构信息，请先执行schema_extraction"
                 )
-                classification["data_characteristics"] = data_analysis
             
-            classification_result["field_classifications"][field_name] = classification
-        
-        # 统计分类结果
-        classification_result["statistics"] = self._calculate_statistics(
-            classification_result["field_classifications"]
-        )
-        
-        # 生成建议
-        classification_result["recommendations"] = self._generate_recommendations(
-            classification_result["field_classifications"],
-            table_info
-        )
-        
-        return classification_result
+            # 分类结果
+            field_classifications = {}
+            classification_summary = {
+                "identifier": [],
+                "temporal": [],
+                "numeric": [],
+                "status": [],
+                "descriptive": [],
+                "reference": [],
+                "configuration": [],
+                "other": []
+            }
+            
+            # 对每个表的字段进行分类
+            tables = schema_info.get("tables", {})
+            for table_name, table_info in tables.items():
+                table_fields = {}
+                
+                for column in table_info.get("columns", []):
+                    column_name = column["name"]
+                    column_type = column["type"]
+                    
+                    # 分类字段
+                    classification = self._classify_field(
+                        column_name, column_type, table_name, domain_info
+                    )
+                    
+                    table_fields[column_name] = classification
+                    
+                    # 添加到分类汇总
+                    category = classification["category"]
+                    classification_summary[category].append(
+                        f"{table_name}.{column_name}"
+                    )
+                
+                field_classifications[table_name] = table_fields
+            
+            # 生成分类洞察
+            insights = self._generate_classification_insights(
+                field_classifications, classification_summary
+            )
+            
+            return {
+                "field_classifications": field_classifications,
+                "classification_summary": classification_summary,
+                "insights": insights,
+                "total_fields": sum(len(fields) for fields in classification_summary.values())
+            }
+            
+        except Exception as e:
+            raise ToolExecutionError(
+                tool_name=self.name,
+                reason=f"字段分类失败: {str(e)}"
+            )
     
-    def _classify_field(self, field_name: str, field_type: str,
-                        patterns: Dict[str, List[str]]) -> Dict[str, Any]:
-        """分类单个字段"""
+    def _classify_field(
+        self, 
+        field_name: str, 
+        field_type: str,
+        table_name: str,
+        domain_info: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """对单个字段进行分类"""
         field_lower = field_name.lower()
         type_lower = field_type.lower()
         
         classification = {
-            "category": "unknown",
-            "confidence": 0.0,
+            "field_name": field_name,
+            "field_type": field_type,
+            "category": "other",
+            "sub_category": "",
             "business_meaning": "",
-            "data_type_group": self._get_data_type_group(type_lower),
-            "characteristics": []
+            "is_nullable": True,
+            "is_key": False,
+            "common_patterns": []
         }
         
-        # 检查每个分类模式
-        best_match = None
-        best_score = 0
+        # 标识符字段
+        if (field_lower == "id" or 
+            field_lower.endswith("_id") or 
+            field_lower in ["uuid", "guid", "code", "no", "number"]):
+            classification["category"] = "identifier"
+            
+            if field_lower == "id" or field_lower == f"{table_name}_id":
+                classification["sub_category"] = "primary_key"
+                classification["is_key"] = True
+                classification["business_meaning"] = "主键标识"
+            elif field_lower.endswith("_id"):
+                classification["sub_category"] = "foreign_key"
+                classification["is_key"] = True
+                classification["business_meaning"] = f"关联{field_lower[:-3]}表"
+            else:
+                classification["sub_category"] = "business_key"
+                classification["business_meaning"] = "业务编号"
         
-        for category, keywords in patterns.items():
-            score = self._calculate_match_score(field_lower, keywords)
-            if score > best_score:
-                best_score = score
-                best_match = category
+        # 时间字段
+        elif any(time_word in field_lower for time_word in [
+            "time", "date", "created", "updated", "modified", "expired", "start", "end"
+        ]):
+            classification["category"] = "temporal"
+            
+            if "created" in field_lower:
+                classification["sub_category"] = "creation_time"
+                classification["business_meaning"] = "创建时间"
+            elif "updated" in field_lower or "modified" in field_lower:
+                classification["sub_category"] = "update_time"
+                classification["business_meaning"] = "更新时间"
+            elif "expired" in field_lower:
+                classification["sub_category"] = "expiry_time"
+                classification["business_meaning"] = "过期时间"
+            else:
+                classification["sub_category"] = "general_time"
+                classification["business_meaning"] = "时间字段"
         
-        if best_match:
-            classification["category"] = best_match
-            classification["confidence"] = min(best_score * 100, 100)
-            classification["business_meaning"] = self._get_business_meaning(
-                best_match, field_name
-            )
+        # 数值字段
+        elif (any(num_word in field_lower for num_word in [
+            "amount", "price", "cost", "total", "count", "quantity", "num", "rate", "ratio"
+        ]) or any(num_type in type_lower for num_type in ["int", "decimal", "float", "double"])):
+            classification["category"] = "numeric"
+            
+            if any(money in field_lower for money in ["price", "cost", "amount", "fee"]):
+                classification["sub_category"] = "monetary"
+                classification["business_meaning"] = "金额"
+            elif any(qty in field_lower for qty in ["count", "quantity", "num"]):
+                classification["sub_category"] = "quantity"
+                classification["business_meaning"] = "数量"
+            elif "rate" in field_lower or "ratio" in field_lower:
+                classification["sub_category"] = "percentage"
+                classification["business_meaning"] = "比率"
+            else:
+                classification["sub_category"] = "measure"
+                classification["business_meaning"] = "度量值"
         
-        # 识别特征
-        classification["characteristics"] = self._identify_characteristics(
-            field_name, field_type
-        )
+        # 状态字段
+        elif any(status_word in field_lower for status_word in [
+            "status", "state", "flag", "is_", "has_", "can_", "enable"
+        ]):
+            classification["category"] = "status"
+            
+            if field_lower.startswith("is_"):
+                classification["sub_category"] = "boolean_flag"
+                classification["business_meaning"] = f"是否{field_lower[3:]}"
+            elif "status" in field_lower:
+                classification["sub_category"] = "status_code"
+                classification["business_meaning"] = "状态码"
+            else:
+                classification["sub_category"] = "flag"
+                classification["business_meaning"] = "标志位"
+        
+        # 描述性字段
+        elif any(desc_word in field_lower for desc_word in [
+            "name", "title", "description", "desc", "comment", "remark", "note", "content"
+        ]) or any(text_type in type_lower for text_type in ["varchar", "text", "char"]):
+            classification["category"] = "descriptive"
+            
+            if "name" in field_lower or "title" in field_lower:
+                classification["sub_category"] = "name"
+                classification["business_meaning"] = "名称"
+            elif any(long_text in field_lower for long_text in ["description", "content", "comment"]):
+                classification["sub_category"] = "long_text"
+                classification["business_meaning"] = "详细描述"
+            else:
+                classification["sub_category"] = "short_text"
+                classification["business_meaning"] = "文本信息"
+        
+        # 引用字段（除了ID以外的引用）
+        elif any(ref_word in field_lower for ref_word in ["type", "category", "class", "group"]):
+            classification["category"] = "reference"
+            classification["sub_category"] = "classification"
+            classification["business_meaning"] = "分类引用"
+        
+        # 配置字段
+        elif any(config_word in field_lower for config_word in ["config", "setting", "option", "param"]):
+            classification["category"] = "configuration"
+            classification["sub_category"] = "setting"
+            classification["business_meaning"] = "配置项"
+        
+        # 根据数据类型补充信息
+        if "int" in type_lower and classification["category"] == "other":
+            classification["category"] = "numeric"
+            classification["sub_category"] = "integer"
+        elif "json" in type_lower:
+            classification["sub_category"] = "structured_data"
+            classification["business_meaning"] = "结构化数据"
         
         return classification
     
-    def _calculate_match_score(self, field_name: str, keywords: List[str]) -> float:
-        """计算匹配分数"""
-        score = 0.0
+    def _generate_classification_insights(
+        self, 
+        classifications: Dict[str, Any],
+        summary: Dict[str, List[str]]
+    ) -> List[str]:
+        """生成分类洞察"""
+        insights = []
         
-        for keyword in keywords:
-            if keyword in field_name:
-                # 完全匹配得分更高
-                if field_name == keyword:
-                    score += 1.0
-                # 前缀匹配
-                elif field_name.startswith(keyword):
-                    score += 0.8
-                # 后缀匹配
-                elif field_name.endswith(keyword):
-                    score += 0.7
-                # 包含匹配
-                else:
-                    score += 0.5
+        # 统计各类字段数量
+        total_fields = sum(len(fields) for fields in summary.values())
         
-        return score / len(keywords) if keywords else 0
+        # 主键外键分析
+        id_fields = summary["identifier"]
+        pk_count = sum(1 for f in id_fields if f.endswith(".id"))
+        fk_count = sum(1 for f in id_fields if f.endswith("_id") and not f.endswith(".id"))
+        
+        if fk_count > 0:
+            insights.append(f"发现{fk_count}个外键字段，数据库具有关联关系")
+        
+        # 时间字段分析
+        temporal_fields = summary["temporal"]
+        if len(temporal_fields) > total_fields * 0.1:
+            insights.append("系统包含大量时间字段，适合时序分析查询")
+        
+        # 数值字段分析
+        numeric_fields = summary["numeric"]
+        if len(numeric_fields) > total_fields * 0.2:
+            insights.append("系统包含较多数值字段，适合统计分析查询")
+        
+        # 状态字段分析
+        status_fields = summary["status"]
+        if len(status_fields) > 0:
+            insights.append(f"发现{len(status_fields)}个状态字段，可生成状态过滤查询")
+        
+        # 文本字段分析
+        desc_fields = summary["descriptive"]
+        long_text_count = sum(1 for f in desc_fields if "description" in f or "content" in f)
+        if long_text_count > 0:
+            insights.append("包含长文本字段，可能需要全文搜索功能")
+        
+        # 数据完整性
+        if pk_count == len(classifications):
+            insights.append("所有表都有主键，数据完整性良好")
+        
+        return insights
     
-    def _get_data_type_group(self, type_str: str) -> str:
-        """获取数据类型分组"""
-        if any(t in type_str for t in ['int', 'bigint', 'smallint', 'tinyint']):
-            return "integer"
-        elif any(t in type_str for t in ['decimal', 'float', 'double', 'numeric']):
-            return "decimal"
-        elif any(t in type_str for t in ['varchar', 'char', 'text', 'string']):
-            return "string"
-        elif any(t in type_str for t in ['date', 'time', 'timestamp', 'datetime']):
-            return "datetime"
-        elif any(t in type_str for t in ['bool', 'boolean', 'bit']):
-            return "boolean"
-        elif any(t in type_str for t in ['blob', 'binary', 'varbinary']):
-            return "binary"
-        elif any(t in type_str for t in ['json', 'jsonb']):
-            return "json"
-        else:
-            return "other"
-    
-    def _get_business_meaning(self, category: str, field_name: str) -> str:
-        """获取业务含义描述"""
-        meanings = {
-            "identifier": f"唯一标识符，用于识别记录",
-            "timestamp": f"时间戳字段，记录时间信息",
-            "numeric": f"数值字段，表示数量或金额",
-            "category": f"分类字段，表示类型或状态",
-            "description": f"描述性字段，包含文本信息"
-        }
-        return meanings.get(category, "业务含义待确定")
-    
-    def _identify_characteristics(self, field_name: str, field_type: str) -> List[str]:
-        """识别字段特征"""
-        characteristics = []
-        field_lower = field_name.lower()
-        
-        # 主键特征
-        if field_lower == "id" or field_lower.endswith("_id"):
-            characteristics.append("likely_primary_key")
-        
-        # 外键特征
-        if "_id" in field_lower and not field_lower.endswith("id"):
-            characteristics.append("likely_foreign_key")
-        
-        # 必填字段特征
-        if any(word in field_lower for word in ["name", "title", "code"]):
-            characteristics.append("likely_required")
-        
-        # 索引候选
-        if any(word in field_lower for word in ["code", "no", "date", "status"]):
-            characteristics.append("index_candidate")
-        
-        # 敏感数据
-        if any(word in field_lower for word in ["password", "pwd", "secret", "token"]):
-            characteristics.append("sensitive_data")
-        
-        # 金额相关
-        if any(word in field_lower for word in ["price", "amount", "cost", "fee"]):
-            characteristics.append("monetary_value")
-        
-        return characteristics
-    
-    def _analyze_field_data(self, field_name: str, sample_data: List[Dict]) -> Dict[str, Any]:
-        """分析字段的实际数据"""
-        values = [row.get(field_name) for row in sample_data if field_name in row]
-        
-        if not values:
-            return {}
-        
-        analysis = {
-            "sample_size": len(values),
-            "null_count": sum(1 for v in values if v is None),
-            "unique_count": len(set(v for v in values if v is not None))
-        }
-        
-        # 分析数据特征
-        non_null_values = [v for v in values if v is not None]
-        
-        if non_null_values:
-            # 数值分析
-            if all(isinstance(v, (int, float)) for v in non_null_values):
-                analysis["data_type"] = "numeric"
-                analysis["min"] = min(non_null_values)
-                analysis["max"] = max(non_null_values)
-                analysis["avg"] = sum(non_null_values) / len(non_null_values)
-            
-            # 字符串分析
-            elif all(isinstance(v, str) for v in non_null_values):
-                analysis["data_type"] = "string"
-                analysis["min_length"] = min(len(v) for v in non_null_values)
-                analysis["max_length"] = max(len(v) for v in non_null_values)
-                analysis["avg_length"] = sum(len(v) for v in non_null_values) / len(non_null_values)
-                
-                # 检查格式模式
-                if self._is_email_pattern(non_null_values):
-                    analysis["pattern"] = "email"
-                elif self._is_phone_pattern(non_null_values):
-                    analysis["pattern"] = "phone"
-                elif self._is_url_pattern(non_null_values):
-                    analysis["pattern"] = "url"
-        
-        return analysis
-    
-    def _is_email_pattern(self, values: List[str]) -> bool:
-        """检查是否为邮箱格式"""
-        email_pattern = re.compile(r'^[\w\.-]+@[\w\.-]+\.\w+$')
-        return all(email_pattern.match(str(v)) for v in values[:10])
-    
-    def _is_phone_pattern(self, values: List[str]) -> bool:
-        """检查是否为电话格式"""
-        phone_pattern = re.compile(r'^[\d\-\+\(\)\s]+$')
-        return all(phone_pattern.match(str(v)) for v in values[:10])
-    
-    def _is_url_pattern(self, values: List[str]) -> bool:
-        """检查是否为URL格式"""
-        url_pattern = re.compile(r'^https?://[\w\.-]+')
-        return all(url_pattern.match(str(v)) for v in values[:10])
-    
-    def _calculate_statistics(self, classifications: Dict[str, Dict]) -> Dict[str, Any]:
-        """计算分类统计"""
-        stats = {
-            "total_fields": len(classifications),
-            "category_distribution": {},
-            "confidence_avg": 0,
-            "identified_keys": [],
-            "sensitive_fields": []
-        }
-        
-        confidences = []
-        
-        for field_name, classification in classifications.items():
-            category = classification["category"]
-            stats["category_distribution"][category] = \
-                stats["category_distribution"].get(category, 0) + 1
-            
-            confidences.append(classification["confidence"])
-            
-            # 识别关键字段
-            if "likely_primary_key" in classification.get("characteristics", []):
-                stats["identified_keys"].append({"field": field_name, "type": "primary"})
-            elif "likely_foreign_key" in classification.get("characteristics", []):
-                stats["identified_keys"].append({"field": field_name, "type": "foreign"})
-            
-            # 识别敏感字段
-            if "sensitive_data" in classification.get("characteristics", []):
-                stats["sensitive_fields"].append(field_name)
-        
-        if confidences:
-            stats["confidence_avg"] = sum(confidences) / len(confidences)
-        
-        return stats
-    
-    def _generate_recommendations(self, classifications: Dict[str, Dict],
-                                 table_info: Dict[str, Any]) -> List[str]:
-        """生成优化建议"""
-        recommendations = []
-        
-        # 检查是否有主键
-        has_primary_key = any(
-            "likely_primary_key" in c.get("characteristics", [])
-            for c in classifications.values()
-        )
-        
-        if not has_primary_key:
-            recommendations.append("建议为表添加主键字段")
-        
-        # 检查索引建议
-        index_candidates = [
-            field for field, c in classifications.items()
-            if "index_candidate" in c.get("characteristics", [])
-        ]
-        
-        if index_candidates:
-            recommendations.append(
-                f"建议为以下字段创建索引：{', '.join(index_candidates[:3])}"
-            )
-        
-        # 检查敏感数据
-        sensitive_fields = [
-            field for field, c in classifications.items()
-            if "sensitive_data" in c.get("characteristics", [])
-        ]
-        
-        if sensitive_fields:
-            recommendations.append(
-                f"检测到敏感数据字段：{', '.join(sensitive_fields)}，建议加密存储"
-            )
-        
-        # 检查分类置信度
-        low_confidence_fields = [
-            field for field, c in classifications.items()
-            if c.get("confidence", 0) < 50
-        ]
-        
-        if len(low_confidence_fields) > len(classifications) * 0.3:
-            recommendations.append(
-                "多个字段分类置信度较低，建议规范化字段命名"
-            )
-        
-        return recommendations
-    
-    def _merge_patterns(self, default_patterns: Dict, custom_patterns: Dict) -> Dict:
-        """合并默认和自定义模式"""
-        if not custom_patterns:
-            return default_patterns
-        
-        merged = default_patterns.copy()
-        for category, patterns in custom_patterns.items():
-            if category in merged:
-                merged[category].extend(patterns)
-            else:
-                merged[category] = patterns
-        
-        return merged
+    async def _arun(self, memory: Dict[str, Any]) -> Dict[str, Any]:
+        """异步执行（当前实现为同步）"""
+        return self._run(memory)

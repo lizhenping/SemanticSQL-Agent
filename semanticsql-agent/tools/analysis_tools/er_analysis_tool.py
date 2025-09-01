@@ -1,475 +1,392 @@
 """
 ER关系分析工具 - 分析数据库表之间的实体关系
+基于 LangChain BaseTool
 """
 
-from typing import Dict, Any, List, Optional, Set, Tuple
+from typing import Dict, Any, Type, List, Set, Tuple, Optional
+from langchain.tools import BaseTool
+from pydantic import BaseModel, Field
 import networkx as nx
 
-from tools.base_tool import BaseTool, ToolParameter
 from models.schemas import TableRelationship
+from models.exceptions import ToolExecutionError
+
+
+class ERAnalysisInput(BaseModel):
+    """ER分析输入"""
+    memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
+    analyze_implicit: bool = Field(default=True, description="是否分析隐式关系")
+    depth: int = Field(default=2, description="关系分析深度")
 
 
 class ERAnalysisTool(BaseTool):
     """实体关系分析工具"""
     
-    @property
-    def name(self) -> str:
-        return "er_analysis"
+    name = "er_analysis"
+    description = "分析数据库表之间的实体关系，识别外键关系和隐式关联"
+    args_schema: Type[BaseModel] = ERAnalysisInput
     
-    @property
-    def description(self) -> str:
-        return "分析数据库表之间的实体关系，构建ER图"
-    
-    @property
-    def category(self) -> str:
-        return "analysis"
-    
-    @property
-    def parameters(self) -> List[ToolParameter]:
-        return [
-            ToolParameter(
-                name="schema_info",
-                type="object",
-                description="数据库结构信息",
-                required=True
-            ),
-            ToolParameter(
-                name="analyze_implicit",
-                type="boolean",
-                description="是否分析隐式关系",
-                required=False,
-                default=True
-            ),
-            ToolParameter(
-                name="depth",
-                type="integer",
-                description="关系分析深度",
-                required=False,
-                default=2
-            )
-        ]
-    
-    def _execute(self, schema_info: Dict[str, Any], analyze_implicit: bool = True,
-                 depth: int = 2) -> Dict[str, Any]:
-        """
-        执行ER关系分析
-        
-        Returns:
-            关系分析结果
-        """
-        result = {
-            "entities": {},
-            "relationships": [],
-            "relationship_graph": {},
-            "entity_clusters": [],
-            "statistics": {},
-            "recommendations": []
-        }
-        
-        # 识别实体
-        result["entities"] = self._identify_entities(schema_info)
-        
-        # 提取显式关系（外键）
-        explicit_relationships = self._extract_explicit_relationships(schema_info)
-        result["relationships"].extend(explicit_relationships)
-        
-        # 分析隐式关系
-        if analyze_implicit:
-            implicit_relationships = self._analyze_implicit_relationships(
-                schema_info, explicit_relationships
-            )
-            result["relationships"].extend(implicit_relationships)
-        
-        # 构建关系图
-        result["relationship_graph"] = self._build_relationship_graph(
-            result["relationships"], depth
-        )
-        
-        # 识别实体簇
-        result["entity_clusters"] = self._identify_entity_clusters(
-            result["entities"], result["relationships"]
-        )
-        
-        # 计算统计信息
-        result["statistics"] = self._calculate_statistics(
-            result["entities"], result["relationships"]
-        )
-        
-        # 生成建议
-        result["recommendations"] = self._generate_recommendations(
-            result["entities"], result["relationships"], schema_info
-        )
-        
-        return result
-    
-    def _identify_entities(self, schema_info: Dict[str, Any]) -> Dict[str, Dict]:
-        """识别实体表"""
-        entities = {}
-        tables = schema_info.get("tables", {})
-        
-        for table_name, table_info in tables.items():
-            entity = {
-                "name": table_name,
-                "type": self._classify_entity_type(table_name, table_info),
-                "attributes": [],
-                "key_attributes": [],
-                "importance": self._calculate_entity_importance(table_info)
-            }
+    def _run(
+        self, 
+        memory: Dict[str, Any],
+        analyze_implicit: bool = True,
+        depth: int = 2
+    ) -> Dict[str, Any]:
+        """执行ER关系分析"""
+        try:
+            # 从记忆中获取必要信息
+            db_analysis = memory.get("db_analysis", {})
+            schema_info = db_analysis.get("schema_info", {})
+            field_classification = db_analysis.get("field_classification", {})
             
-            # 识别属性
-            for column in table_info.get("columns", []):
-                attr = {
-                    "name": column.get("name"),
-                    "type": column.get("data_type"),
-                    "is_key": column.get("is_primary", False),
-                    "is_foreign": column.get("is_foreign", False)
-                }
-                entity["attributes"].append(attr)
-                
-                if attr["is_key"]:
-                    entity["key_attributes"].append(attr["name"])
-            
-            entities[table_name] = entity
-        
-        return entities
-    
-    def _classify_entity_type(self, table_name: str, table_info: Dict) -> str:
-        """分类实体类型"""
-        table_lower = table_name.lower()
-        
-        # 根据表名模式分类
-        if any(word in table_lower for word in ["user", "customer", "member", "account"]):
-            return "actor"
-        elif any(word in table_lower for word in ["order", "transaction", "payment", "invoice"]):
-            return "transaction"
-        elif any(word in table_lower for word in ["product", "item", "goods", "service"]):
-            return "resource"
-        elif any(word in table_lower for word in ["category", "type", "status", "config"]):
-            return "reference"
-        elif any(word in table_lower for word in ["log", "history", "audit", "track"]):
-            return "audit"
-        elif "_" in table_name and any(word in table_lower for word in ["map", "rel", "link"]):
-            return "association"
-        else:
-            return "entity"
-    
-    def _calculate_entity_importance(self, table_info: Dict) -> float:
-        """计算实体重要性分数"""
-        score = 0.0
-        
-        # 有主键的表更重要
-        if any(col.get("is_primary") for col in table_info.get("columns", [])):
-            score += 2.0
-        
-        # 被其他表引用的表更重要
-        foreign_key_count = len(table_info.get("foreign_keys", []))
-        score += foreign_key_count * 0.5
-        
-        # 字段越多可能越重要
-        column_count = len(table_info.get("columns", []))
-        score += min(column_count * 0.1, 2.0)
-        
-        # 有索引的表更重要
-        if table_info.get("indexes"):
-            score += 1.0
-        
-        return min(score, 10.0)
-    
-    def _extract_explicit_relationships(self, schema_info: Dict[str, Any]) -> List[Dict]:
-        """提取显式关系（基于外键）"""
-        relationships = []
-        tables = schema_info.get("tables", {})
-        
-        for table_name, table_info in tables.items():
-            for fk in table_info.get("foreign_keys", []):
-                relationship = {
-                    "from_entity": table_name,
-                    "to_entity": fk.get("referenced_table"),
-                    "type": "foreign_key",
-                    "cardinality": self._determine_cardinality(table_name, fk, tables),
-                    "attributes": {
-                        "from_column": fk.get("column"),
-                        "to_column": fk.get("referenced_column")
-                    },
-                    "confidence": 1.0  # 显式关系置信度为1
-                }
-                relationships.append(relationship)
-        
-        return relationships
-    
-    def _analyze_implicit_relationships(self, schema_info: Dict[str, Any],
-                                       explicit_relationships: List[Dict]) -> List[Dict]:
-        """分析隐式关系（基于命名模式和数据类型）"""
-        implicit_relationships = []
-        tables = schema_info.get("tables", {})
-        
-        # 已有的显式关系对
-        explicit_pairs = set(
-            (r["from_entity"], r["to_entity"]) 
-            for r in explicit_relationships
-        )
-        
-        # 分析每对表
-        table_names = list(tables.keys())
-        for i, table1 in enumerate(table_names):
-            for table2 in table_names[i+1:]:
-                # 跳过已有显式关系的表对
-                if (table1, table2) in explicit_pairs or (table2, table1) in explicit_pairs:
-                    continue
-                
-                # 检查命名模式
-                relationship = self._check_naming_pattern_relationship(
-                    table1, table2, tables[table1], tables[table2]
+            if not schema_info:
+                raise ToolExecutionError(
+                    tool_name=self.name,
+                    reason="未找到数据库结构信息，请先执行schema_extraction"
                 )
-                
-                if relationship:
-                    implicit_relationships.append(relationship)
-        
-        return implicit_relationships
-    
-    def _check_naming_pattern_relationship(self, table1: str, table2: str,
-                                          table1_info: Dict, table2_info: Dict) -> Optional[Dict]:
-        """检查基于命名模式的关系"""
-        # 检查是否有相同的ID字段
-        table1_columns = {col["name"] for col in table1_info.get("columns", [])}
-        table2_columns = {col["name"] for col in table2_info.get("columns", [])}
-        
-        # 查找可能的关联字段
-        potential_links = []
-        
-        # 模式1：table1_id 在 table2 中
-        if f"{table1}_id" in table2_columns:
-            potential_links.append({
-                "from": table2,
-                "to": table1,
-                "column": f"{table1}_id",
-                "pattern": "foreign_key_naming"
-            })
-        
-        # 模式2：table2_id 在 table1 中
-        if f"{table2}_id" in table1_columns:
-            potential_links.append({
-                "from": table1,
-                "to": table2,
-                "column": f"{table2}_id",
-                "pattern": "foreign_key_naming"
-            })
-        
-        # 模式3：关联表（如 user_role 关联 user 和 role）
-        if "_" in table1 and table2 in table1:
-            potential_links.append({
-                "from": table1,
-                "to": table2,
-                "column": None,
-                "pattern": "association_table"
-            })
-        
-        if potential_links:
-            link = potential_links[0]
-            return {
-                "from_entity": link["from"],
-                "to_entity": link["to"],
-                "type": "implicit",
-                "cardinality": "one-to-many",  # 默认
-                "attributes": {
-                    "column": link["column"],
-                    "pattern": link["pattern"]
-                },
-                "confidence": 0.7  # 隐式关系置信度较低
-            }
-        
-        return None
-    
-    def _determine_cardinality(self, from_table: str, fk: Dict, tables: Dict) -> str:
-        """判断关系的基数"""
-        # 简化的基数判断逻辑
-        # 如果外键也是主键，通常是一对一
-        from_table_info = tables.get(from_table, {})
-        fk_column = fk.get("column")
-        
-        for col in from_table_info.get("columns", []):
-            if col.get("name") == fk_column and col.get("is_primary"):
-                return "one-to-one"
-        
-        # 检查是否为多对多（通过关联表）
-        if "_" in from_table:
-            # 如果表名包含两个其他表名，可能是多对多关联表
-            parts = from_table.split("_")
-            if len(parts) >= 2 and all(p in tables for p in parts):
-                return "many-to-many"
-        
-        # 默认一对多
-        return "one-to-many"
-    
-    def _build_relationship_graph(self, relationships: List[Dict], depth: int) -> Dict:
-        """构建关系图"""
-        # 使用NetworkX构建图
-        G = nx.DiGraph()
-        
-        # 添加边
-        for rel in relationships:
-            G.add_edge(
-                rel["from_entity"],
-                rel["to_entity"],
-                type=rel["type"],
-                cardinality=rel["cardinality"],
-                confidence=rel.get("confidence", 1.0)
+            
+            tables = schema_info.get("tables", {})
+            
+            # 分析关系
+            relationships = {}
+            all_relations = []
+            
+            # 1. 分析显式外键关系
+            explicit_relations = self._analyze_explicit_relations(tables)
+            all_relations.extend(explicit_relations)
+            
+            # 2. 分析隐式关系（如果启用）
+            implicit_relations = []
+            if analyze_implicit:
+                implicit_relations = self._analyze_implicit_relations(
+                    tables, field_classification
+                )
+                all_relations.extend(implicit_relations)
+            
+            # 3. 构建关系图
+            relation_graph = self._build_relation_graph(all_relations)
+            
+            # 4. 分析关系模式
+            patterns = self._analyze_relationship_patterns(
+                relation_graph, tables, all_relations
             )
-        
-        # 构建邻接表表示
-        graph = {}
-        for node in G.nodes():
-            graph[node] = {
-                "connections": list(G.neighbors(node)),
-                "in_degree": G.in_degree(node),
-                "out_degree": G.out_degree(node),
-                "paths": self._find_paths_from_node(G, node, depth)
+            
+            # 5. 生成关系洞察
+            insights = self._generate_relationship_insights(
+                all_relations, patterns, tables
+            )
+            
+            # 整理结果
+            for relation in all_relations:
+                from_table = relation["from_table"]
+                if from_table not in relationships:
+                    relationships[from_table] = []
+                relationships[from_table].append(relation)
+            
+            return {
+                "relationships": relationships,
+                "explicit_count": len(explicit_relations),
+                "implicit_count": len(implicit_relations),
+                "total_relations": len(all_relations),
+                "relationship_patterns": patterns,
+                "insights": insights,
+                "relation_graph": self._graph_to_dict(relation_graph)
             }
+            
+        except Exception as e:
+            raise ToolExecutionError(
+                tool_name=self.name,
+                reason=f"ER关系分析失败: {str(e)}"
+            )
+    
+    def _analyze_explicit_relations(self, tables: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """分析显式外键关系"""
+        relations = []
+        
+        for table_name, table_info in tables.items():
+            foreign_keys = table_info.get("foreign_keys", [])
+            
+            for fk in foreign_keys:
+                relation = {
+                    "from_table": table_name,
+                    "to_table": fk.get("referred_table", ""),
+                    "type": "foreign_key",
+                    "foreign_key": fk.get("constrained_columns", []),
+                    "referenced_columns": fk.get("referred_columns", []),
+                    "constraint_name": fk.get("name", ""),
+                    "relationship_type": "many-to-one",
+                    "is_explicit": True,
+                    "confidence": 1.0
+                }
+                relations.append(relation)
+        
+        return relations
+    
+    def _analyze_implicit_relations(
+        self, 
+        tables: Dict[str, Any],
+        field_classification: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """分析隐式关系（基于命名约定）"""
+        relations = []
+        
+        # 获取所有表名
+        table_names = list(tables.keys())
+        table_names_lower = [t.lower() for t in table_names]
+        
+        for table_name, table_info in tables.items():
+            columns = table_info.get("columns", [])
+            
+            for column in columns:
+                column_name = column["name"]
+                column_name_lower = column_name.lower()
+                
+                # 检查是否是潜在的外键
+                if column_name_lower.endswith("_id") and column_name_lower != "id":
+                    # 提取可能的表名
+                    potential_table = column_name_lower[:-3]  # 去掉_id
+                    
+                    # 查找匹配的表
+                    matched_table = None
+                    
+                    # 精确匹配
+                    if potential_table in table_names_lower:
+                        idx = table_names_lower.index(potential_table)
+                        matched_table = table_names[idx]
+                    # 复数形式匹配
+                    elif potential_table + "s" in table_names_lower:
+                        idx = table_names_lower.index(potential_table + "s")
+                        matched_table = table_names[idx]
+                    # 单数形式匹配
+                    elif potential_table.endswith("s") and potential_table[:-1] in table_names_lower:
+                        idx = table_names_lower.index(potential_table[:-1])
+                        matched_table = table_names[idx]
+                    
+                    if matched_table and matched_table != table_name:
+                        # 检查是否已存在显式关系
+                        existing = any(
+                            rel for rel in relations
+                            if rel["from_table"] == table_name 
+                            and rel["to_table"] == matched_table
+                            and column_name in rel.get("foreign_key", [])
+                        )
+                        
+                        if not existing:
+                            relation = {
+                                "from_table": table_name,
+                                "to_table": matched_table,
+                                "type": "implicit_foreign_key",
+                                "foreign_key": [column_name],
+                                "referenced_columns": ["id"],
+                                "relationship_type": "many-to-one",
+                                "is_explicit": False,
+                                "confidence": 0.8,
+                                "reason": "命名约定推断"
+                            }
+                            relations.append(relation)
+        
+        # 分析多对多关系表
+        for table_name in tables:
+            table_name_lower = table_name.lower()
+            
+            # 检查是否是关联表（包含多个表名）
+            if table_name.count("_") >= 1:
+                parts = table_name_lower.split("_")
+                
+                # 查找可能的关联表
+                matched_tables = []
+                for part in parts:
+                    if part in table_names_lower:
+                        idx = table_names_lower.index(part)
+                        matched_tables.append(table_names[idx])
+                    elif part + "s" in table_names_lower:
+                        idx = table_names_lower.index(part + "s")
+                        matched_tables.append(table_names[idx])
+                
+                # 如果找到两个表，可能是多对多关系
+                if len(matched_tables) == 2:
+                    relation = {
+                        "from_table": matched_tables[0],
+                        "to_table": matched_tables[1],
+                        "type": "many_to_many",
+                        "junction_table": table_name,
+                        "relationship_type": "many-to-many",
+                        "is_explicit": False,
+                        "confidence": 0.7,
+                        "reason": "关联表命名推断"
+                    }
+                    relations.append(relation)
+        
+        return relations
+    
+    def _build_relation_graph(self, relations: List[Dict[str, Any]]) -> nx.DiGraph:
+        """构建关系图"""
+        graph = nx.DiGraph()
+        
+        for relation in relations:
+            from_table = relation["from_table"]
+            to_table = relation["to_table"]
+            
+            # 添加节点
+            graph.add_node(from_table, type="table")
+            graph.add_node(to_table, type="table")
+            
+            # 添加边
+            edge_data = {
+                "type": relation["type"],
+                "relationship_type": relation["relationship_type"],
+                "confidence": relation.get("confidence", 1.0)
+            }
+            
+            if relation.get("foreign_key"):
+                edge_data["foreign_key"] = relation["foreign_key"]
+            
+            graph.add_edge(from_table, to_table, **edge_data)
         
         return graph
     
-    def _find_paths_from_node(self, G: nx.DiGraph, start: str, max_depth: int) -> List[List[str]]:
-        """从节点查找所有路径"""
-        paths = []
-        
-        def dfs(node, path, depth):
-            if depth >= max_depth:
-                return
-            
-            for neighbor in G.neighbors(node):
-                if neighbor not in path:  # 避免循环
-                    new_path = path + [neighbor]
-                    paths.append(new_path)
-                    dfs(neighbor, new_path, depth + 1)
-        
-        dfs(start, [start], 0)
-        return paths[:10]  # 限制返回的路径数量
-    
-    def _identify_entity_clusters(self, entities: Dict, relationships: List[Dict]) -> List[Dict]:
-        """识别实体簇（紧密关联的实体组）"""
-        # 使用NetworkX进行社区检测
-        G = nx.Graph()
-        
-        # 添加节点和边
-        for entity in entities:
-            G.add_node(entity)
-        
-        for rel in relationships:
-            G.add_edge(rel["from_entity"], rel["to_entity"])
-        
-        # 找连通分量
-        clusters = []
-        for component in nx.connected_components(G):
-            cluster = {
-                "entities": list(component),
-                "size": len(component),
-                "type": self._classify_cluster_type(component, entities),
-                "core_entity": self._find_core_entity(component, entities, relationships)
-            }
-            clusters.append(cluster)
-        
-        return sorted(clusters, key=lambda x: x["size"], reverse=True)
-    
-    def _classify_cluster_type(self, component: Set[str], entities: Dict) -> str:
-        """分类实体簇类型"""
-        entity_types = [entities[e]["type"] for e in component if e in entities]
-        
-        if "transaction" in entity_types:
-            return "transactional"
-        elif "actor" in entity_types:
-            return "user-centric"
-        elif "resource" in entity_types:
-            return "resource-centric"
-        else:
-            return "general"
-    
-    def _find_core_entity(self, component: Set[str], entities: Dict,
-                          relationships: List[Dict]) -> str:
-        """找到簇中的核心实体"""
-        # 计算每个实体的连接数
-        connection_counts = {e: 0 for e in component}
-        
-        for rel in relationships:
-            if rel["from_entity"] in component:
-                connection_counts[rel["from_entity"]] += 1
-            if rel["to_entity"] in component:
-                connection_counts[rel["to_entity"]] += 1
-        
-        # 返回连接最多的实体
-        return max(connection_counts, key=connection_counts.get)
-    
-    def _calculate_statistics(self, entities: Dict, relationships: List[Dict]) -> Dict:
-        """计算统计信息"""
-        stats = {
-            "total_entities": len(entities),
-            "total_relationships": len(relationships),
-            "entity_type_distribution": {},
-            "relationship_type_distribution": {},
-            "avg_connections_per_entity": 0,
-            "max_connections": 0,
-            "isolated_entities": []
+    def _analyze_relationship_patterns(
+        self, 
+        graph: nx.DiGraph,
+        tables: Dict[str, Any],
+        relations: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """分析关系模式"""
+        patterns = {
+            "hub_tables": [],
+            "isolated_tables": [],
+            "relationship_chains": [],
+            "circular_dependencies": [],
+            "table_connectivity": {}
         }
         
-        # 实体类型分布
-        for entity in entities.values():
-            entity_type = entity["type"]
-            stats["entity_type_distribution"][entity_type] = \
-                stats["entity_type_distribution"].get(entity_type, 0) + 1
+        # 找出孤立的表
+        all_tables = set(tables.keys())
+        connected_tables = set(graph.nodes())
+        patterns["isolated_tables"] = list(all_tables - connected_tables)
         
-        # 关系类型分布
-        for rel in relationships:
-            rel_type = rel["type"]
-            stats["relationship_type_distribution"][rel_type] = \
-                stats["relationship_type_distribution"].get(rel_type, 0) + 1
+        # 分析每个表的连接度
+        for table in connected_tables:
+            in_degree = graph.in_degree(table)
+            out_degree = graph.out_degree(table)
+            total_degree = in_degree + out_degree
+            
+            patterns["table_connectivity"][table] = {
+                "in_degree": in_degree,
+                "out_degree": out_degree,
+                "total_degree": total_degree
+            }
+            
+            # 识别中心表（高连接度）
+            if total_degree >= 5:
+                patterns["hub_tables"].append({
+                    "table": table,
+                    "connections": total_degree,
+                    "role": "central_entity"
+                })
         
-        # 连接统计
-        connection_counts = {e: 0 for e in entities}
-        for rel in relationships:
-            connection_counts[rel["from_entity"]] = connection_counts.get(rel["from_entity"], 0) + 1
-            connection_counts[rel["to_entity"]] = connection_counts.get(rel["to_entity"], 0) + 1
+        # 查找循环依赖
+        try:
+            cycles = list(nx.simple_cycles(graph))
+            patterns["circular_dependencies"] = [
+                {"tables": cycle, "length": len(cycle)}
+                for cycle in cycles
+            ]
+        except:
+            pass
         
-        if connection_counts:
-            stats["avg_connections_per_entity"] = sum(connection_counts.values()) / len(connection_counts)
-            stats["max_connections"] = max(connection_counts.values())
-            stats["isolated_entities"] = [e for e, c in connection_counts.items() if c == 0]
+        # 查找关系链
+        for source in connected_tables:
+            for target in connected_tables:
+                if source != target:
+                    try:
+                        paths = list(nx.all_simple_paths(
+                            graph, source, target, cutoff=3
+                        ))
+                        for path in paths:
+                            if len(path) > 2:  # 至少经过一个中间表
+                                patterns["relationship_chains"].append({
+                                    "path": path,
+                                    "length": len(path) - 1
+                                })
+                    except:
+                        pass
         
-        return stats
+        return patterns
     
-    def _generate_recommendations(self, entities: Dict, relationships: List[Dict],
-                                 schema_info: Dict) -> List[str]:
-        """生成优化建议"""
-        recommendations = []
+    def _generate_relationship_insights(
+        self, 
+        relations: List[Dict[str, Any]],
+        patterns: Dict[str, Any],
+        tables: Dict[str, Any]
+    ) -> List[str]:
+        """生成关系洞察"""
+        insights = []
         
-        # 检查孤立实体
-        connected_entities = set()
-        for rel in relationships:
-            connected_entities.add(rel["from_entity"])
-            connected_entities.add(rel["to_entity"])
+        # 基本统计
+        total_relations = len(relations)
+        explicit_count = sum(1 for r in relations if r.get("is_explicit", True))
+        implicit_count = total_relations - explicit_count
         
-        isolated = set(entities.keys()) - connected_entities
-        if isolated:
-            recommendations.append(
-                f"发现{len(isolated)}个孤立实体：{', '.join(list(isolated)[:3])}，建议检查是否缺少关系定义"
-            )
+        insights.append(f"共发现{total_relations}个表关系，其中显式外键{explicit_count}个")
         
-        # 检查缺少外键的潜在关系
-        implicit_count = sum(1 for r in relationships if r["type"] == "implicit")
         if implicit_count > 0:
-            recommendations.append(
-                f"发现{implicit_count}个潜在的隐式关系，建议添加外键约束"
-            )
+            insights.append(f"通过命名约定推断出{implicit_count}个隐式关系")
         
-        # 检查多对多关系
-        many_to_many = [r for r in relationships if r.get("cardinality") == "many-to-many"]
-        if not many_to_many and len(entities) > 5:
-            recommendations.append(
-                "未发现多对多关系，如果业务需要，考虑添加关联表"
-            )
+        # 孤立表分析
+        isolated = patterns.get("isolated_tables", [])
+        if isolated:
+            insights.append(f"发现{len(isolated)}个孤立表，可能是配置表或日志表")
         
-        # 检查实体簇
-        if len(entities) > 10:
-            recommendations.append(
-                "数据库包含较多实体，建议按业务模块进行分层设计"
-            )
+        # 中心表分析
+        hub_tables = patterns.get("hub_tables", [])
+        if hub_tables:
+            top_hubs = sorted(hub_tables, key=lambda x: x["connections"], reverse=True)[:3]
+            hub_names = [h["table"] for h in top_hubs]
+            insights.append(f"核心实体表：{', '.join(hub_names)}")
         
-        return recommendations
+        # 关系类型分析
+        many_to_many = sum(1 for r in relations if r["relationship_type"] == "many-to-many")
+        if many_to_many > 0:
+            insights.append(f"发现{many_to_many}个多对多关系")
+        
+        # 循环依赖
+        cycles = patterns.get("circular_dependencies", [])
+        if cycles:
+            insights.append(f"警告：发现{len(cycles)}个循环依赖，可能影响数据完整性")
+        
+        # 连接度分析
+        connectivity = patterns.get("table_connectivity", {})
+        if connectivity:
+            avg_degree = sum(t["total_degree"] for t in connectivity.values()) / len(connectivity)
+            if avg_degree < 2:
+                insights.append("数据库关系较为简单，适合基础查询")
+            elif avg_degree > 4:
+                insights.append("数据库关系复杂，适合多表关联查询")
+        
+        return insights
+    
+    def _graph_to_dict(self, graph: nx.DiGraph) -> Dict[str, Any]:
+        """将图转换为字典格式"""
+        return {
+            "nodes": list(graph.nodes()),
+            "edges": [
+                {
+                    "from": u,
+                    "to": v,
+                    "data": data
+                }
+                for u, v, data in graph.edges(data=True)
+            ],
+            "node_count": graph.number_of_nodes(),
+            "edge_count": graph.number_of_edges()
+        }
+    
+    async def _arun(
+        self,
+        memory: Dict[str, Any],
+        analyze_implicit: bool = True,
+        depth: int = 2
+    ) -> Dict[str, Any]:
+        """异步执行（当前实现为同步）"""
+        return self._run(memory, analyze_implicit, depth)
