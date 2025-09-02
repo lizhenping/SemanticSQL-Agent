@@ -4,7 +4,7 @@
 """
 
 from typing import Dict, Any, Type, List
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from models.exceptions import ToolExecutionError
 from .base_analysis_tool import BaseAnalysisTool, AnalysisToolInput
@@ -12,7 +12,8 @@ from .base_analysis_tool import BaseAnalysisTool, AnalysisToolInput
 
 class FieldClassificationInput(AnalysisToolInput):
     """字段分类输入"""
-    pass
+    schema_info: Dict[str, Any] = Field(default_factory=dict, description="数据库结构信息（可选，未提供时从memory获取）")
+    domain_info: Dict[str, Any] = Field(default_factory=dict, description="业务领域信息（可选，未提供时从memory获取）")
 
 
 class FieldClassificationTool(BaseAnalysisTool):
@@ -22,17 +23,12 @@ class FieldClassificationTool(BaseAnalysisTool):
     description: str = "对数据库字段进行语义分类，识别字段的业务含义和用途"
     args_schema: Type[BaseModel] = FieldClassificationInput
     
-    def _run(self, memory: Dict[str, Any]) -> Dict[str, Any]:
+    def _run(self, schema_info: Dict[str, Any] = None, domain_info: Dict[str, Any] = None) -> Dict[str, Any]:
         """执行字段分类"""
         try:
-            # 从memory中获取需要的分析结果
-            schema_info = self.get_analysis_from_memory(memory, "schema_info")
-            if not schema_info:
-                schema_info = self.get_analysis_from_memory(memory, "schema_extraction")
-            
-            domain_info = self.get_analysis_from_memory(memory, "domain_info")
-            if not domain_info:
-                domain_info = self.get_analysis_from_memory(memory, "domain_analysis")
+            # 从参数或memory获取数据
+            schema_info = self.get_data_from_memory_or_param(schema_info, "schema_info")
+            domain_info = self.get_data_from_memory_or_param(domain_info, "domain_info")
             
             if not schema_info:
                 raise ToolExecutionError(

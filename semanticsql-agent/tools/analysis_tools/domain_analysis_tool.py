@@ -3,8 +3,8 @@
 基于 LangChain BaseTool
 """
 
-from typing import Dict, Any, Type, List
-from pydantic import BaseModel
+from typing import Dict, Any, Type, List, Union
+from pydantic import BaseModel, Field
 
 from models.exceptions import ToolExecutionError
 from .base_analysis_tool import BaseAnalysisTool, AnalysisToolInput
@@ -12,7 +12,7 @@ from .base_analysis_tool import BaseAnalysisTool, AnalysisToolInput
 
 class DomainAnalysisInput(AnalysisToolInput):
     """领域分析输入"""
-    pass
+    input: Union[Dict[str, Any], str] = Field(default_factory=dict, description="输入参数（JSON字符串或字典，包含schema_info等）")
 
 
 class DomainAnalysisTool(BaseAnalysisTool):
@@ -22,13 +22,37 @@ class DomainAnalysisTool(BaseAnalysisTool):
     description: str = "分析数据库的业务领域，识别主要业务场景和数据特征"
     args_schema: Type[BaseModel] = DomainAnalysisInput
     
-    def _run(self, memory: Dict[str, Any]) -> Dict[str, Any]:
+    def _run(self, input: Union[Dict[str, Any], str] = None, **kwargs) -> Dict[str, Any]:
         """执行领域分析"""
         try:
-            # 从memory中获取schema信息
-            schema_info = self.get_analysis_from_memory(memory, "schema_info")
-            if not schema_info:
-                schema_info = self.get_analysis_from_memory(memory, "schema_extraction")
+            # 添加详细的调试信息
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"=== DOMAIN ANALYSIS DEBUG ===")
+            logger.error(f"input type: {type(input)}")
+            logger.error(f"input value: {str(input)[:500]}...")
+            logger.error(f"kwargs: {kwargs}")
+            
+            # 多种方式尝试获取schema_info
+            schema_info = {}
+            
+            # 方式1: 直接从input参数提取
+            if input:
+                schema_info = self.get_data_from_memory_or_param(input, "schema_info")
+                logger.error(f"Method 1 result: {bool(schema_info)}")
+            
+            # 方式2: 检查kwargs中是否有schema_info
+            if not schema_info and "schema_info" in kwargs:
+                schema_info = kwargs["schema_info"]
+                logger.error(f"Method 2 result: {bool(schema_info)}")
+            
+            # 方式3: 从memory获取
+            if not schema_info and self._agent_memory:
+                current_memory = self.get_current_memory()
+                schema_info = self.get_analysis_from_memory(current_memory, "schema_info")
+                logger.error(f"Method 3 result: {bool(schema_info)}")
+            
+            logger.error(f"Final schema_info: {bool(schema_info)}")
             
             if not schema_info:
                 raise ToolExecutionError(

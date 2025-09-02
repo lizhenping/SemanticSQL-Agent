@@ -68,18 +68,25 @@ All tools inherit from LangChain's `BaseTool` with standardized interfaces:
 # Entry point is cli.py (NOT main.py)
 python cli.py --help
 
-# Generate training data
+# Generate training data (basic usage)
 python cli.py generate -n 100 -o training_data.jsonl
 
-# Generate with custom config
-python cli.py generate -n 50 -c config.yaml -o output.jsonl
+# Generate with specific database and format
+python cli.py generate -n 50 -d testdb -f json -o output.json
 
-# Database analysis only  
+# Generate with custom config and verbose output
+python cli.py generate -n 20 -c config.yaml -o output.jsonl -v
+
+# Database analysis (required parameter: -d)
 python cli.py analyze -d testdb -o analysis.json
 
-# Configuration template (copy and modify)
-python cli.py config-template > config.yaml
+# Configuration template generation
+python cli.py config-template > my_config.yaml
+
+# Common workflow
 cp config.example.yaml config.yaml
+# Edit config.yaml as needed
+python cli.py generate -n 10 -c config.yaml -o test.jsonl -v
 ```
 
 ### Configuration Setup
@@ -177,10 +184,18 @@ database:
 - `agent/data_generation_agent.py` - Main training data generation agent
 - `agent/sql_agent.py` - Interactive SQL query agent
 - `config/settings.py` - Pydantic configuration models with env variable support
+- `config/database.py` - Database connection configuration
 - `utils/memory.py` - LangChain memory for persistent database analysis
 - `utils/trajectory.py` - Execution tracking for debugging
+- `utils/callbacks.py` - LangChain callback handlers for trajectory recording
 - `tools/` - Complete tool ecosystem (14+ tools organized by category)
+  - `analysis_tools/` - Database structure and domain analysis
+  - `generation_tools/` - Question and SQL generation
+  - `validation_tools/` - SQL syntax and execution validation
+  - `reflection_tools/` - Quality analysis and improvement
+  - `thinking_tools/` - Complex reasoning and analysis
 - `cli.py` - Primary entry point (NOT main.py)
+- `prompts/` - Jinja2 templates for agent and tool prompts
 
 ### Tool Parameter Patterns
 - All tools use `memory: Dict[str, Any]` as primary input
@@ -204,15 +219,26 @@ database:
 
 ### Quick Development Workflow
 ```bash
-# 1. Ensure LLM service is running
+# 1. Ensure LLM service is running (critical for agent operation)
 curl -s http://localhost:9991/v1/models
 
-# 2. Test basic functionality
+# 2. Test basic functionality with small dataset
 python cli.py generate -n 2 -o test_output.jsonl -v
 
-# 3. Run tests after changes
+# 3. Run specific tests after changes
 python -m pytest tests/test_data_generation_agent.py -v
+python -m pytest tests/test_tools.py -v
 
 # 4. Format and lint code
 black . && flake8 .
+
+# 5. Check configuration template generation
+python cli.py config-template > test_config.yaml
 ```
+
+### Common CLI Error Patterns
+- **Database connection**: Ensure MySQL service is running and config is correct
+- **LLM service**: Verify vllm service is running on correct port (9991)
+- **Missing parameters**: `analyze` command requires `-d` parameter for database name
+- **Configuration precedence**: Config file overrides environment variables
+- **Output formats**: Use `-f json` for structured output, `-f jsonl` (default) for streaming

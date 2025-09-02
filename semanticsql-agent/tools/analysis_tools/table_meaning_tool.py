@@ -4,7 +4,7 @@
 """
 
 from typing import Dict, Any, Type, List
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from models.exceptions import ToolExecutionError
 from .base_analysis_tool import BaseAnalysisTool, AnalysisToolInput
@@ -12,7 +12,11 @@ from .base_analysis_tool import BaseAnalysisTool, AnalysisToolInput
 
 class TableMeaningInput(AnalysisToolInput):
     """表含义分析输入"""
-    pass
+    schema_info: Dict[str, Any] = Field(default_factory=dict, description="数据库结构信息（可选，未提供时从memory获取）")
+    domain_info: Dict[str, Any] = Field(default_factory=dict, description="业务领域信息（可选，未提供时从memory获取）")
+    field_classification: Dict[str, Any] = Field(default_factory=dict, description="字段分类信息（可选，未提供时从memory获取）")
+    column_meanings: Dict[str, Any] = Field(default_factory=dict, description="列含义分析信息（可选，未提供时从memory获取）")
+    er_relations: Dict[str, Any] = Field(default_factory=dict, description="ER关系分析信息（可选，未提供时从memory获取）")
 
 
 class TableMeaningTool(BaseAnalysisTool):
@@ -22,22 +26,15 @@ class TableMeaningTool(BaseAnalysisTool):
     description: str = "分析数据库表的业务含义，识别表的业务用途、实体类型和表间关系"
     args_schema: Type[BaseModel] = TableMeaningInput
     
-    def _run(self, memory: Dict[str, Any]) -> Dict[str, Any]:
+    def _run(self, schema_info: Dict[str, Any] = None, domain_info: Dict[str, Any] = None, field_classification: Dict[str, Any] = None, column_meanings: Dict[str, Any] = None, er_relations: Dict[str, Any] = None) -> Dict[str, Any]:
         """执行表含义分析"""
         try:
-            # 从memory中获取需要的分析结果
-            schema_info = self.get_analysis_from_memory(memory, "schema_info")
-            if not schema_info:
-                schema_info = self.get_analysis_from_memory(memory, "schema_extraction")
-            
-            domain_info = self.get_analysis_from_memory(memory, "domain_info")
-            if not domain_info:
-                domain_info = self.get_analysis_from_memory(memory, "domain_analysis")
-                
-            field_classification = self.get_analysis_from_memory(memory, "field_classification")
-            column_meanings = self.get_analysis_from_memory(memory, "column_meanings")
-            if not column_meanings:
-                column_meanings = self.get_analysis_from_memory(memory, "column_meaning_analysis")
+            # 从参数或memory获取数据
+            schema_info = self.get_data_from_memory_or_param(schema_info, "schema_info")
+            domain_info = self.get_data_from_memory_or_param(domain_info, "domain_info")
+            field_classification = self.get_data_from_memory_or_param(field_classification, "field_classification")
+            column_meanings = self.get_data_from_memory_or_param(column_meanings, "column_meanings")
+            er_relations = self.get_data_from_memory_or_param(er_relations, "er_relations")
             
             if not schema_info:
                 raise ToolExecutionError(

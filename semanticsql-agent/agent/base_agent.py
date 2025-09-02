@@ -48,6 +48,9 @@ class BaseAgent(ABC):
         # 初始化记忆
         self.memory = self._initialize_memory()
         
+        # 为分析工具设置memory引用
+        self._setup_tool_memory_references()
+        
         # 创建 Agent
         self.agent_executor = self._create_agent()
         
@@ -63,36 +66,50 @@ class BaseAgent(ABC):
         """初始化记忆系统"""
         pass
     
+    def _setup_tool_memory_references(self):
+        """为分析工具设置memory引用"""
+        from tools.analysis_tools.base_analysis_tool import BaseAnalysisTool
+        
+        for tool in self.tools:
+            if isinstance(tool, BaseAnalysisTool):
+                tool.set_memory_reference(self.memory)
+    
     def _create_prompt(self) -> ChatPromptTemplate:
         """创建Agent提示词"""
         try:
             from prompts.manager import PromptManager
             prompt_manager = PromptManager()
-            # 传递工具名称列表给提示词模板
-            tool_names = [tool.name for tool in self.tools]
             
             # 尝试使用灵活的提示词模板
             try:
+                # 不传递工具信息，让模板保留占位符
                 system_prompt = prompt_manager.render_template(
-                    'system/main_flexible.j2',
-                    tool_names=", ".join(tool_names),
-                    tools="\n".join([f"- **{tool.name}**: {tool.description}" for tool in self.tools])
+                    'system/main_flexible.j2'
                 )
-            except:
+            except Exception as template_error:
+                self.logger.warning(f"Failed to load flexible template: {template_error}")
                 # 如果灵活模板不存在，使用原有模板
-                system_prompt = prompt_manager.get_system_prompt(
-                    tool_names=", ".join(tool_names),
-                    tools="\n".join([f"- {tool.name}: {tool.description}" for tool in self.tools])
-                )
+                try:
+                    system_prompt = prompt_manager.render_template(
+                        'system/main.j2'
+                    )
+                except Exception as main_error:
+                    self.logger.warning(f"Failed to load main template: {main_error}")
+                    # 如果都失败，使用默认模板
+                    system_prompt = None
+            
+            if system_prompt:
+                return ChatPromptTemplate.from_messages([
+                    ("system", system_prompt),
+                    ("human", "{input}"),
+                    ("assistant", "{agent_scratchpad}")
+                ])
+            else:
+                raise Exception("No prompt template available")
                 
-            return ChatPromptTemplate.from_messages([
-                ("system", system_prompt),
-                ("human", "{input}"),
-                ("assistant", "{agent_scratchpad}")
-            ])
         except Exception as e:
             self.logger.warning(f"Failed to load prompt template: {e}. Using default.")
-            # 使用默认提示词
+            # 使用默认提示词 - 保留LangChain需要的占位符
             return ChatPromptTemplate.from_messages([
                 ("system", """你是一个专业的SQL训练数据生成专家。
 
@@ -154,16 +171,30 @@ Final Answer: 最终结果
         
         # 设置到回调处理器
         self.callback_handler.set_execution(execution)
-        # 设置内存引用以便保存工具结果
-        self.callback_handler.memory = self.memory
+        # 设置内存引用以便保存工具结果 - 使用object.__setattr__避免Pydantic验证
+        if hasattr(self.callback_handler, '__dict__'):
+            object.__setattr__(self.callback_handler, 'memory', self.memory)
+        else:
+            # 如果无法设置，记录警告但继续执行
+            self.logger.warning("Unable to set memory reference to callback handler")
         
         try:
             # 执行任务
             self.logger.info(f"Starting task: {task}")
-            result = self.agent_executor.invoke({
+            
+            # 准备执行参数，包含模板需要的变量
+            execution_params = {
                 "input": task,
+                "database_name": getattr(self.db_config, 'database', 'unknown'),
+                "memory_summary": self._get_memory_summary(),
                 **kwargs
-            })
+            }
+            
+            # 如果kwargs中有count参数，使用它，否则默认为1
+            if 'count' not in execution_params:
+                execution_params['count'] = kwargs.get('target_count', 1)
+            
+            result = self.agent_executor.invoke(execution_params)
             
             # 更新执行状态
             execution.status = "completed"
@@ -205,6 +236,26 @@ Final Answer: 最终结果
     def get_memory_state(self) -> Dict[str, Any]:
         """获取当前记忆状态"""
         return self.memory.load_memory_variables({})
+    
+    def _get_memory_summary(self) -> str:
+        """获取记忆状态摘要"""
+        try:
+            memory_state = self.get_memory_state()
+            if not memory_state:
+                return "初始状态"
+            
+            # 统计已有的分析结果
+            analysis_count = 0
+            if memory_state.get("schema_info"):
+                analysis_count += 1
+            if memory_state.get("domain_info"):
+                analysis_count += 1
+            if memory_state.get("field_classification"):
+                analysis_count += 1
+                
+            return f"已完成 {analysis_count} 项分析"
+        except:
+            return "记忆状态未知"
     
     def clear_memory(self):
         """清空记忆"""

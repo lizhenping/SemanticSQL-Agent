@@ -168,7 +168,11 @@ class DataGenerationAgent(BaseAgent):
         - 分析结果会自动保存，供后续数据生成使用
         """
         
-        result = self.run(analysis_task)
+        result = self.run(
+            analysis_task,
+            count=1,  # 分析阶段不需要实际生成数据
+            target_count=1
+        )
         
         if result["success"]:
             # 获取分析结果
@@ -294,7 +298,11 @@ class DataGenerationAgent(BaseAgent):
         """
         
         # 执行生成任务
-        result = self.run(generation_task)
+        result = self.run(
+            generation_task,
+            count=count,
+            target_count=count
+        )
         
         if not result["success"]:
             raise AgentExecutionError(

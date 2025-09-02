@@ -4,7 +4,7 @@
 """
 
 from typing import Dict, Any, Type
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from models.exceptions import ToolExecutionError
 from .base_analysis_tool import BaseAnalysisTool, AnalysisToolInput
@@ -12,7 +12,9 @@ from .base_analysis_tool import BaseAnalysisTool, AnalysisToolInput
 
 class ColumnMeaningInput(AnalysisToolInput):
     """列含义分析输入"""
-    pass
+    schema_info: Dict[str, Any] = Field(default_factory=dict, description="数据库结构信息（可选，未提供时从memory获取）")
+    domain_info: Dict[str, Any] = Field(default_factory=dict, description="业务领域信息（可选，未提供时从memory获取）")
+    field_classification: Dict[str, Any] = Field(default_factory=dict, description="字段分类信息（可选，未提供时从memory获取）")
 
 
 class ColumnMeaningTool(BaseAnalysisTool):
@@ -22,19 +24,13 @@ class ColumnMeaningTool(BaseAnalysisTool):
     description: str = "分析数据库列的业务含义，识别列的业务用途、数据模式和常见值"
     args_schema: Type[BaseModel] = ColumnMeaningInput
     
-    def _run(self, memory: Dict[str, Any]) -> Dict[str, Any]:
+    def _run(self, schema_info: Dict[str, Any] = None, domain_info: Dict[str, Any] = None, field_classification: Dict[str, Any] = None) -> Dict[str, Any]:
         """执行列含义分析"""
         try:
-            # 从memory中获取需要的分析结果
-            schema_info = self.get_analysis_from_memory(memory, "schema_info")
-            if not schema_info:
-                schema_info = self.get_analysis_from_memory(memory, "schema_extraction")
-            
-            domain_info = self.get_analysis_from_memory(memory, "domain_info")
-            if not domain_info:
-                domain_info = self.get_analysis_from_memory(memory, "domain_analysis")
-                
-            field_classification = self.get_analysis_from_memory(memory, "field_classification")
+            # 从参数或memory获取数据
+            schema_info = self.get_data_from_memory_or_param(schema_info, "schema_info")
+            domain_info = self.get_data_from_memory_or_param(domain_info, "domain_info")
+            field_classification = self.get_data_from_memory_or_param(field_classification, "field_classification")
             
             if not schema_info:
                 raise ToolExecutionError(

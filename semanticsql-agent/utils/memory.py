@@ -111,7 +111,8 @@ class DatabaseAnalysisMemory(BaseMemory):
             result = self._compress_schema_data(result)
         
         self.memories[analysis_type] = result
-        self.logger.debug(f"Updated {analysis_type} in memory")
+        self.logger.info(f"Successfully updated {analysis_type} in memory (data size: {len(str(result))} chars)")
+        self.logger.debug(f"Memory now contains: {list(self.memories.keys())}")
     
     def _compress_schema_data(self, schema_data: Dict[str, Any]) -> Dict[str, Any]:
         """压缩schema数据以减少内存占用"""
@@ -172,7 +173,12 @@ class DatabaseAnalysisMemory(BaseMemory):
         Returns:
             分析结果，如果不存在返回空字典
         """
-        return self.memories.get(analysis_type, {})
+        result = self.memories.get(analysis_type, {})
+        if result:
+            self.logger.debug(f"Retrieved {analysis_type} from memory (size: {len(str(result))} chars)")
+        else:
+            self.logger.debug(f"No data found for {analysis_type} in memory. Available: {list(self.memories.keys())}")
+        return result
     
     def has_complete_analysis(self) -> bool:
         """检查是否有完整的数据库分析结果"""

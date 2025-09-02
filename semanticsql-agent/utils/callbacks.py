@@ -26,6 +26,8 @@ class TrajectoryCallbackHandler(BaseCallbackHandler):
         self.trajectories = []
         self.current_execution = None
         self.current_step = None
+        # 初始化memory引用
+        object.__setattr__(self, 'memory', None)
     
     def on_agent_action(
         self,
@@ -234,7 +236,12 @@ class TrajectoryCallbackHandler(BaseCallbackHandler):
         **kwargs: Any
     ) -> Any:
         """Chain开始执行"""
-        self.logger.debug(f"Chain started: {serialized.get('name', 'unknown')}")
+        # 添加None检查
+        if serialized is not None:
+            chain_name = serialized.get('name', 'unknown')
+        else:
+            chain_name = 'unknown'
+        self.logger.debug(f"Chain started: {chain_name}")
     
     def on_chain_end(
         self,
@@ -245,7 +252,11 @@ class TrajectoryCallbackHandler(BaseCallbackHandler):
         **kwargs: Any
     ) -> Any:
         """Chain执行结束"""
-        self.logger.debug(f"Chain finished with outputs: {outputs}")
+        # 添加None检查
+        if outputs is not None:
+            self.logger.debug(f"Chain finished with outputs: {outputs}")
+        else:
+            self.logger.debug("Chain finished with no outputs")
     
     def on_chain_error(
         self,
