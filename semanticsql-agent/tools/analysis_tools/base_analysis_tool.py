@@ -113,9 +113,9 @@ class BaseAnalysisTool(BaseTool):
         Returns:
             分析结果字典，如果不存在则返回空字典
         """
-        # 优先直接从agent memory对象获取
-        if self._agent_memory and hasattr(self._agent_memory, 'get_analysis'):
-            return self._agent_memory.get_analysis(analysis_type)
+        # 暂时禁用_agent_memory访问避免FieldInfo错误
+        # if self._agent_memory and hasattr(self._agent_memory, 'get_analysis'):
+        #     return self._agent_memory.get_analysis(analysis_type)
         
         # memory参数可能是完整的分析结果字典
         if isinstance(memory, dict) and analysis_type in memory:

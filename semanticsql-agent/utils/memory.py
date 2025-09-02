@@ -138,9 +138,9 @@ class DatabaseAnalysisMemory(BaseMemory):
             analysis_type: 分析类型
             result: 分析结果
         """
-        # 对schema_info进行压缩处理
-        if analysis_type == "schema_info" and self.enable_compression:
-            result = self._compress_schema_data(result)
+        # 暂时禁用压缩避免FieldInfo错误
+        # if analysis_type == "schema_info" and self.enable_compression:
+        #     result = self._compress_schema_data(result)
         
         self.memories[analysis_type] = result
         self.logger.info(f"Successfully updated {analysis_type} in memory (data size: {len(str(result))} chars)")
@@ -166,15 +166,16 @@ class DatabaseAnalysisMemory(BaseMemory):
                 if "sample_data" in table_info:
                     del table_info["sample_data"]
                 
-                # 压缩列信息
-                columns = table_info.get("columns", [])
-                for column in columns:
-                    # 简化默认值
-                    if column.get("default") == "NULL":
-                        column["default"] = None
-                    # 移除空注释
-                    if not column.get("comment"):
-                        column.pop("comment", None)
+                # 压缩列信息（适配字典格式）
+                columns = table_info.get("columns", {})
+                if isinstance(columns, dict):
+                    for column_name, column_info in columns.items():
+                        # 简化默认值
+                        if column_info.get("default") == "NULL":
+                            column_info["default"] = None
+                        # 移除空注释
+                        if not column_info.get("comment"):
+                            column_info.pop("comment", None)
                 
                 # 移除空索引
                 if not table_info.get("indexes"):

@@ -5,10 +5,8 @@
 
 from .base_agent import BaseAgent
 from .sql_agent import SQLAgent
-from .data_generation_agent import DataGenerationAgent
 
 __all__ = [
     "BaseAgent",
-    "SQLAgent",
-    "DataGenerationAgent"
+    "SQLAgent"
 ]

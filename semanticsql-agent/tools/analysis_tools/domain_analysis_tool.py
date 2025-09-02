@@ -44,11 +44,11 @@ class DomainAnalysisTool(BaseAnalysisTool):
     description: str = "分析数据库的业务领域，识别主要业务场景和数据特征"
     args_schema: Type[BaseModel] = DomainAnalysisInput
 
-    def __init__(self, **kwargs):
+    def __init__(self, llm: Optional[ChatOpenAI] = None, **kwargs):
         super().__init__(**kwargs)
         # 使用object.__setattr__避开Pydantic验证
         object.__setattr__(self, "prompt_manager", PromptManager())
-        object.__setattr__(self, "llm_client", None)  # 将在运行时从agent获取
+        object.__setattr__(self, "llm", llm)  # 从Agent获取的LLM实例
 
     def _run(self, input: Union[Dict[str, Any], str] = None, **kwargs) -> str:
         """执行LLM驱动的领域分析"""
@@ -114,25 +114,24 @@ class DomainAnalysisTool(BaseAnalysisTool):
             confidence = self._calculate_table_confidence(table_name, table_info)
             scored_tables.append((table_name, table_info, confidence))
 
-        # 只选择置信度高的表（>= 0.7），最多10个
+        # 只选择置信度高的表（>= 0.7），最多7个（减少上下文长度）
         high_confidence_tables = [
             (name, info, conf) for name, info, conf in scored_tables if conf >= 0.7
         ]
         high_confidence_tables.sort(key=lambda x: x[2], reverse=True)
 
-        for table_name, table_info, confidence in high_confidence_tables[:10]:
-            # 提取关键列（最多5个）
+        for table_name, table_info, confidence in high_confidence_tables[:7]:  # 减少到7个表
+            # 提取关键列（最多3个，进一步减少上下文）
             key_columns = self._extract_key_columns(
                 table_info.get("columns", {}), table_info.get("primary_key", [])
             )
 
             simplified_table = {
                 "name": table_name,
-                "description": table_info.get("comment", "")[:100],  # 限制描述长度
+                "description": table_info.get("comment", "")[:50],  # 进一步限制描述长度
                 "type": self._determine_business_type(table_name, table_info),
-                "key_columns": key_columns[:5],  # 严格限制为5个关键列
+                "key_columns": key_columns[:3],  # 严格限制为3个关键列
                 "confidence": confidence,
-                "row_count": table_info.get("row_count", 0),
             }
 
             core_tables.append(simplified_table)
@@ -146,9 +145,11 @@ class DomainAnalysisTool(BaseAnalysisTool):
         stats: Dict[str, Any],
     ) -> Dict[str, Any]:
         """使用LLM进行领域分析"""
-        # 获取LLM客户端（从agent上下文获取）
-        if not self.llm_client:
-            self.llm_client = self._get_llm_client()
+        # 检查LLM实例是否可用
+        if not self.llm:
+            raise ToolExecutionError(
+                tool_name=self.name, reason="LLM实例未提供，请确保Agent正确初始化了工具"
+            )
 
         # 识别数据模式
         patterns = self._identify_data_patterns(core_tables)
@@ -166,78 +167,45 @@ class DomainAnalysisTool(BaseAnalysisTool):
         }
 
         # 渲染提示词
-        try:
-            prompt = self.prompt_manager.get_analysis_prompt(
-                "domain_analysis", **prompt_params
-            )
-        except Exception as e:
-            print(f"Warning: 提示词渲染失败，使用默认分析: {e}")
-            return self._fallback_analysis(core_tables, stats)
+        prompt = self.prompt_manager.get_analysis_prompt(
+            "domain_analysis", **prompt_params
+        )
 
         # 调用LLM进行分析
-        try:
-            llm_response = self.llm_client.generate(prompt)
-
-            # 尝试解析JSON响应
-            try:
-                analysis_result = json.loads(llm_response)
-                return analysis_result
-            except json.JSONDecodeError:
-                print(f"Warning: LLM返回非JSON格式，使用后备分析")
-                return self._fallback_analysis(core_tables, stats)
-
-        except Exception as e:
-            print(f"Warning: LLM调用失败，使用后备分析: {e}")
-            return self._fallback_analysis(core_tables, stats)
-
-    def _get_llm_client(self) -> LLMClient:
-        """获取LLM客户端"""
-        try:
-            # 尝试从agent内存或配置获取LLM客户端
-            from config.settings import get_settings
-
-            settings = get_settings()
-            return LLMClient(
-                model=settings.llm_model,
-                base_url=settings.llm_base_url,
-                api_key=settings.llm_api_key,
-            )
-        except Exception as e:
-            print(f"Warning: 无法获取LLM客户端: {e}")
+        llm_response = self.llm.invoke(prompt).content
+        
+        
+        # 验证响应不为空
+        if not llm_response or not llm_response.strip():
             raise ToolExecutionError(
-                tool_name=self.name, reason="无法获取LLM服务，请检查配置"
+                tool_name=self.name, 
+                reason="LLM返回空响应，请检查LLM服务状态和提示词"
             )
 
-    def _fallback_analysis(
-        self, core_tables: List[Dict[str, Any]], stats: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """后备分析方法（基于统计）"""
-        # 使用统计信息生成基本分析结果
-        return {
-            "primary_domain": "未知领域",
-            "domain_confidence": 0.5,
-            "sub_domains": [],
-            "business_entities": {
-                t["name"]: {"entity_type": t["type"], "confidence": t["confidence"]}
-                for t in core_tables
-            },
-            "business_processes": [],
-            "data_characteristics": {
-                "scale": "medium" if len(core_tables) > 5 else "small",
-                "complexity": (
-                    "moderate" if stats.get("total_key_columns", 0) > 15 else "simple"
-                ),
-                "time_sensitivity": any(
-                    "time" in str(t.get("key_columns", [])).lower() for t in core_tables
-                ),
-                "entity_rich": stats.get("entity_tables", 0)
-                > stats.get("config_tables", 0),
-            },
-            "recommendations": [
-                "基于表结构特征生成适合的查询类型",
-                "关注核心业务表的关联查询",
-            ],
-        }
+        # 处理LLM响应中的thinking标签
+        cleaned_response = llm_response.strip()
+        
+        # 移除<think>标签内容
+        if "<think>" in cleaned_response:
+            # 寻找JSON内容 - 通常在thinking之后
+            if "}" in cleaned_response:
+                # 寻找第一个{和最后一个}
+                start_idx = cleaned_response.find("{")
+                end_idx = cleaned_response.rfind("}") + 1
+                if start_idx != -1 and end_idx > start_idx:
+                    cleaned_response = cleaned_response[start_idx:end_idx]
+                    pass
+
+        # 解析JSON响应
+        try:
+            analysis_result = json.loads(cleaned_response)
+            return analysis_result
+        except json.JSONDecodeError as e:
+            raise ToolExecutionError(
+                tool_name=self.name,
+                reason=f"LLM返回非JSON格式响应，解析失败: {str(e)}. 清理后内容: {cleaned_response[:500]}"
+            )
+
 
     def _calculate_statistics(
         self, core_tables: List[Dict[str, Any]]
@@ -383,14 +351,16 @@ class DomainAnalysisTool(BaseAnalysisTool):
         return patterns
 
     def _save_to_memory(self, analysis_result: Dict[str, Any]):
-        """保存分析结果到memory"""
-        if self._agent_memory:
-            try:
-                self._agent_memory.save_context(
-                    inputs={"tool_name": "domain_analysis"}, outputs=analysis_result
-                )
-            except Exception as e:
-                print(f"Warning: Failed to save domain analysis to memory: {e}")
+        """保存分析结果到memory（暂时禁用）"""
+        # 暂时禁用memory保存避免FieldInfo错误
+        # if self._agent_memory:
+        #     try:
+        #         self._agent_memory.save_context(
+        #             inputs={"tool_name": "domain_analysis"}, outputs=analysis_result
+        #         )
+        #     except Exception as e:
+        #         print(f"Warning: Failed to save domain analysis to memory: {e}")
+        pass
 
     def _calculate_table_confidence(
         self, table_name: str, table_info: Dict[str, Any]
@@ -399,7 +369,7 @@ class DomainAnalysisTool(BaseAnalysisTool):
         confidence = 0.0
 
         # 基础分数：有主键
-        if table_info.get("primary_keys"):
+        if table_info.get("primary_key"):
             confidence += 0.3
 
         # 有注释说明
@@ -520,122 +490,6 @@ class DomainAnalysisTool(BaseAnalysisTool):
         # 默认为实体表
         return "entity_table"
 
-    # 以下方法已被LLM分析替代，保留用作fallback
-    def _analyze_domain_patterns_legacy(
-        self, tables: Dict[str, Any]
-    ) -> Dict[str, float]:
-        """分析领域模式（适配简化数据结构）"""
-        domain_patterns = {
-            "电商": [
-                "product",
-                "order",
-                "cart",
-                "payment",
-                "customer",
-                "inventory",
-                "shop",
-            ],
-            "金融": [
-                "account",
-                "transaction",
-                "balance",
-                "payment",
-                "invoice",
-                "credit",
-                "loan",
-            ],
-            "社交": ["user", "friend", "post", "comment", "like", "follow", "message"],
-            "教育": [
-                "student",
-                "teacher",
-                "course",
-                "class",
-                "exam",
-                "score",
-                "enrollment",
-            ],
-            "医疗": [
-                "patient",
-                "doctor",
-                "appointment",
-                "prescription",
-                "diagnosis",
-                "treatment",
-            ],
-            "物流": [
-                "shipment",
-                "delivery",
-                "warehouse",
-                "tracking",
-                "carrier",
-                "route",
-            ],
-            "人力资源": [
-                "employee",
-                "department",
-                "salary",
-                "attendance",
-                "leave",
-                "recruitment",
-            ],
-            "CRM": ["customer", "lead", "opportunity", "contact", "campaign", "deal"],
-            "库存管理": [
-                "inventory",
-                "stock",
-                "warehouse",
-                "supplier",
-                "purchase",
-                "material",
-            ],
-            "内容管理": [
-                "article",
-                "page",
-                "category",
-                "tag",
-                "media",
-                "content",
-                "publish",
-            ],
-        }
-
-        domain_scores = {}
-        table_names = [name.lower() for name in tables.keys()]
-        all_columns = []
-
-        # 收集所有列名（适配简化数据结构）
-        for table_info in tables.values():
-            key_columns = table_info.get("key_columns", [])
-            all_columns.extend([col.lower() for col in key_columns])
-
-        # 计算每个领域的匹配分数
-        for domain, keywords in domain_patterns.items():
-            score = 0.0
-            matched_keywords = 0
-
-            for keyword in keywords:
-                # 检查表名
-                table_matches = sum(1 for t in table_names if keyword in t)
-                # 检查列名
-                column_matches = sum(1 for c in all_columns if keyword in c)
-                # 检查表描述
-                description_matches = sum(
-                    1
-                    for table_info in tables.values()
-                    if keyword in table_info.get("description", "").lower()
-                )
-
-                if table_matches > 0 or column_matches > 0 or description_matches > 0:
-                    matched_keywords += 1
-                    score += (
-                        table_matches * 2 + column_matches + description_matches
-                    )  # 表名权重更高
-
-            if matched_keywords > 0:
-                # 归一化分数
-                domain_scores[domain] = score / (len(keywords) * len(tables))
-
-        return domain_scores
-
     def _identify_business_entities(self, tables: Dict[str, Any]) -> Dict[str, Any]:
         """识别业务实体（适配简化数据结构）"""
         entities = {}
@@ -724,163 +578,6 @@ class DomainAnalysisTool(BaseAnalysisTool):
                 processes["支撑流程"].append(process_info)
 
         return processes
-
-    def _analyze_data_characteristics(self, tables: Dict[str, Any]) -> Dict[str, Any]:
-        """分析数据特征（适配简化数据结构）"""
-        characteristics = {
-            "total_tables": len(tables),
-            "total_key_columns": 0,
-            "avg_key_columns_per_table": 0,
-            "has_timestamps": False,
-            "has_soft_delete": False,
-            "has_versioning": False,
-            "common_patterns": [],
-            "table_types": {},
-            "confidence_distribution": {},
-        }
-
-        total_key_columns = 0
-        timestamp_tables = 0
-        soft_delete_tables = 0
-        version_tables = 0
-        table_types = {}
-        confidence_ranges = {"high": 0, "medium": 0, "low": 0}
-
-        for table_info in tables.values():
-            key_columns = table_info.get("key_columns", [])
-            total_key_columns += len(key_columns)
-
-            # 统计表类型
-            table_type = table_info.get("type", "unknown")
-            table_types[table_type] = table_types.get(table_type, 0) + 1
-
-            # 统计置信度分布
-            confidence = table_info.get("confidence", 0.0)
-            if confidence >= 0.8:
-                confidence_ranges["high"] += 1
-            elif confidence >= 0.5:
-                confidence_ranges["medium"] += 1
-            else:
-                confidence_ranges["low"] += 1
-
-            # 检查关键列名模式
-            column_names = [col.lower() for col in key_columns]
-
-            # 检查时间戳
-            if any(
-                "created" in col or "updated" in col or "time" in col
-                for col in column_names
-            ):
-                timestamp_tables += 1
-
-            # 检查软删除
-            if any(
-                any(pattern in col for pattern in ["deleted", "delete"])
-                for col in column_names
-            ):
-                soft_delete_tables += 1
-
-            # 检查版本控制
-            if any("version" in col for col in column_names):
-                version_tables += 1
-
-        characteristics["total_key_columns"] = total_key_columns
-        characteristics["avg_key_columns_per_table"] = (
-            total_key_columns / len(tables) if tables else 0
-        )
-        characteristics["has_timestamps"] = timestamp_tables > len(tables) * 0.5
-        characteristics["has_soft_delete"] = soft_delete_tables > 0
-        characteristics["has_versioning"] = version_tables > 0
-        characteristics["table_types"] = table_types
-        characteristics["confidence_distribution"] = confidence_ranges
-
-        # 识别常见模式
-        if characteristics["has_timestamps"]:
-            characteristics["common_patterns"].append("时间戳审计")
-        if characteristics["has_soft_delete"]:
-            characteristics["common_patterns"].append("软删除")
-        if characteristics["has_versioning"]:
-            characteristics["common_patterns"].append("版本控制")
-        if table_types.get("entity_table", 0) > table_types.get("config_table", 0):
-            characteristics["common_patterns"].append("实体驱动设计")
-
-        return characteristics
-
-    def _generate_domain_recommendations(self, analysis: Dict[str, Any]) -> List[str]:
-        """生成领域相关建议（适配简化数据结构）"""
-        recommendations = []
-
-        domain = analysis.get("primary_domain", "")
-        entities = analysis.get("business_entities", {})
-        processes = analysis.get("business_processes", {})
-        characteristics = analysis.get("data_characteristics", {})
-
-        # 基于领域的建议
-        if domain == "电商":
-            recommendations.append("关注订单、商品、库存相关的查询")
-            recommendations.append("考虑销售统计、库存预警等场景")
-        elif domain == "金融":
-            recommendations.append("重点关注交易、账户余额相关查询")
-            recommendations.append("注意数据精度和事务一致性")
-        elif domain == "社交":
-            recommendations.append("关注用户关系、内容互动相关查询")
-            recommendations.append("考虑社交网络分析和推荐算法")
-        elif domain == "教育":
-            recommendations.append("关注学生成绩、课程安排相关查询")
-            recommendations.append("考虑教学质量分析和学习进度跟踪")
-
-        # 基于实体分析的建议
-        total_entities = len(entities)
-        high_confidence_entities = sum(
-            1 for e in entities.values() if e.get("confidence", 0) >= 0.8
-        )
-
-        if total_entities > 8:
-            recommendations.append("系统较复杂，建议分模块生成查询")
-        elif total_entities < 3:
-            recommendations.append("系统结构简单，适合生成基础查询")
-
-        if (
-            high_confidence_entities / total_entities > 0.7
-            if total_entities > 0
-            else False
-        ):
-            recommendations.append("表结构清晰，可以生成复杂的关联查询")
-
-        # 检查特定实体类型
-        entity_categories = [e.get("business_category", "") for e in entities.values()]
-        if "transaction" in entity_categories:
-            recommendations.append("可以生成交易流程跟踪的查询")
-        if "person" in entity_categories:
-            recommendations.append("可以生成用户行为分析的查询")
-        if "product" in entity_categories:
-            recommendations.append("可以生成商品统计分析的查询")
-
-        # 基于流程的建议
-        core_processes = processes.get("核心流程", [])
-        support_processes = processes.get("支撑流程", [])
-        mgmt_processes = processes.get("管理流程", [])
-
-        if len(core_processes) > 0:
-            recommendations.append("存在核心业务流程，可生成业务流程分析查询")
-        if len(mgmt_processes) > 0:
-            recommendations.append("包含管理功能，可生成系统监控和配置查询")
-        if len(support_processes) > len(core_processes):
-            recommendations.append("支撑数据丰富，适合生成多维度分析查询")
-
-        # 基于数据特征的建议
-        if characteristics.get("has_timestamps", False):
-            recommendations.append("支持时间维度分析，可生成趋势和历史查询")
-        if characteristics.get("has_soft_delete", False):
-            recommendations.append("使用软删除，可生成数据恢复和审计查询")
-        if characteristics.get("has_versioning", False):
-            recommendations.append("支持版本控制，可生成版本对比查询")
-
-        confidence_dist = characteristics.get("confidence_distribution", {})
-        if confidence_dist.get("high", 0) > confidence_dist.get("low", 0):
-            recommendations.append("数据质量较高，适合生成复杂的分析查询")
-
-        return recommendations
 
     async def _arun(self, input: Union[Dict[str, Any], str] = None, **kwargs) -> str:
         """异步执行（当前实现为同步）"""

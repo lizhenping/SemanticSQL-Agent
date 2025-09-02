@@ -15,7 +15,7 @@ import yaml
 
 from config.settings import Settings
 from config.database import DatabaseConfig
-from agent.data_generation_agent import DataGenerationAgent
+from agent.sql_agent import SQLAgent
 from models.exceptions import (
     DatabaseConnectionError,
     LLMError,
@@ -117,8 +117,8 @@ def generate(ctx, count: int, output: str, database: Optional[str],
         output = f"{output}.{format}"
     
     # 创建Agent
-    click.echo("初始化数据生成Agent...")
-    agent = DataGenerationAgent(settings, db_config)
+    click.echo("初始化SQL Agent...")
+    agent = SQLAgent(settings, db_config)
     
     # 生成数据
     with click.progressbar(length=count, label='生成进度') as bar:
@@ -180,7 +180,7 @@ def analyze(ctx, database: str, output: Optional[str], config: Optional[str]):
     db_config.database = database
     
     # 创建Agent
-    agent = DataGenerationAgent(settings, db_config)
+    agent = SQLAgent(settings, db_config)
     
     # 执行分析
     click.echo("执行数据库分析...")

@@ -4,6 +4,7 @@
 """
 
 import random
+import json
 from typing import Dict, Any, Type, List, Optional
 from datetime import datetime
 
@@ -40,6 +41,16 @@ class ScenarioTool(BaseTool):
     def _run(self, iteration: int = 0, **kwargs) -> Dict[str, Any]:
         """选择一个场景"""
         try:
+            # Handle LangChain parameter passing - sometimes iteration is a JSON string
+            if isinstance(iteration, str) and iteration.startswith('{'):
+                try:
+                    params = json.loads(iteration)
+                    iteration = params.get("iteration", 0)
+                    # Extract other parameters that might be passed via JSON
+                    database = params.get("database", "")
+                    num_scenarios = params.get("num_scenarios", 1)
+                except json.JSONDecodeError:
+                    iteration = 0  # Use default if JSON parsing fails
             
             # ScenarioTool基于预定义模板工作，不需要数据库分析结果
             # 它会返回通用的业务场景，供后续工具使用

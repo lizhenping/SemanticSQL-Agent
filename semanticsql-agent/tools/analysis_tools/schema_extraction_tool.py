@@ -53,6 +53,17 @@ class SchemaExtractionTool(BaseAnalysisTool):
     ) -> str:
         """执行数据库结构提取"""
         try:
+            # Handle LangChain parameter passing - sometimes database_name is a JSON string
+            if isinstance(database_name, str) and database_name.startswith('{'):
+                try:
+                    params = json.loads(database_name)
+                    database_name = params.get("database_name", database_name)
+                    include_views = params.get("include_views", include_views)
+                    include_indexes = params.get("include_indexes", include_indexes) 
+                    sample_data = params.get("sample_data", sample_data)
+                    tables = params.get("tables", tables)
+                except json.JSONDecodeError:
+                    pass  # Use original parameter if JSON parsing fails
             if not self.db_manager:
                 raise ToolExecutionError(
                     tool_name=self.name, reason="数据库管理器未初始化"
@@ -105,15 +116,14 @@ class SchemaExtractionTool(BaseAnalysisTool):
                 },
             }
 
-            # 将结果保存到内存中供其他工具使用
-            if self._agent_memory:
-                try:
-                    self._agent_memory.save_context(
-                        inputs={"tool_name": "schema_extraction"}, outputs=result
-                    )
-                except Exception as e:
-                    # 内存保存失败不应该影响主要功能
-                    print(f"Warning: Failed to save schema info to memory: {e}")
+            # 将结果保存到内存中供其他工具使用（暂时禁用避免FieldInfo错误）
+            # if self._agent_memory:
+            #     try:
+            #         self._agent_memory.save_context(
+            #             inputs={"tool_name": "schema_extraction"}, outputs=result
+            #         )
+            #     except Exception as e:
+            #         print(f"Warning: Failed to save schema info to memory: {e}")
 
             # 返回JSON字符串格式的结果（LangChain要求）
             return json.dumps(result, ensure_ascii=False, indent=2)
@@ -236,6 +246,8 @@ class SchemaExtractionTool(BaseAnalysisTool):
 
         except Exception as e:
             print(f"获取表 {table_name} 列信息失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
         return columns
 
