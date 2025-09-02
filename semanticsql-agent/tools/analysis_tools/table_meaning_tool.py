@@ -4,18 +4,18 @@
 """
 
 from typing import Dict, Any, Type, List
-from langchain.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from models.exceptions import ToolExecutionError
+from .base_analysis_tool import BaseAnalysisTool, AnalysisToolInput
 
 
-class TableMeaningInput(BaseModel):
+class TableMeaningInput(AnalysisToolInput):
     """表含义分析输入"""
-    memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
+    pass
 
 
-class TableMeaningTool(BaseTool):
+class TableMeaningTool(BaseAnalysisTool):
     """分析数据库表的业务含义"""
     
     name: str = "table_meaning_analysis"
@@ -25,11 +25,20 @@ class TableMeaningTool(BaseTool):
     def _run(self, memory: Dict[str, Any]) -> Dict[str, Any]:
         """执行表含义分析"""
         try:
-            # 从记忆中获取必要信息
-            db_analysis = memory.get("db_analysis", {})
+            # 获取累积的分析数据
+            accumulated_data = self.get_memory_data(memory)
+            db_analysis = accumulated_data.get("db_analysis", {})
+            
+            # 获取之前步骤的结果
             schema_info = db_analysis.get("schema_info", {})
-            domain_info = db_analysis.get("domain_info", {})
-            er_relations = db_analysis.get("er_relations", {})
+            if not schema_info and "schema_extraction" in db_analysis:
+                schema_info = db_analysis["schema_extraction"]
+            
+            domain_info = db_analysis.get("domain_analysis", {})
+            # 注意：这个工具使用er_relations，但按照正确流程，er_analysis应该在table_meaning之后
+            # 所以这里可能需要获取field_classification和column_meaning的结果
+            field_classification = db_analysis.get("field_classification", {})
+            column_meanings = db_analysis.get("column_meaning_analysis", {})
             
             if not schema_info:
                 raise ToolExecutionError(
@@ -64,13 +73,16 @@ class TableMeaningTool(BaseTool):
                 if relationships:
                     table_relationships[table_name] = relationships
             
-            return {
+            result = {
                 "table_purposes": table_purposes,
                 "table_relationships": table_relationships,
                 "business_entities": business_entities,
                 "entity_hierarchy": self._build_entity_hierarchy(business_entities, table_relationships),
                 "analysis_summary": self._generate_summary(table_purposes, business_entities)
             }
+            
+            # 返回累积的结果
+            return self.format_accumulated_result(memory, "table_meaning_analysis", result)
             
         except Exception as e:
             raise ToolExecutionError(

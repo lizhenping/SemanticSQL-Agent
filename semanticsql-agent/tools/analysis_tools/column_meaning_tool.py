@@ -4,18 +4,18 @@
 """
 
 from typing import Dict, Any, Type
-from langchain.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from models.exceptions import ToolExecutionError
+from .base_analysis_tool import BaseAnalysisTool, AnalysisToolInput
 
 
-class ColumnMeaningInput(BaseModel):
+class ColumnMeaningInput(AnalysisToolInput):
     """列含义分析输入"""
-    memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
+    pass
 
 
-class ColumnMeaningTool(BaseTool):
+class ColumnMeaningTool(BaseAnalysisTool):
     """分析数据库列的业务含义"""
     
     name: str = "column_meaning_analysis"
@@ -25,10 +25,16 @@ class ColumnMeaningTool(BaseTool):
     def _run(self, memory: Dict[str, Any]) -> Dict[str, Any]:
         """执行列含义分析"""
         try:
-            # 从记忆中获取必要信息
-            db_analysis = memory.get("db_analysis", {})
+            # 获取累积的分析数据
+            accumulated_data = self.get_memory_data(memory)
+            db_analysis = accumulated_data.get("db_analysis", {})
+            
+            # 获取之前步骤的结果
             schema_info = db_analysis.get("schema_info", {})
-            domain_info = db_analysis.get("domain_info", {})
+            if not schema_info and "schema_extraction" in db_analysis:
+                schema_info = db_analysis["schema_extraction"]
+            
+            domain_info = db_analysis.get("domain_analysis", {})
             field_classification = db_analysis.get("field_classification", {})
             
             if not schema_info:
@@ -71,12 +77,15 @@ class ColumnMeaningTool(BaseTool):
             # 识别数据模式
             data_patterns = self._identify_data_patterns(column_meanings)
             
-            return {
+            result = {
                 "column_meanings": column_meanings,
                 "business_terms": business_terms,
                 "data_patterns": data_patterns,
                 "analysis_summary": self._generate_summary(column_meanings, business_terms)
             }
+            
+            # 返回累积的结果
+            return self.format_accumulated_result(memory, "column_meaning_analysis", result)
             
         except Exception as e:
             raise ToolExecutionError(

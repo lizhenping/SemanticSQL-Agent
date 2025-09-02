@@ -4,22 +4,21 @@ ER关系分析工具 - 分析数据库表之间的实体关系
 """
 
 from typing import Dict, Any, Type, List, Set, Tuple, Optional
-from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 import networkx as nx
 
 from models.schemas import TableRelationship
 from models.exceptions import ToolExecutionError
+from .base_analysis_tool import BaseAnalysisTool, AnalysisToolInput
 
 
-class ERAnalysisInput(BaseModel):
+class ERAnalysisInput(AnalysisToolInput):
     """ER分析输入"""
-    memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
     analyze_implicit: bool = Field(default=True, description="是否分析隐式关系")
     depth: int = Field(default=2, description="关系分析深度")
 
 
-class ERAnalysisTool(BaseTool):
+class ERAnalysisTool(BaseAnalysisTool):
     """实体关系分析工具"""
     
     name: str = "er_analysis"
@@ -29,10 +28,19 @@ class ERAnalysisTool(BaseTool):
     def _run(self, memory: Dict[str, Any], analyze_implicit: bool = True, depth: int = 2) -> Dict[str, Any]:
         """执行ER关系分析"""
         try:
-            # 从记忆中获取必要信息
-            db_analysis = memory.get("db_analysis", {})
+            # 获取累积的分析数据
+            accumulated_data = self.get_memory_data(memory)
+            db_analysis = accumulated_data.get("db_analysis", {})
+            
+            # 获取之前所有步骤的结果
             schema_info = db_analysis.get("schema_info", {})
+            if not schema_info and "schema_extraction" in db_analysis:
+                schema_info = db_analysis["schema_extraction"]
+            
+            domain_info = db_analysis.get("domain_analysis", {})
             field_classification = db_analysis.get("field_classification", {})
+            column_meanings = db_analysis.get("column_meaning_analysis", {})
+            table_meanings = db_analysis.get("table_meaning_analysis", {})
             
             if not schema_info:
                 raise ToolExecutionError(
@@ -78,7 +86,7 @@ class ERAnalysisTool(BaseTool):
                     relationships[from_table] = []
                 relationships[from_table].append(relation)
             
-            return {
+            result = {
                 "relationships": relationships,
                 "explicit_count": len(explicit_relations),
                 "implicit_count": len(implicit_relations),
@@ -87,6 +95,9 @@ class ERAnalysisTool(BaseTool):
                 "insights": insights,
                 "relation_graph": self._graph_to_dict(relation_graph)
             }
+            
+            # 返回累积的结果
+            return self.format_accumulated_result(memory, "er_analysis", result)
             
         except Exception as e:
             raise ToolExecutionError(

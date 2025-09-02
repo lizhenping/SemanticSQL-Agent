@@ -4,18 +4,18 @@
 """
 
 from typing import Dict, Any, Type, List
-from langchain.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from models.exceptions import ToolExecutionError
+from .base_analysis_tool import BaseAnalysisTool, AnalysisToolInput
 
 
-class FieldClassificationInput(BaseModel):
+class FieldClassificationInput(AnalysisToolInput):
     """字段分类输入"""
-    memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
+    pass
 
 
-class FieldClassificationTool(BaseTool):
+class FieldClassificationTool(BaseAnalysisTool):
     """字段语义分类工具"""
     
     name: str = "field_classification"
@@ -25,10 +25,17 @@ class FieldClassificationTool(BaseTool):
     def _run(self, memory: Dict[str, Any]) -> Dict[str, Any]:
         """执行字段分类"""
         try:
-            # 从记忆中获取必要信息
-            db_analysis = memory.get("db_analysis", {})
+            # 获取累积的分析数据
+            accumulated_data = self.get_memory_data(memory)
+            db_analysis = accumulated_data.get("db_analysis", {})
+            
+            # 从第一步的结果中获取schema信息
             schema_info = db_analysis.get("schema_info", {})
-            domain_info = db_analysis.get("domain_info", {})
+            if not schema_info and "schema_extraction" in db_analysis:
+                schema_info = db_analysis["schema_extraction"]
+            
+            # 从第二步的结果中获取domain信息
+            domain_info = db_analysis.get("domain_analysis", {})
             
             if not schema_info:
                 raise ToolExecutionError(
@@ -78,12 +85,15 @@ class FieldClassificationTool(BaseTool):
                 field_classifications, classification_summary
             )
             
-            return {
+            result = {
                 "field_classifications": field_classifications,
                 "classification_summary": classification_summary,
                 "insights": insights,
                 "total_fields": sum(len(fields) for fields in classification_summary.values())
             }
+            
+            # 返回累积的结果
+            return self.format_accumulated_result(memory, "field_classification", result)
             
         except Exception as e:
             raise ToolExecutionError(
