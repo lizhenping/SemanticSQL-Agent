@@ -100,22 +100,22 @@ class DataGenerationAgent(BaseAgent):
         """
     
     def generate_training_data(
-        self,
-        count: int,
-        output_file: str,
-        database_name: Optional[str] = None
-    ) -> TrainingDataResult:
-        """
-        批量生成训练数据
+    self,
+    count: int,
+    output_file: str,
+    database_name: Optional[str] = None
+) -> TrainingDataResult:
+    """
+    批量生成训练数据
+    
+    Args:
+        count: 生成数据条数
+        output_file: 输出文件路径
+        database_name: 可选，指定数据库名称
         
-        Args:
-            count: 生成数据条数
-            output_file: 输出文件路径
-            database_name: 可选，指定数据库名称
-            
-        Returns:
-            TrainingDataResult: 生成结果统计
-        """
+    Returns:
+        TrainingDataResult: 包含 total, successful, failed, output_file, examples
+    """
 ```
 
 ### 2. 工具 API
@@ -182,8 +182,9 @@ class ScenarioTool(BaseTool):
     name = "scenario_tool"
     description = "从预定义的场景模板中选择一个适合当前数据库的业务场景"
     
-    def _run(self, iteration: int = 0, memory: Dict[str, Any] = None) -> Dict[str, Any]:
+    def _run(self, iteration: int = 0, **kwargs) -> Dict[str, Any]:
         """从预定义模板选择一个场景"""
+        # 注意：ScenarioTool 不依赖 memory，基于预定义模板工作
 
 # 操作选择
 class OperationSelectionTool(BaseTool):
@@ -288,24 +289,23 @@ class QueryScenario:
 @dataclass
 class GeneratedExample:
     id: str
-    scenario_id: str
+    scenario_id: Optional[str] = None
     question: str
     sql: str
     difficulty: DifficultyLevel
-    validation_result: ValidationResult
-    execution_result: Optional[SQLQueryResult] = None
+    validation_result: Dict[str, Any]  # 包含 is_valid, errors 等信息
+    execution_result: Dict[str, Any]   # 包含 success, data, error 等信息
     quality_score: float = 0.0
-    reflection_notes: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 # 训练数据结果
 @dataclass
 class TrainingDataResult:
-    total_generated: int
-    successful: int
-    failed: int
-    examples: List[GeneratedExample]
-    generation_time: float
-    statistics: Dict[str, Any]
+    total: int              # 总数（注意：是 total 而非 total_generated）
+    successful: int         # 成功数
+    failed: int            # 失败数
+    output_file: str       # 输出文件路径
+    examples: List[Dict[str, Any]]  # 示例数据（字典格式）
 ```
 
 ### 4. 记忆管理
@@ -336,27 +336,38 @@ class DatabaseAnalysisMemory(BaseMemory):
 ### 5. 配置管理
 
 ```python
-class Settings(BaseSettings):
-    """全局配置（使用Pydantic BaseSettings）"""
+class Settings(BaseModel):
+    """全局配置（使用Pydantic BaseModel）"""
+    # 应用配置
+    app_name: str = "SemanticSQL Agent"
+    app_version: str = "2.0.0"
+    debug: bool = False
+    environment: str = "development"
+    
     # LLM 配置
-    llm_model: str = "Qwen3-14B"
-    llm_base_url: str = "http://192.168.200.216:9991/v1"
-    llm_api_key: str = "sk-dummy"
+    llm_model: str = "Qwen3-14B"  # 默认值，可通过环境变量覆盖
+    llm_base_url: str = "http://127.0.0.1:9991/v1"
+    llm_api_key: str = "not-needed"
     llm_temperature: float = 0.7
-    llm_max_tokens: int = 4096
+    llm_max_tokens: int = 20000
+    llm_timeout: int = 30
+    llm_max_retries: int = 3
     
     # Agent 配置
-    agent_max_iterations: int = 20
-    agent_enable_reflection: bool = True
-    agent_verbose: bool = True
+    max_iterations: int = 20
+    max_steps: int = 10
+    enable_reflection: bool = True
+    enable_trajectory: bool = True
+    enable_thinking: bool = True
+    verbose: bool = True
     
-    # 生成配置
-    generation_batch_size: int = 10
-    generation_timeout: int = 300
+    # 批处理配置
+    batch_size: int = 10
+    concurrent_workers: int = 5
     
-    class Config:
-        env_file = ".env"
-        env_prefix = "SEMANTICSQL_"
+    # 输出配置
+    output_dir: str = "output"
+    log_level: str = "INFO"
 
 class DatabaseConfig(BaseModel):
     """数据库配置"""

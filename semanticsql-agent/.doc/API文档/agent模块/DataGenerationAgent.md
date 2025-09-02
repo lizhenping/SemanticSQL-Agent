@@ -122,12 +122,11 @@ def generate_training_data(
 
 ```python
 TrainingDataResult:
-    total_generated: int      # 总生成数
-    successful: int          # 成功数
-    failed: int             # 失败数
-    examples: List[GeneratedExample]  # 生成的示例列表
-    generation_time: float   # 生成耗时（秒）
-    statistics: Dict[str, Any]  # 统计信息
+    total: int              # 总生成数
+    successful: int         # 成功数
+    failed: int            # 失败数
+    output_file: str       # 输出文件路径
+    examples: List[Dict[str, Any]]  # 生成的示例列表（字典格式）
 ```
 
 #### 执行流程
@@ -151,8 +150,8 @@ result = agent.generate_training_data(
     output_file="training_data.json"
 )
 
-print(f"生成完成: {result.successful}/{result.total_generated} 成功")
-print(f"耗时: {result.generation_time:.2f} 秒")
+print(f"生成完成: {result.successful}/{result.total} 成功")
+print(f"输出文件: {result.output_file}")
 
 # 指定数据库
 result = agent.generate_training_data(
@@ -228,16 +227,16 @@ except ToolExecutionError as e:
 settings = Settings(
     # LLM 配置
     llm_temperature=0.7,      # 控制生成的创造性
-    llm_max_tokens=4096,      # 最大token数
+    llm_max_tokens=20000,     # 最大token数
     
     # Agent 配置
-    agent_max_iterations=20,   # 最大迭代次数
-    agent_enable_reflection=True,  # 启用反思机制
-    agent_verbose=True,       # 详细输出
+    max_iterations=20,        # 最大迭代次数
+    enable_reflection=True,   # 启用反思机制
+    verbose=True,            # 详细输出
     
-    # 生成配置
-    generation_batch_size=10,  # 批次大小
-    generation_timeout=300     # 超时时间（秒）
+    # 批处理配置
+    batch_size=10,           # 批次大小
+    concurrent_workers=5      # 并发工作线程
 )
 ```
 
