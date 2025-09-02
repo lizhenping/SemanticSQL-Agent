@@ -95,3 +95,15 @@ class Settings(BaseModel):
         env_file_encoding = "utf-8"
         # Support nested env vars like LLM__MODEL
         env_nested_delimiter = "__"
+
+
+# Global settings instance
+_settings: Optional[Settings] = None
+
+
+def get_settings() -> Settings:
+    """获取全局设置实例"""
+    global _settings
+    if _settings is None:
+        _settings = Settings()
+    return _settings

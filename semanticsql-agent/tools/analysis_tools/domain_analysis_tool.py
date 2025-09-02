@@ -3,13 +3,13 @@
 基于 LangChain BaseTool
 """
 
-from typing import Dict, Any, Type, List, Union
+from typing import Dict, Any, Type, List, Union, Optional
 import json
 from pydantic import BaseModel, Field, field_validator
+from langchain_openai import ChatOpenAI
 
 from models.exceptions import ToolExecutionError
 from prompts.manager import PromptManager
-from utils.llm_client import LLMClient
 from .base_analysis_tool import BaseAnalysisTool, AnalysisToolInput
 
 
