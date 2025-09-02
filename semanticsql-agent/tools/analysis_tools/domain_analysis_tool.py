@@ -25,14 +25,10 @@ class DomainAnalysisTool(BaseAnalysisTool):
     def _run(self, memory: Dict[str, Any]) -> Dict[str, Any]:
         """执行领域分析"""
         try:
-            # 获取累积的分析数据
-            accumulated_data = self.get_memory_data(memory)
-            db_analysis = accumulated_data.get("db_analysis", {})
-            
-            # 从第一步的结果中获取schema信息
-            schema_info = db_analysis.get("schema_info", {})
-            if not schema_info and "schema_extraction" in db_analysis:
-                schema_info = db_analysis["schema_extraction"]
+            # 从memory中获取schema信息
+            schema_info = self.get_analysis_from_memory(memory, "schema_info")
+            if not schema_info:
+                schema_info = self.get_analysis_from_memory(memory, "schema_extraction")
             
             if not schema_info:
                 raise ToolExecutionError(
@@ -74,8 +70,8 @@ class DomainAnalysisTool(BaseAnalysisTool):
             # 生成建议
             result["recommendations"] = self._generate_domain_recommendations(result)
             
-            # 返回累积的结果
-            return self.format_accumulated_result(memory, "domain_analysis", result)
+            # 返回工具自己的结果（不包含累积数据）
+            return result
             
         except Exception as e:
             raise ToolExecutionError(

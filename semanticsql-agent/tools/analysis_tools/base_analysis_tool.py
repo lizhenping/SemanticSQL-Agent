@@ -30,36 +30,23 @@ class AnalysisToolInput(BaseModel):
 class BaseAnalysisTool(BaseTool):
     """分析工具基类"""
     
-    def get_memory_data(self, memory: Dict[str, Any]) -> Dict[str, Any]:
-        """从memory中获取累积的分析数据"""
-        # 如果memory中包含db_analysis键，说明是累积的数据
-        if "db_analysis" in memory:
-            return memory
+    def get_analysis_from_memory(self, memory: Dict[str, Any], analysis_type: str) -> Dict[str, Any]:
+        """从memory中获取特定类型的分析结果
         
-        # 否则，将当前数据作为第一步的结果
-        return {
-            "db_analysis": {
-                "schema_info": memory
-            }
-        }
-    
-    def merge_results(self, memory: Dict[str, Any], tool_name: str, result: Dict[str, Any]) -> Dict[str, Any]:
-        """将工具结果合并到memory中"""
-        # 获取当前的累积数据
-        accumulated_data = self.get_memory_data(memory)
+        Args:
+            memory: 输入的memory参数
+            analysis_type: 分析类型，如 'schema_info', 'domain_info' 等
+            
+        Returns:
+            分析结果字典，如果不存在则返回空字典
+        """
+        # memory参数可能是完整的分析结果字典
+        if isinstance(memory, dict) and analysis_type in memory:
+            return memory[analysis_type]
         
-        # 将新结果添加到累积数据中
-        if "db_analysis" not in accumulated_data:
-            accumulated_data["db_analysis"] = {}
+        # 或者memory可能包含db_analysis结构
+        if isinstance(memory, dict) and "db_analysis" in memory:
+            return memory["db_analysis"].get(analysis_type, {})
         
-        accumulated_data["db_analysis"][tool_name] = result
-        
-        return accumulated_data
-    
-    def format_accumulated_result(self, memory: Dict[str, Any], current_tool_name: str, current_result: Dict[str, Any]) -> Dict[str, Any]:
-        """格式化累积的结果，供下一个工具使用"""
-        # 获取累积数据
-        accumulated_data = self.merge_results(memory, current_tool_name, current_result)
-        
-        # 返回完整的累积数据
-        return accumulated_data
+        # 如果都没有，返回空字典
+        return {}

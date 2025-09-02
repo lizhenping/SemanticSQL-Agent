@@ -91,12 +91,8 @@ class SchemaExtractionTool(BaseTool):
                 }
             }
             
-            # 返回格式化的结果，作为第一步的输出
-            return {
-                "db_analysis": {
-                    "schema_extraction": result
-                }
-            }
+            # 返回工具自己的结果
+            return result
             
         except DatabaseConnectionError:
             raise

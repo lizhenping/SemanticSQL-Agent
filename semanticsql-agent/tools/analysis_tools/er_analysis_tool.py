@@ -28,19 +28,24 @@ class ERAnalysisTool(BaseAnalysisTool):
     def _run(self, memory: Dict[str, Any], analyze_implicit: bool = True, depth: int = 2) -> Dict[str, Any]:
         """执行ER关系分析"""
         try:
-            # 获取累积的分析数据
-            accumulated_data = self.get_memory_data(memory)
-            db_analysis = accumulated_data.get("db_analysis", {})
+            # 从memory中获取需要的分析结果
+            schema_info = self.get_analysis_from_memory(memory, "schema_info")
+            if not schema_info:
+                schema_info = self.get_analysis_from_memory(memory, "schema_extraction")
             
-            # 获取之前所有步骤的结果
-            schema_info = db_analysis.get("schema_info", {})
-            if not schema_info and "schema_extraction" in db_analysis:
-                schema_info = db_analysis["schema_extraction"]
+            domain_info = self.get_analysis_from_memory(memory, "domain_info")
+            if not domain_info:
+                domain_info = self.get_analysis_from_memory(memory, "domain_analysis")
+                
+            field_classification = self.get_analysis_from_memory(memory, "field_classification")
             
-            domain_info = db_analysis.get("domain_analysis", {})
-            field_classification = db_analysis.get("field_classification", {})
-            column_meanings = db_analysis.get("column_meaning_analysis", {})
-            table_meanings = db_analysis.get("table_meaning_analysis", {})
+            column_meanings = self.get_analysis_from_memory(memory, "column_meanings")
+            if not column_meanings:
+                column_meanings = self.get_analysis_from_memory(memory, "column_meaning_analysis")
+                
+            table_meanings = self.get_analysis_from_memory(memory, "table_meanings")
+            if not table_meanings:
+                table_meanings = self.get_analysis_from_memory(memory, "table_meaning_analysis")
             
             if not schema_info:
                 raise ToolExecutionError(
@@ -96,8 +101,8 @@ class ERAnalysisTool(BaseAnalysisTool):
                 "relation_graph": self._graph_to_dict(relation_graph)
             }
             
-            # 返回累积的结果
-            return self.format_accumulated_result(memory, "er_analysis", result)
+            # 返回工具自己的结果（不包含累积数据）
+            return result
             
         except Exception as e:
             raise ToolExecutionError(

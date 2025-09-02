@@ -25,17 +25,14 @@ class FieldClassificationTool(BaseAnalysisTool):
     def _run(self, memory: Dict[str, Any]) -> Dict[str, Any]:
         """执行字段分类"""
         try:
-            # 获取累积的分析数据
-            accumulated_data = self.get_memory_data(memory)
-            db_analysis = accumulated_data.get("db_analysis", {})
+            # 从memory中获取需要的分析结果
+            schema_info = self.get_analysis_from_memory(memory, "schema_info")
+            if not schema_info:
+                schema_info = self.get_analysis_from_memory(memory, "schema_extraction")
             
-            # 从第一步的结果中获取schema信息
-            schema_info = db_analysis.get("schema_info", {})
-            if not schema_info and "schema_extraction" in db_analysis:
-                schema_info = db_analysis["schema_extraction"]
-            
-            # 从第二步的结果中获取domain信息
-            domain_info = db_analysis.get("domain_analysis", {})
+            domain_info = self.get_analysis_from_memory(memory, "domain_info")
+            if not domain_info:
+                domain_info = self.get_analysis_from_memory(memory, "domain_analysis")
             
             if not schema_info:
                 raise ToolExecutionError(
@@ -92,8 +89,8 @@ class FieldClassificationTool(BaseAnalysisTool):
                 "total_fields": sum(len(fields) for fields in classification_summary.values())
             }
             
-            # 返回累积的结果
-            return self.format_accumulated_result(memory, "field_classification", result)
+            # 返回工具自己的结果（不包含累积数据）
+            return result
             
         except Exception as e:
             raise ToolExecutionError(

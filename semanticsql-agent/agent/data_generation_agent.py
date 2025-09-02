@@ -135,41 +135,46 @@ class DataGenerationAgent(BaseAgent):
         请对数据库 {database_name} 执行完整的分析流程。按照以下顺序执行：
         
         **步骤1**: 使用 schema_extraction 提取数据库结构
-        - 参数: {{"database": "{database_name}"}}
-        - 将结果保存为 schema_result
+        - 参数: {{"database_name": "{database_name}"}}
         
-        **步骤2**: 使用 domain_analysis 分析业务领域
-        - 参数: {{"memory": schema_result}}
-        - 将结果保存，累积到之前的结果中
+        **步骤2**: 使用 domain_analysis 分析业务领域  
+        - 参数: {{"memory": {{"schema_info": <步骤1的结果>}}}}
         
         **步骤3**: 使用 field_classification 对字段进行语义分类
-        - 参数: {{"memory": 包含步骤1和步骤2累积结果的字典}}
-        - 将结果保存，累积到之前的结果中
+        - 参数: {{"memory": {{
+            "schema_info": <步骤1的结果>,
+            "domain_info": <步骤2的结果>
+          }}}}
         
         **步骤4**: 使用 column_meaning_analysis 分析每个列的业务含义
-        - 参数: {{"memory": 包含步骤1、2、3累积结果的字典}}
-        - 将结果保存，累积到之前的结果中
+        - 参数: {{"memory": {{
+            "schema_info": <步骤1的结果>,
+            "domain_info": <步骤2的结果>,
+            "field_classification": <步骤3的结果>
+          }}}}
         
         **步骤5**: 使用 table_meaning_analysis 分析每个表的业务职责
-        - 参数: {{"memory": 包含步骤1、2、3、4累积结果的字典}}
-        - 将结果保存，累积到之前的结果中
+        - 参数: {{"memory": {{
+            "schema_info": <步骤1的结果>,
+            "domain_info": <步骤2的结果>,
+            "field_classification": <步骤3的结果>,
+            "column_meanings": <步骤4的结果>
+          }}}}
         
         **步骤6**: 使用 er_analysis 分析表之间的实体关系
-        - 参数: {{"memory": 包含步骤1、2、3、4、5累积结果的字典}}
+        - 参数: {{"memory": {{
+            "schema_info": <步骤1的结果>,
+            "domain_info": <步骤2的结果>,
+            "field_classification": <步骤3的结果>,
+            "column_meanings": <步骤4的结果>,
+            "table_meanings": <步骤5的结果>
+          }}}}
         
-        **重要**：
-        1. 每个工具的输出需要累积保存，格式为：
-           {{
-               "db_analysis": {{
-                   "schema_extraction": <步骤1结果>,
-                   "domain_analysis": <步骤2结果>,
-                   "field_classification": <步骤3结果>,
-                   "column_meaning_analysis": <步骤4结果>,
-                   "table_meaning_analysis": <步骤5结果>,
-                   "er_analysis": <步骤6结果>
-               }}
-           }}
-        2. 后续步骤需要传入包含之前所有步骤结果的完整字典
+        **重要说明**：
+        1. 每个工具会返回自己的分析结果
+        2. 后续工具需要通过memory参数接收之前所有步骤的结果
+        3. memory参数的键名必须与上述格式一致
+        4. 系统会自动保存每个工具的结果到内存中，但你也需要手动构建memory参数
         """
         
         result = self.run(analysis_task)
