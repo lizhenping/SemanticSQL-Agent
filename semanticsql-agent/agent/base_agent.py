@@ -70,10 +70,26 @@ class BaseAgent(ABC):
             prompt_manager = PromptManager()
             # 传递工具名称列表给提示词模板
             tool_names = [tool.name for tool in self.tools]
-            return prompt_manager.create_agent_prompt(
-                tool_names=", ".join(tool_names),
-                tools="\n".join([f"- {tool.name}: {tool.description}" for tool in self.tools])
-            )
+            
+            # 尝试使用灵活的提示词模板
+            try:
+                system_prompt = prompt_manager.render_template(
+                    'system/main_flexible.j2',
+                    tool_names=", ".join(tool_names),
+                    tools="\n".join([f"- **{tool.name}**: {tool.description}" for tool in self.tools])
+                )
+            except:
+                # 如果灵活模板不存在，使用原有模板
+                system_prompt = prompt_manager.get_system_prompt(
+                    tool_names=", ".join(tool_names),
+                    tools="\n".join([f"- {tool.name}: {tool.description}" for tool in self.tools])
+                )
+                
+            return ChatPromptTemplate.from_messages([
+                ("system", system_prompt),
+                ("human", "{input}"),
+                ("assistant", "{agent_scratchpad}")
+            ])
         except Exception as e:
             self.logger.warning(f"Failed to load prompt template: {e}. Using default.")
             # 使用默认提示词
@@ -88,15 +104,11 @@ Thought: 思考下一步该做什么
 Action: 要使用的工具，应该是以下之一 [{tool_names}]
 Action Input: 工具的输入参数
 Observation: 工具返回的结果
-... (这个过程必须重复，直到完成所有必要的步骤)
+... (这个过程可以重复多次)
 Thought: 我现在知道最终答案了
 Final Answer: 最终结果
 
-重要提醒：
-1. 你必须按照任务要求的步骤顺序执行所有工具
-2. 每个工具执行后，分析其输出并继续执行下一个工具
-3. 不要跳过任何步骤
-4. 只有在完成所有步骤后才能给出 Final Answer
+请根据任务需求，灵活选择和使用工具。
 
 开始!"""),
                 ("human", "{input}"),

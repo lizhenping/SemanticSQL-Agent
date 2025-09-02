@@ -8,6 +8,8 @@ from typing import Optional
 from enum import Enum
 import os
 
+from models.exceptions import InvalidConfigError, MissingConfigError
+
 
 class DatabaseType(Enum):
     """支持的数据库类型 - 主要支持MySQL，保留其他扩展"""
@@ -84,21 +86,29 @@ class DatabaseConfig(BaseModel):
         elif self.type == DatabaseType.SQLITE:
             return f"sqlite:///{self.database}"
         else:
-            raise ValueError(f"Unsupported database type: {self.type}")
+            raise InvalidConfigError(
+                config_name="database_type",
+                value=self.type,
+                expected="mysql, postgresql, or sqlite"
+            )
         
         return f"{driver}://{self.username}:{self.password}@{self.host}:{self.port}/{self.database}"
     
     def validate_connection_params(self) -> bool:
         """Validate connection parameters"""
         if not self.database:
-            raise ValueError("Database name cannot be empty")
+            raise MissingConfigError("database")
         
         if self.type != DatabaseType.SQLITE:
             if not self.host:
-                raise ValueError("Database host cannot be empty")
+                raise MissingConfigError("host")
             if not self.username:
-                raise ValueError("Database username cannot be empty")
+                raise MissingConfigError("username")
             if self.port <= 0 or self.port > 65535:
-                raise ValueError("Database port must be between 1 and 65535")
+                raise InvalidConfigError(
+                    config_name="port",
+                    value=self.port,
+                    expected="1-65535"
+                )
         
         return True

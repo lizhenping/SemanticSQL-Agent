@@ -130,29 +130,42 @@ class DataGenerationAgent(BaseAgent):
         """
         self.logger.info(f"Starting database analysis for: {database_name}")
         
-        # 构建分析任务（遵循设计文档的执行顺序）
+        # 构建分析任务（引导性而非强制性）
         analysis_task = f"""
-        请对数据库 {database_name} 执行完整的分析流程。按照以下顺序执行：
+        请对数据库 {database_name} 进行全面分析，以便后续生成高质量的训练数据。
         
-        **步骤1**: 使用 schema_extraction 提取数据库结构
-        - 参数: {{"database": "{database_name}"}}
+        ## 分析目标
+        你需要深入理解这个数据库的结构、业务含义和数据关系。使用以下工具进行分析：
         
-        **步骤2**: 使用 domain_analysis 分析业务领域
-        - 参数: 传入步骤1的完整输出结果（JSON格式）
+        1. **schema_extraction** - 首先获取数据库的基础结构
+           - 参数: {{"database_name": "{database_name}"}}
+           - 这将给你表、列、数据类型等基础信息
         
-        **步骤3**: 使用 field_classification 对字段进行语义分类
-        - 参数: 传入步骤1的完整输出结果（JSON格式）
+        2. **domain_analysis** - 理解这是什么业务领域
+           - 需要基于数据库结构来判断业务类型
+           - 将schema信息作为memory传入
         
-        **步骤4**: 使用 column_meaning_analysis 分析每个列的业务含义
-        - 参数: 传入步骤1的完整输出结果（JSON格式）
+        3. **field_classification** - 对字段进行语义分类
+           - 识别ID字段、时间字段、金额字段等
+           - 需要结合schema和domain的理解
         
-        **步骤5**: 使用 table_meaning_analysis 分析每个表的业务职责
-        - 参数: 传入步骤1的完整输出结果（JSON格式）
+        4. **column_meaning_analysis** - 分析每列的具体业务含义
+           - 不仅要知道字段类型，还要理解业务用途
+           - 基于前面的分析结果进行深入理解
         
-        **步骤6**: 使用 er_analysis 分析表之间的实体关系
-        - 参数: 传入步骤1的完整输出结果（JSON格式）
+        5. **table_meaning_analysis** - 理解每个表的业务职责
+           - 识别核心业务表、辅助表、字典表等
+           - 需要综合前面对列的理解
         
-        **重要**：每个分析工具都需要数据库结构信息，请将schema_extraction的完整输出作为参数传递给后续的每个分析工具。
+        6. **er_analysis** - 分析表之间的关系
+           - 发现显式和隐式的关联
+           - 理解数据流向和业务流程
+        
+        ## 执行建议
+        - 这些分析工具相互依赖，后面的工具需要前面工具的结果
+        - 通过memory参数传递累积的分析结果
+        - 如果某个分析有疑问，可以使用 sequential_thinking 进行深度思考
+        - 分析结果会自动保存，供后续数据生成使用
         """
         
         result = self.run(analysis_task)
@@ -201,92 +214,74 @@ class DataGenerationAgent(BaseAgent):
                     reason=analysis_result["error"]
                 )
         
-        # 构建生成任务（强制执行工具序列）
+        # 构建生成任务（引导但不硬编码）
         generation_task = f"""
         **任务目标**：生成 {count} 个高质量的 NL2SQL 训练数据
-        
-        **严格执行要求**：
-        - 你必须依次调用每个工具，不能跳过任何步骤
-        - 不允许提前给出 Final Answer
-        - 每个样本必须完成全部7个步骤才能继续下一个
-        - 不允许自行构造或假设工具结果
 
-        ## 开始之前，先执行数据库分析（仅执行一次）：
+        ## 第一阶段：数据库理解（如果还没有分析过）
         
-        **必须首先执行：**
-        1. schema_extraction - 提取数据库结构
-        2. domain_analysis - 分析业务领域  
-        3. column_meaning_analysis - 分析列含义
-        4. table_meaning_analysis - 分析表含义
-        5. er_analysis - 分析实体关系
+        在生成训练数据之前，你需要全面理解数据库。使用以下分析工具：
+        - **schema_extraction**: 获取数据库的完整结构信息（表、列、约束等）
+        - **domain_analysis**: 理解这是什么业务领域的数据库
+        - **column_meaning_analysis**: 分析每个列的业务含义和用途
+        - **table_meaning_analysis**: 理解每个表的业务职责
+        - **er_analysis**: 分析表之间的关系
+        
+        这些分析只需要做一次，结果会保存在记忆中供后续使用。
 
-        ## 现在开始样本生成！必须一步一步执行：
+        ## 第二阶段：训练数据生成
+        
+        对于每个训练样本，你需要：
+        
+        1. **选择场景**：使用 scenario_tool 从预定义的业务场景中选择一个
+           - 传入 iteration 参数（从0开始递增）来确保场景的多样性
+        
+        2. **确定操作**：使用 operation_selection 根据场景复杂度选择合适的SQL操作
+           - 简单场景使用基础查询
+           - 复杂场景可能需要JOIN、聚合或子查询
+        
+        3. **生成问题**：使用 question_generation 创建自然语言问题
+           - 结合场景、操作和你对数据库的理解
+           - 确保问题清晰、符合实际业务需求
+        
+        4. **生成SQL**：使用 sql_generation 生成对应的SQL查询
+           - 基于问题和你的数据库知识
+           - 确保SQL准确实现问题的意图
+        
+        5. **验证质量**：
+           - 使用 sql_validation 检查SQL语法
+           - 使用 sql_execution 实际执行SQL
+           - 使用 sql_reflection 评估整体质量
+        
+        ## 第三阶段：反思与优化
+        
+        如果 sql_reflection 发现问题：
+        - **需要深入分析时**：使用 sequential_thinking 分析问题根源
+        - **问题不够清晰**：重新使用 question_generation
+        - **SQL有误**：重新使用 sql_generation
+        - **理解有偏差**：可能需要重新运行某个分析工具
+        
+        记住：
+        - 每个样本都应该独立且高质量
+        - 充分利用你对数据库的理解
+        - 如果遇到复杂决策，使用 sequential_thinking 帮助分析
+        - 生成 {count} 个样本后，以JSON数组格式输出所有结果
 
-        **第1个训练样本开始：**
-        
-        现在执行步骤1/7: 调用 scenario_tool
-        - 参数: {{"iteration": 0}}
-        - 等待工具执行完成后再继续
-        
-        (执行完步骤1后，继续步骤2...)
-        现在执行步骤2/7: 调用 operation_selection  
-        - 使用scenario_tool的输出结果
-        - 等待工具执行完成后再继续
-        
-        (执行完步骤2后，继续步骤3...)
-        现在执行步骤3/7: 调用 question_generation
-        - 使用前面步骤的结果
-        - 等待工具执行完成后再继续
-        
-        (执行完步骤3后，继续步骤4...)
-        现在执行步骤4/7: 调用 sql_generation
-        - 使用前面步骤的结果
-        - 等待工具执行完成后再继续
-        
-        (执行完步骤4后，继续步骤5...)
-        现在执行步骤5/7: 调用 sql_validation
-        - 验证步骤4生成的SQL
-        - 等待工具执行完成后再继续
-        
-        (执行完步骤5后，继续步骤6...)
-        现在执行步骤6/7: 调用 sql_execution
-        - 执行步骤4生成的SQL
-        - 等待工具执行完成后再继续
-        
-        (执行完步骤6后，继续步骤7...)
-        现在执行步骤7/7: 调用 sql_reflection
-        - 反思整体质量
-        - 完成第1个样本
-
-        **第2个训练样本开始：**
-        重复上述7个步骤，iteration参数改为1...
-        
-        **继续剩余样本直到完成{count}个样本**
-
-        ## 最终输出要求：
-        - 只有在完成所有 {count} 个样本的7个步骤后，才能输出 Final Answer
-        - Final Answer 必须是纯JSON数组格式，不要添加任何其他文本
-        - 精确的输出格式：
-        [
-          {{
-            "question": "自然语言问题",
-            "sql": "SQL查询语句",
-            "scenario_info": {{
-              "scenario_id": "场景ID",
-              "category": "场景类别",
-              "complexity": "复杂度"
-            }},
-            "validation_result": {{
-              "syntax_valid": true,
-              "execution_result": "执行结果描述"
-            }}
+        ## 输出格式要求：
+        最终输出必须是标准的JSON数组，每个元素包含：
+        {{
+          "question": "自然语言问题",
+          "sql": "SQL查询语句",
+          "scenario_info": {{
+            "scenario_id": "场景ID",
+            "category": "场景类别",
+            "complexity": "复杂度"
+          }},
+          "validation_result": {{
+            "syntax_valid": true/false,
+            "execution_result": "结果描述"
           }}
-        ]
-
-        **禁止行为：**
-        - 禁止跳过任何工具调用
-        - 禁止提前给出结果
-        - 禁止自行构造工具输出
+        }}
         - 禁止在未完成所有步骤时给出 Final Answer
 
         ## 错误修正机制：

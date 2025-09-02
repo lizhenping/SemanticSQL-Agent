@@ -4,22 +4,21 @@ ER关系分析工具 - 分析数据库表之间的实体关系
 """
 
 from typing import Dict, Any, Type, List, Set, Tuple, Optional
-from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 import networkx as nx
 
 from models.schemas import TableRelationship
 from models.exceptions import ToolExecutionError
+from .base_analysis_tool import BaseAnalysisTool, AnalysisToolInput
 
 
-class ERAnalysisInput(BaseModel):
+class ERAnalysisInput(AnalysisToolInput):
     """ER分析输入"""
-    memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
     analyze_implicit: bool = Field(default=True, description="是否分析隐式关系")
     depth: int = Field(default=2, description="关系分析深度")
 
 
-class ERAnalysisTool(BaseTool):
+class ERAnalysisTool(BaseAnalysisTool):
     """实体关系分析工具"""
     
     name: str = "er_analysis"
@@ -29,10 +28,24 @@ class ERAnalysisTool(BaseTool):
     def _run(self, memory: Dict[str, Any], analyze_implicit: bool = True, depth: int = 2) -> Dict[str, Any]:
         """执行ER关系分析"""
         try:
-            # 从记忆中获取必要信息
-            db_analysis = memory.get("db_analysis", {})
-            schema_info = db_analysis.get("schema_info", {})
-            field_classification = db_analysis.get("field_classification", {})
+            # 从memory中获取需要的分析结果
+            schema_info = self.get_analysis_from_memory(memory, "schema_info")
+            if not schema_info:
+                schema_info = self.get_analysis_from_memory(memory, "schema_extraction")
+            
+            domain_info = self.get_analysis_from_memory(memory, "domain_info")
+            if not domain_info:
+                domain_info = self.get_analysis_from_memory(memory, "domain_analysis")
+                
+            field_classification = self.get_analysis_from_memory(memory, "field_classification")
+            
+            column_meanings = self.get_analysis_from_memory(memory, "column_meanings")
+            if not column_meanings:
+                column_meanings = self.get_analysis_from_memory(memory, "column_meaning_analysis")
+                
+            table_meanings = self.get_analysis_from_memory(memory, "table_meanings")
+            if not table_meanings:
+                table_meanings = self.get_analysis_from_memory(memory, "table_meaning_analysis")
             
             if not schema_info:
                 raise ToolExecutionError(
@@ -78,7 +91,7 @@ class ERAnalysisTool(BaseTool):
                     relationships[from_table] = []
                 relationships[from_table].append(relation)
             
-            return {
+            result = {
                 "relationships": relationships,
                 "explicit_count": len(explicit_relations),
                 "implicit_count": len(implicit_relations),
@@ -87,6 +100,9 @@ class ERAnalysisTool(BaseTool):
                 "insights": insights,
                 "relation_graph": self._graph_to_dict(relation_graph)
             }
+            
+            # 返回工具自己的结果（不包含累积数据）
+            return result
             
         except Exception as e:
             raise ToolExecutionError(

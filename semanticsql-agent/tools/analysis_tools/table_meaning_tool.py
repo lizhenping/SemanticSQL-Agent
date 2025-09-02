@@ -4,18 +4,18 @@
 """
 
 from typing import Dict, Any, Type, List
-from langchain.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from models.exceptions import ToolExecutionError
+from .base_analysis_tool import BaseAnalysisTool, AnalysisToolInput
 
 
-class TableMeaningInput(BaseModel):
+class TableMeaningInput(AnalysisToolInput):
     """表含义分析输入"""
-    memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
+    pass
 
 
-class TableMeaningTool(BaseTool):
+class TableMeaningTool(BaseAnalysisTool):
     """分析数据库表的业务含义"""
     
     name: str = "table_meaning_analysis"
@@ -25,11 +25,19 @@ class TableMeaningTool(BaseTool):
     def _run(self, memory: Dict[str, Any]) -> Dict[str, Any]:
         """执行表含义分析"""
         try:
-            # 从记忆中获取必要信息
-            db_analysis = memory.get("db_analysis", {})
-            schema_info = db_analysis.get("schema_info", {})
-            domain_info = db_analysis.get("domain_info", {})
-            er_relations = db_analysis.get("er_relations", {})
+            # 从memory中获取需要的分析结果
+            schema_info = self.get_analysis_from_memory(memory, "schema_info")
+            if not schema_info:
+                schema_info = self.get_analysis_from_memory(memory, "schema_extraction")
+            
+            domain_info = self.get_analysis_from_memory(memory, "domain_info")
+            if not domain_info:
+                domain_info = self.get_analysis_from_memory(memory, "domain_analysis")
+                
+            field_classification = self.get_analysis_from_memory(memory, "field_classification")
+            column_meanings = self.get_analysis_from_memory(memory, "column_meanings")
+            if not column_meanings:
+                column_meanings = self.get_analysis_from_memory(memory, "column_meaning_analysis")
             
             if not schema_info:
                 raise ToolExecutionError(
@@ -64,13 +72,16 @@ class TableMeaningTool(BaseTool):
                 if relationships:
                     table_relationships[table_name] = relationships
             
-            return {
+            result = {
                 "table_purposes": table_purposes,
                 "table_relationships": table_relationships,
                 "business_entities": business_entities,
                 "entity_hierarchy": self._build_entity_hierarchy(business_entities, table_relationships),
                 "analysis_summary": self._generate_summary(table_purposes, business_entities)
             }
+            
+            # 返回工具自己的结果（不包含累积数据）
+            return result
             
         except Exception as e:
             raise ToolExecutionError(

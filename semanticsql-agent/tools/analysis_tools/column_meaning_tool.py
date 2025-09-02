@@ -4,18 +4,18 @@
 """
 
 from typing import Dict, Any, Type
-from langchain.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from models.exceptions import ToolExecutionError
+from .base_analysis_tool import BaseAnalysisTool, AnalysisToolInput
 
 
-class ColumnMeaningInput(BaseModel):
+class ColumnMeaningInput(AnalysisToolInput):
     """列含义分析输入"""
-    memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
+    pass
 
 
-class ColumnMeaningTool(BaseTool):
+class ColumnMeaningTool(BaseAnalysisTool):
     """分析数据库列的业务含义"""
     
     name: str = "column_meaning_analysis"
@@ -25,11 +25,16 @@ class ColumnMeaningTool(BaseTool):
     def _run(self, memory: Dict[str, Any]) -> Dict[str, Any]:
         """执行列含义分析"""
         try:
-            # 从记忆中获取必要信息
-            db_analysis = memory.get("db_analysis", {})
-            schema_info = db_analysis.get("schema_info", {})
-            domain_info = db_analysis.get("domain_info", {})
-            field_classification = db_analysis.get("field_classification", {})
+            # 从memory中获取需要的分析结果
+            schema_info = self.get_analysis_from_memory(memory, "schema_info")
+            if not schema_info:
+                schema_info = self.get_analysis_from_memory(memory, "schema_extraction")
+            
+            domain_info = self.get_analysis_from_memory(memory, "domain_info")
+            if not domain_info:
+                domain_info = self.get_analysis_from_memory(memory, "domain_analysis")
+                
+            field_classification = self.get_analysis_from_memory(memory, "field_classification")
             
             if not schema_info:
                 raise ToolExecutionError(
@@ -71,12 +76,15 @@ class ColumnMeaningTool(BaseTool):
             # 识别数据模式
             data_patterns = self._identify_data_patterns(column_meanings)
             
-            return {
+            result = {
                 "column_meanings": column_meanings,
                 "business_terms": business_terms,
                 "data_patterns": data_patterns,
                 "analysis_summary": self._generate_summary(column_meanings, business_terms)
             }
+            
+            # 返回工具自己的结果（不包含累积数据）
+            return result
             
         except Exception as e:
             raise ToolExecutionError(

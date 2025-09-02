@@ -4,18 +4,18 @@
 """
 
 from typing import Dict, Any, Type, List
-from langchain.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from models.exceptions import ToolExecutionError
+from .base_analysis_tool import BaseAnalysisTool, AnalysisToolInput
 
 
-class DomainAnalysisInput(BaseModel):
+class DomainAnalysisInput(AnalysisToolInput):
     """领域分析输入"""
-    memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
+    pass
 
 
-class DomainAnalysisTool(BaseTool):
+class DomainAnalysisTool(BaseAnalysisTool):
     """业务领域分析工具"""
     
     name: str = "domain_analysis"
@@ -25,9 +25,10 @@ class DomainAnalysisTool(BaseTool):
     def _run(self, memory: Dict[str, Any]) -> Dict[str, Any]:
         """执行领域分析"""
         try:
-            # 从记忆中获取必要信息
-            db_analysis = memory.get("db_analysis", {})
-            schema_info = db_analysis.get("schema_info", {})
+            # 从memory中获取schema信息
+            schema_info = self.get_analysis_from_memory(memory, "schema_info")
+            if not schema_info:
+                schema_info = self.get_analysis_from_memory(memory, "schema_extraction")
             
             if not schema_info:
                 raise ToolExecutionError(
@@ -69,6 +70,7 @@ class DomainAnalysisTool(BaseTool):
             # 生成建议
             result["recommendations"] = self._generate_domain_recommendations(result)
             
+            # 返回工具自己的结果（不包含累积数据）
             return result
             
         except Exception as e:

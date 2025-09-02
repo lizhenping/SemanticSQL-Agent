@@ -4,18 +4,18 @@
 """
 
 from typing import Dict, Any, Type, List
-from langchain.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from models.exceptions import ToolExecutionError
+from .base_analysis_tool import BaseAnalysisTool, AnalysisToolInput
 
 
-class FieldClassificationInput(BaseModel):
+class FieldClassificationInput(AnalysisToolInput):
     """字段分类输入"""
-    memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
+    pass
 
 
-class FieldClassificationTool(BaseTool):
+class FieldClassificationTool(BaseAnalysisTool):
     """字段语义分类工具"""
     
     name: str = "field_classification"
@@ -25,10 +25,14 @@ class FieldClassificationTool(BaseTool):
     def _run(self, memory: Dict[str, Any]) -> Dict[str, Any]:
         """执行字段分类"""
         try:
-            # 从记忆中获取必要信息
-            db_analysis = memory.get("db_analysis", {})
-            schema_info = db_analysis.get("schema_info", {})
-            domain_info = db_analysis.get("domain_info", {})
+            # 从memory中获取需要的分析结果
+            schema_info = self.get_analysis_from_memory(memory, "schema_info")
+            if not schema_info:
+                schema_info = self.get_analysis_from_memory(memory, "schema_extraction")
+            
+            domain_info = self.get_analysis_from_memory(memory, "domain_info")
+            if not domain_info:
+                domain_info = self.get_analysis_from_memory(memory, "domain_analysis")
             
             if not schema_info:
                 raise ToolExecutionError(
@@ -78,12 +82,15 @@ class FieldClassificationTool(BaseTool):
                 field_classifications, classification_summary
             )
             
-            return {
+            result = {
                 "field_classifications": field_classifications,
                 "classification_summary": classification_summary,
                 "insights": insights,
                 "total_fields": sum(len(fields) for fields in classification_summary.values())
             }
+            
+            # 返回工具自己的结果（不包含累积数据）
+            return result
             
         except Exception as e:
             raise ToolExecutionError(

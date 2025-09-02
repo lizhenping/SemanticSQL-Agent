@@ -91,6 +91,7 @@ class SchemaExtractionTool(BaseTool):
                 }
             }
             
+            # 返回工具自己的结果
             return result
             
         except DatabaseConnectionError:

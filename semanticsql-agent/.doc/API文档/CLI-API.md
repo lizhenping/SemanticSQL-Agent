@@ -7,13 +7,13 @@
 ```python
 import click
 from semanticsql_agent.config import Settings, DatabaseConfig
-from semanticsql_agent.agent import SQLAgent
+from semanticsql_agent.agent.data_generation_agent import DataGenerationAgent
 
 # CLI 主入口
 @click.group()
-@click.version_option(version="1.0.0")
+@click.version_option(version="2.0.0")
 def cli():
-    """SemanticSQL Agent - 自然语言转 SQL 查询工具"""
+    """SemanticSQL Agent - NL2SQL 训练数据生成工具"""
     pass
 ```
 
