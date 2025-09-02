@@ -117,13 +117,13 @@ class SchemaExtractionTool(BaseAnalysisTool):
             }
 
             # 将结果保存到内存中供其他工具使用（暂时禁用避免FieldInfo错误）
-            # if self._agent_memory:
-            #     try:
-            #         self._agent_memory.save_context(
-            #             inputs={"tool_name": "schema_extraction"}, outputs=result
-            #         )
-            #     except Exception as e:
-            #         print(f"Warning: Failed to save schema info to memory: {e}")
+            if self._agent_memory:
+                try:
+                    self._agent_memory.save_context(
+                        inputs={"tool_name": "schema_extraction"}, outputs=result
+                    )
+                except Exception as e:
+                    print(f"Warning: Failed to save schema info to memory: {e}")
 
             # 返回JSON字符串格式的结果（LangChain要求）
             return json.dumps(result, ensure_ascii=False, indent=2)
