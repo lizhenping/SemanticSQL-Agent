@@ -4,6 +4,7 @@
 """
 
 from typing import Dict, Any, Type, List, Optional
+import json
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
@@ -34,8 +35,10 @@ class SchemaExtractionTool(BaseTool):
     
     def __init__(self, db_manager: DatabaseManager):
         super().__init__()
-        # 直接设置为实例属性，避开Pydantic验证
-        object.__setattr__(self, 'db_manager', db_manager)
+        self.db_manager = db_manager
+    
+    class Config:
+        arbitrary_types_allowed = True
     
     def _run(
         self, 
@@ -44,7 +47,7 @@ class SchemaExtractionTool(BaseTool):
         include_indexes: bool = True,
         sample_data: bool = False, 
         tables: List[str] = None
-    ) -> Dict[str, Any]:
+    ) -> str:
         """执行数据库结构提取"""
         try:
             if not self.db_manager:
@@ -91,8 +94,8 @@ class SchemaExtractionTool(BaseTool):
                 }
             }
             
-            # 返回工具自己的结果
-            return result
+            # 返回JSON字符串格式的结果（LangChain要求）
+            return json.dumps(result, ensure_ascii=False, indent=2)
             
         except DatabaseConnectionError:
             raise
@@ -211,7 +214,7 @@ class SchemaExtractionTool(BaseTool):
         include_indexes: bool = True,
         sample_data: bool = False,
         tables: List[str] = None
-    ) -> Dict[str, Any]:
+    ) -> str:
         """异步执行（当前实现为同步）"""
         return self._run(
             database_name=database_name,

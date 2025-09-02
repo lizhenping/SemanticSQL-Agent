@@ -120,7 +120,19 @@ class TrajectoryCallbackHandler(BaseCallbackHandler):
         self.logger.debug(f"Tool finished with output: {output}")
         
         if self.current_step:
-            self.current_step.tool_output = output
+            # 解析工具输出 - 处理JSON字符串格式
+            parsed_output = output
+            if isinstance(output, str):
+                try:
+                    import json
+                    parsed_output = json.loads(output)
+                    self.logger.debug(f"Successfully parsed JSON output for {self.current_step.tool_name}")
+                except (json.JSONDecodeError, ValueError):
+                    # 如果不是JSON格式，保持原样
+                    parsed_output = output
+                    self.logger.debug(f"Output is not JSON format for {self.current_step.tool_name}")
+            
+            self.current_step.tool_output = parsed_output
             self.current_step.duration_ms = int(
                 (datetime.now() - self.current_step.timestamp).total_seconds() * 1000
             )
@@ -131,21 +143,21 @@ class TrajectoryCallbackHandler(BaseCallbackHandler):
             # 保存到轨迹（包含工具名称）
             if self.current_step.tool_name:
                 self.trajectories.append({
-                    "type": "action",
-                    "tool": self.current_step.tool_name,
+                    "type": "tool_end",
+                    "tool_name": self.current_step.tool_name,
                     "input": self.current_step.tool_input,
-                    "output": output if isinstance(output, dict) else {"result": output},
+                    "output": parsed_output,
                     "timestamp": datetime.now(),
                     "run_id": str(run_id)
                 })
                 
                 # 如果是分析工具，自动保存结果到记忆
-                if hasattr(self, 'memory') and self.current_step.tool_name in [
+                if hasattr(self, 'memory') and self.memory and self.current_step.tool_name in [
                     'schema_extraction', 'domain_analysis', 'field_classification',
                     'column_meaning_analysis', 'table_meaning_analysis', 'er_analysis'
                 ]:
                     try:
-                        if isinstance(output, dict):
+                        if isinstance(parsed_output, dict):
                             # 根据工具类型保存到对应的记忆位置
                             analysis_type_mapping = {
                                 'schema_extraction': 'schema_info',
@@ -158,13 +170,13 @@ class TrajectoryCallbackHandler(BaseCallbackHandler):
                             
                             analysis_type = analysis_type_mapping.get(self.current_step.tool_name)
                             if analysis_type and hasattr(self.memory, 'update_analysis'):
-                                self.memory.update_analysis(analysis_type, output)
+                                self.memory.update_analysis(analysis_type, parsed_output)
                                 self.logger.info(f"Saved {self.current_step.tool_name} result to memory as {analysis_type}")
                             else:
                                 # 兜底：使用标准LangChain save_context
                                 self.memory.save_context(
                                     {"tool_name": self.current_step.tool_name},
-                                    output
+                                    parsed_output
                                 )
                     except Exception as e:
                         self.logger.warning(f"Failed to save tool output to memory: {e}")
