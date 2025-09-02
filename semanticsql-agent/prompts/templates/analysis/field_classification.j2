@@ -1,0 +1,46 @@
+请对以下数据库字段进行分类。
+
+{% if domain_info %}
+领域背景：{{ domain_info.primary_domain }}
+业务特征：{{ domain_info.characteristics | join(', ') }}
+{% endif %}
+
+需要分类的字段：
+{% for table_name, table_info in tables.items() %}
+表：{{ table_name }}
+{% for col_name, col_info in table_info.columns.items() %}
+- {{ col_name }} ({{ col_info.type }}): {{ col_info.comment | default('无注释') }}
+{% endfor %}
+{% endfor %}
+
+请为每个字段提供以下分类信息：
+
+1. category: 字段类别，必须是以下之一：
+   - identifier: 标识符（如ID、编号等）
+   - measure: 度量值（可计算的数值）
+   - dimension: 维度（分类、分组字段）
+   - datetime: 日期时间
+   - text: 文本
+   - boolean: 布尔值
+   - other: 其他
+
+2. field_type: 更具体的字段类型描述（如：主键、外键、状态标志、金额等）
+
+3. importance: 重要性（high/medium/low）
+
+请严格按照以下JSON格式返回结果：
+{
+  "field_classifications": {
+    {% for table_name in tables.keys() %}
+    "{{ table_name }}": {
+      {% for col_name in tables[table_name].columns.keys() %}
+      "{{ col_name }}": {
+        "category": "类别",
+        "field_type": "具体类型",
+        "importance": "重要性"
+      }{% if not loop.last %},{% endif %}
+      {% endfor %}
+    }{% if not loop.last %},{% endif %}
+    {% endfor %}
+  }
+}

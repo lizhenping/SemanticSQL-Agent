@@ -1,13 +1,12 @@
 """
 数据库结构提取工具 - 提取完整的数据库模式信息
-基于 LangChain BaseTool
+基于 LangChain BaseTool，参考pipeline的简洁设计
 """
 
 from typing import Dict, Any, Type, List, Optional
 import json
 from pydantic import BaseModel, Field
 
-import logging
 from models.exceptions import (
     ToolExecutionError,
     DatabaseConnectionError,
@@ -16,19 +15,13 @@ from models.exceptions import (
 from utils.database import DatabaseManager
 from .base_analysis_tool import BaseAnalysisTool
 
-logger = logging.getLogger(__name__)
-
 
 class SchemaExtractionInput(BaseModel):
     """Schema提取输入参数"""
-
     database_name: str = Field(description="数据库名称")
     include_views: bool = Field(default=False, description="是否包含视图")
-    include_indexes: bool = Field(default=False, description="是否包含索引信息")
     sample_data: bool = Field(default=True, description="是否包含样本数据")
-    tables: Optional[List[str]] = Field(
-        default=None, description="指定要提取的表（空则提取所有）"
-    )
+    tables: Optional[List[str]] = Field(default=None, description="指定要提取的表")
 
 
 class SchemaExtractionTool(BaseAnalysisTool):
@@ -41,7 +34,6 @@ class SchemaExtractionTool(BaseAnalysisTool):
 
     def __init__(self, db_manager: DatabaseManager):
         super().__init__(db_manager=db_manager)
-        self.logger = logger
 
     class Config:
         arbitrary_types_allowed = True
@@ -50,7 +42,6 @@ class SchemaExtractionTool(BaseAnalysisTool):
         self,
         database_name: str,
         include_views: bool = False,
-        include_indexes: bool = False,
         sample_data: bool = True,
         tables: Optional[List[str]] = None,
     ) -> str:
@@ -61,38 +52,17 @@ class SchemaExtractionTool(BaseAnalysisTool):
                     tool_name=self.name, reason="数据库管理器未初始化"
                 )
 
-            # 获取数据库引擎
-            engine = self.db_manager.engine
-            if not engine:
-                raise DatabaseConnectionError(
-                    host=self.db_manager.config.host,
-                    database=database_name,
-                    original_error="数据库连接未建立",
-                )
-
-            # 提取表信息
-            table_infos = {}
-
             # 获取表列表
-            all_table_names = tables if tables else self.db_manager.get_tables()
-
-            # 根据参数选择要处理的表
-            if tables:
-                # 如果指定了特定表，只处理这些表
-                selected_tables = [t for t in all_table_names if t in tables]
-            else:
-                # 否则处理所有表
-                selected_tables = all_table_names
-
-            # 提取每个表的详细信息
-            for table_name in selected_tables:
-                table_info = self._extract_table_info(
-                    table_name, database_name, include_indexes, sample_data
+            all_tables = tables if tables else self.db_manager.get_tables()
+            
+            # 提取每个表的信息
+            table_infos = {}
+            for table_name in all_tables:
+                table_infos[table_name] = self._extract_table_info(
+                    table_name, database_name, sample_data
                 )
 
-                table_infos[table_name] = table_info
-
-            # 构建返回结果（参考pipeline格式）
+            # 构建返回结果
             result = {
                 "database_name": database_name,
                 "tables": table_infos,
@@ -100,24 +70,11 @@ class SchemaExtractionTool(BaseAnalysisTool):
                 "total_columns": sum(
                     len(info.get("columns", {})) for info in table_infos.values()
                 ),
-                "extraction_summary": {
-                    "processed_tables": len(selected_tables),
-                    "include_views": include_views,
-                    "include_indexes": include_indexes,
-                    "sample_data": sample_data,
-                },
             }
 
-            # 将结果保存到内存中供其他工具使用
-            if self._agent_memory:
-                try:
-                    self._agent_memory.save_context(
-                        inputs={"tool_name": "schema_extraction"}, outputs=result
-                    )
-                except Exception as e:
-                    self.logger.warning(f"Failed to save schema info to memory: {e}")
+            # 保存到记忆
+            self.save_to_memory("schema_extraction", result)
 
-            # 返回JSON字符串格式的结果（LangChain要求）
             return json.dumps(result, ensure_ascii=False, indent=2)
 
         except DatabaseConnectionError:
@@ -129,41 +86,26 @@ class SchemaExtractionTool(BaseAnalysisTool):
         self,
         table_name: str,
         database_name: str,
-        include_indexes: bool,
         sample_data: bool,
     ) -> Dict[str, Any]:
-        """提取单个表的详细信息，采用pipeline的简洁设计
-
-        参数:
-            table_name: 表名
-            database_name: 数据库名
-            include_indexes: 是否包含索引信息
-            sample_data: 是否包含样本数据
-
-        返回:
-            表信息字典
-        """
+        """提取单个表的详细信息"""
         table_info = {
             "name": table_name,
-            "comment": "",
-            "columns": {},  # 改为字典格式，便于后续处理
+            "columns": {},
             "primary_key": [],
-            "row_count": 0,
         }
 
         try:
-            # 步骤1：获取表基本信息（注释和行数）
+            # 获取表基本信息
             table_info.update(self._get_table_metadata(table_name, database_name))
-
-            # 步骤2：获取列信息
-            columns = self._get_columns_info(table_name, database_name)
-            table_info["columns"] = columns
-
-            # 步骤3：获取主键信息
-            primary_keys = self._get_primary_keys(table_name, database_name)
-            table_info["primary_key"] = primary_keys
-
-            # 步骤4：添加样本数据（如果需要）
+            
+            # 获取列信息
+            table_info["columns"] = self._get_columns_info(table_name, database_name)
+            
+            # 获取主键信息
+            table_info["primary_key"] = self._get_primary_keys(table_name, database_name)
+            
+            # 获取样本数据
             if sample_data:
                 table_info["sample_data"] = self._get_sample_data(table_name, limit=3)
 
@@ -172,14 +114,11 @@ class SchemaExtractionTool(BaseAnalysisTool):
 
         return table_info
 
-    def _get_table_metadata(
-        self, table_name: str, database_name: str
-    ) -> Dict[str, Any]:
+    def _get_table_metadata(self, table_name: str, database_name: str) -> Dict[str, Any]:
         """获取表的元数据信息"""
         metadata = {"comment": "", "row_count": 0}
 
         try:
-            # 获取表注释和行数
             query = """
             SELECT table_comment, table_rows
             FROM information_schema.tables 
@@ -194,15 +133,15 @@ class SchemaExtractionTool(BaseAnalysisTool):
                 metadata["comment"] = row.get("TABLE_COMMENT", "") or ""
                 metadata["row_count"] = int(row.get("TABLE_ROWS", 0) or 0)
 
-                        except Exception as e:
-                    self.logger.warning(f"获取表 {table_name} 元数据失败: {str(e)}")
+        except Exception as e:
+            self.logger.warning(f"获取表 {table_name} 元数据失败: {str(e)}")
 
         return metadata
 
     def _get_columns_info(
         self, table_name: str, database_name: str
     ) -> Dict[str, Dict[str, Any]]:
-        """获取列信息，返回字典格式"""
+        """获取列信息"""
         columns = {}
 
         try:
@@ -232,12 +171,12 @@ class SchemaExtractionTool(BaseAnalysisTool):
                         "name": col_name,
                         "type": self._format_column_type(col),
                         "nullable": col["IS_NULLABLE"] == "YES",
-                        "default": self._safe_default_value(col["COLUMN_DEFAULT"]),
+                        "default": col["COLUMN_DEFAULT"],
                         "comment": col["COLUMN_COMMENT"] or "",
                     }
 
-                        except Exception as e:
-                    self.logger.error(f"获取表 {table_name} 列信息失败: {str(e)}")
+        except Exception as e:
+            self.logger.error(f"获取表 {table_name} 列信息失败: {str(e)}")
 
         return columns
 
@@ -262,8 +201,8 @@ class SchemaExtractionTool(BaseAnalysisTool):
             if result.get("success") and result.get("data"):
                 primary_keys = [row["COLUMN_NAME"] for row in result["data"]]
 
-                        except Exception as e:
-                    self.logger.warning(f"获取表 {table_name} 主键失败: {str(e)}")
+        except Exception as e:
+            self.logger.warning(f"获取表 {table_name} 主键失败: {str(e)}")
 
         return primary_keys
 
@@ -285,30 +224,10 @@ class SchemaExtractionTool(BaseAnalysisTool):
             else:
                 return f"{data_type}({precision})"
 
-        # 处理enum类型
-        if "enum" in data_type.lower():
-            return data_type
-
         return data_type
 
-    def _safe_default_value(self, default_value) -> Any:
-        """安全处理默认值"""
-        if default_value is None:
-            return None
-
-        # 转换为字符串并清理
-        str_value = str(default_value).strip()
-
-        # 处理常见的默认值
-        if str_value.upper() in ("NULL", "CURRENT_TIMESTAMP"):
-            return str_value.upper()
-
-        return str_value
-
-
-
     def _get_sample_data(self, table_name: str, limit: int = 5) -> List[Dict[str, Any]]:
-        """获取表的样本数据，优化JSON序列化"""
+        """获取表的样本数据"""
         try:
             query = f"SELECT * FROM {table_name} LIMIT {limit}"
             result = self.db_manager._execute_query(query)
@@ -319,47 +238,21 @@ class SchemaExtractionTool(BaseAnalysisTool):
             self.logger.warning(f"获取表 {table_name} 样本数据失败: {str(e)}")
             return []
 
-    def _serialize_sample_data(
-        self, raw_data: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+    def _serialize_sample_data(self, raw_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """序列化样本数据，确保JSON兼容"""
         serializable_data = []
 
         for row in raw_data:
             serializable_row = {}
             for key, value in row.items():
-                serializable_row[key] = self._serialize_value(value)
+                if value is None:
+                    serializable_row[key] = None
+                elif hasattr(value, "isoformat"):  # 日期时间类型
+                    serializable_row[key] = value.isoformat()
+                elif isinstance(value, (bytes, bytearray)):  # 二进制数据
+                    serializable_row[key] = f"<binary_data:{len(value)}_bytes>"
+                else:
+                    serializable_row[key] = value
             serializable_data.append(serializable_row)
 
         return serializable_data
-
-    def _serialize_value(self, value) -> Any:
-        """序列化单个值"""
-        if value is None:
-            return None
-        elif hasattr(value, "isoformat"):  # 日期时间类型
-            return value.isoformat()
-        elif isinstance(value, (bytes, bytearray)):  # 二进制数据
-            return f"<binary_data:{len(value)}_bytes>"
-        elif isinstance(value, (int, float, str, bool)):
-            return value
-        else:
-            # 其他复杂类型转换为字符串
-            return str(value)
-
-    async def _arun(
-        self,
-        database_name: str,
-        include_views: bool = False,
-        include_indexes: bool = False,
-        sample_data: bool = True,
-        tables: Optional[List[str]] = None,
-    ) -> str:
-        """异步执行数据库结构提取"""
-        return self._run(
-            database_name=database_name,
-            include_views=include_views,
-            include_indexes=include_indexes,
-            sample_data=sample_data,
-            tables=tables,
-        )
