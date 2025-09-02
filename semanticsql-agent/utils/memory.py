@@ -5,6 +5,8 @@
 from typing import Dict, Any, List
 from langchain_core.memory import BaseMemory
 from pydantic import Field
+import json
+import logging
 
 
 class DatabaseAnalysisMemory(BaseMemory):
@@ -18,6 +20,15 @@ class DatabaseAnalysisMemory(BaseMemory):
     
     # 记忆键
     memory_key: str = "db_analysis"
+    
+    # 压缩配置
+    enable_compression: bool = Field(default=True)
+    max_schema_size: int = Field(default=50000)  # 50KB limit for schema data
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # 直接设置为实例属性，避开Pydantic验证
+        object.__setattr__(self, 'logger', logging.getLogger(__name__))
     
     # 返回的记忆变量键列表
     @property
@@ -36,8 +47,9 @@ class DatabaseAnalysisMemory(BaseMemory):
             inputs: 输入参数（LangChain 要求的接口）
             
         Returns:
-            包含记忆的字典
+            包含记忆的字典，结构为 {memory_key: {analysis_type: analysis_data}}
         """
+        # 确保返回正确的嵌套结构供工具使用
         return {self.memory_key: self.memories}
     
     def save_context(self, inputs: Dict[str, Any], outputs: Dict[str, Any]) -> None:
@@ -94,7 +106,62 @@ class DatabaseAnalysisMemory(BaseMemory):
             analysis_type: 分析类型
             result: 分析结果
         """
+        # 对schema_info进行压缩处理
+        if analysis_type == "schema_info" and self.enable_compression:
+            result = self._compress_schema_data(result)
+        
         self.memories[analysis_type] = result
+        self.logger.debug(f"Updated {analysis_type} in memory")
+    
+    def _compress_schema_data(self, schema_data: Dict[str, Any]) -> Dict[str, Any]:
+        """压缩schema数据以减少内存占用"""
+        try:
+            # 估算原始大小
+            original_size = len(json.dumps(schema_data, ensure_ascii=False))
+            
+            if original_size <= self.max_schema_size:
+                return schema_data
+            
+            self.logger.info(f"Schema data size ({original_size} bytes) exceeds limit, applying compression")
+            
+            compressed_data = schema_data.copy()
+            tables = compressed_data.get("tables", {})
+            
+            # 压缩策略
+            for table_name, table_info in tables.items():
+                # 移除样本数据（最占空间）
+                if "sample_data" in table_info:
+                    del table_info["sample_data"]
+                
+                # 压缩列信息
+                columns = table_info.get("columns", [])
+                for column in columns:
+                    # 简化默认值
+                    if column.get("default") == "NULL":
+                        column["default"] = None
+                    # 移除空注释
+                    if not column.get("comment"):
+                        column.pop("comment", None)
+                
+                # 移除空索引
+                if not table_info.get("indexes"):
+                    table_info.pop("indexes", None)
+                
+                # 移除空外键
+                if not table_info.get("foreign_keys"):
+                    table_info.pop("foreign_keys", None)
+            
+            # 验证压缩后大小
+            compressed_size = len(json.dumps(compressed_data, ensure_ascii=False))
+            compression_ratio = compressed_size / original_size
+            
+            self.logger.info(f"Schema compression: {original_size} -> {compressed_size} bytes (ratio: {compression_ratio:.2f})")
+            
+            return compressed_data
+            
+        except Exception as e:
+            self.logger.warning(f"Schema compression failed: {e}, using original data")
+            return schema_data
     
     def get_analysis(self, analysis_type: str) -> Dict[str, Any]:
         """获取特定类型的分析结果

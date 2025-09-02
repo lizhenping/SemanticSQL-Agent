@@ -71,6 +71,30 @@ class DatabaseManager:
             self.logger.error(f"Failed to get table list: {e}")
             return []
     
+    def _safe_type_string(self, column_type) -> str:
+        """安全地转换列类型为字符串，处理特殊字符"""
+        try:
+            type_str = str(column_type)
+            # 清理可能导致JSON解析问题的字符
+            if "enum(" in type_str.lower():
+                # 提取enum值并简化格式
+                import re
+                enum_match = re.search(r"enum\((.*?)\)", type_str, re.IGNORECASE)
+                if enum_match:
+                    enum_values = enum_match.group(1)
+                    # 解析enum值列表，移除引号并用逗号分隔
+                    values_list = []
+                    for val in enum_values.split(','):
+                        clean_val = val.strip().strip("'\"")
+                        if clean_val:
+                            values_list.append(clean_val)
+                    return f"ENUM({','.join(values_list)})"
+            
+            # 移除其他可能的问题字符
+            return type_str.replace('"', '').replace("'", "")
+        except:
+            return "UNKNOWN"
+
     def get_table_info(self, table_name: str) -> Dict[str, Any]:
         """Get table information"""
         try:
@@ -82,7 +106,7 @@ class DatabaseManager:
                     for row in result.fetchall():
                         info["columns"].append({
                             "name": row[0],
-                            "type": str(row[1]),
+                            "type": self._safe_type_string(row[1]),
                             "nullable": row[2] == "YES",
                             "key": row[3],
                             "default": row[4]

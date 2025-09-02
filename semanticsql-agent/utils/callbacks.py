@@ -144,10 +144,26 @@ class TrajectoryCallbackHandler(BaseCallbackHandler):
                 ]:
                     try:
                         if isinstance(output, dict):
-                            self.memory.save_context(
-                                {"tool_name": self.current_step.tool_name},
-                                output
-                            )
+                            # 根据工具类型保存到对应的记忆位置
+                            analysis_type_mapping = {
+                                'schema_extraction': 'schema_info',
+                                'domain_analysis': 'domain_info', 
+                                'field_classification': 'field_classification',
+                                'column_meaning_analysis': 'column_meanings',
+                                'table_meaning_analysis': 'table_meanings',
+                                'er_analysis': 'er_relations'
+                            }
+                            
+                            analysis_type = analysis_type_mapping.get(self.current_step.tool_name)
+                            if analysis_type and hasattr(self.memory, 'update_analysis'):
+                                self.memory.update_analysis(analysis_type, output)
+                                self.logger.info(f"Saved {self.current_step.tool_name} result to memory as {analysis_type}")
+                            else:
+                                # 兜底：使用标准LangChain save_context
+                                self.memory.save_context(
+                                    {"tool_name": self.current_step.tool_name},
+                                    output
+                                )
                     except Exception as e:
                         self.logger.warning(f"Failed to save tool output to memory: {e}")
             

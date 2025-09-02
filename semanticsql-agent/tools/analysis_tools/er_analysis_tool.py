@@ -26,39 +26,13 @@ class ERAnalysisTool(BaseTool):
     description: str = "分析数据库表之间的实体关系，识别外键关系和隐式关联"
     args_schema: Type[BaseModel] = ERAnalysisInput
     
-    def _run(self, tool_input: str = "", **kwargs) -> Dict[str, Any]:
+    def _run(self, memory: Dict[str, Any], analyze_implicit: bool = True, depth: int = 2) -> Dict[str, Any]:
         """执行ER关系分析"""
         try:
-            # 解析输入参数
-            import json
-            memory = {}
-            schema_info = {}
-            field_classification = {}
-            
-            if tool_input:
-                try:
-                    parsed_input = json.loads(tool_input)
-                    # 尝试多种输入格式
-                    if "database_schema" in parsed_input:
-                        schema_info = parsed_input["database_schema"]
-                    elif "schema" in parsed_input:
-                        schema_info = parsed_input["schema"]
-                    elif "memory" in parsed_input:
-                        memory = parsed_input["memory"]
-                        db_analysis = memory.get("db_analysis", {})
-                        schema_info = db_analysis.get("schema_info", {})
-                        field_classification = db_analysis.get("field_classification", {})
-                    elif "db_analysis" in parsed_input:
-                        db_analysis = parsed_input["db_analysis"]
-                        schema_info = db_analysis.get("schema_info", {})
-                        field_classification = db_analysis.get("field_classification", {})
-                    else:
-                        memory = parsed_input
-                        db_analysis = memory.get("db_analysis", {})
-                        schema_info = db_analysis.get("schema_info", {})
-                        field_classification = db_analysis.get("field_classification", {})
-                except json.JSONDecodeError:
-                    schema_info = {}
+            # 从记忆中获取必要信息
+            db_analysis = memory.get("db_analysis", {})
+            schema_info = db_analysis.get("schema_info", {})
+            field_classification = db_analysis.get("field_classification", {})
             
             if not schema_info:
                 raise ToolExecutionError(

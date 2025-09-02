@@ -113,7 +113,7 @@ class SchemaExtractionTool(BaseTool):
         for col in inspector.get_columns(table_name):
             column_info = {
                 "name": col["name"],
-                "type": str(col["type"]),
+                "type": self._safe_type_string(col["type"]),
                 "nullable": col.get("nullable", True),
                 "default": col.get("default"),
                 "autoincrement": col.get("autoincrement", False),
@@ -169,6 +169,30 @@ class SchemaExtractionTool(BaseTool):
             "comment": table_comment,
             "column_count": len(columns)
         }
+    
+    def _safe_type_string(self, column_type) -> str:
+        """安全地转换列类型为字符串，处理特殊字符"""
+        try:
+            type_str = str(column_type)
+            # 清理可能导致JSON解析问题的字符
+            if "enum(" in type_str.lower():
+                # 提取enum值并简化格式
+                import re
+                enum_match = re.search(r"enum\((.*?)\)", type_str, re.IGNORECASE)
+                if enum_match:
+                    enum_values = enum_match.group(1)
+                    # 解析enum值列表，移除引号并用逗号分隔
+                    values_list = []
+                    for val in enum_values.split(','):
+                        clean_val = val.strip().strip("'\"")
+                        if clean_val:
+                            values_list.append(clean_val)
+                    return f"ENUM({','.join(values_list)})"
+            
+            # 移除其他可能的问题字符
+            return type_str.replace('"', '').replace("'", "")
+        except:
+            return "UNKNOWN"
     
     def _get_sample_data(self, table_name: str, limit: int = 5) -> List[Dict[str, Any]]:
         """获取表的样本数据"""
