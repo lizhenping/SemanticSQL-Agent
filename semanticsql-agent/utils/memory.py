@@ -59,35 +59,23 @@ class DatabaseAnalysisMemory(BaseMemory):
             inputs: 输入参数，应包含 tool_name 或可以从 inputs 中推断
             outputs: 工具的输出结果
         """
-        import sys
-        print(f"[MEMORY] save_context 方法被调用 - FORCED OUTPUT")
-        sys.stdout.flush()
-        try:
-            print(f"[MEMORY] save_context 方法被调用")
-            print(f"[DEBUG] save_context called with inputs: {inputs}")
-            print(f"[DEBUG] outputs type: {type(outputs)}, keys: {list(outputs.keys()) if isinstance(outputs, dict) else 'Not dict'}")
-            sys.stdout.flush()
-        except Exception as e:
-            print(f"[ERROR] Exception in save_context debug prints: {e}")
-            import traceback
-            print(f"[ERROR] Traceback: {traceback.format_exc()}")
-            sys.stdout.flush()
-            return
+        self.logger.debug(f"save_context called with inputs: {inputs}")
+        self.logger.debug(f"outputs type: {type(outputs)}, keys: {list(outputs.keys()) if isinstance(outputs, dict) else 'Not dict'}")
         
         # 尝试从多个位置获取工具名称
         tool_name = None
         if "tool_name" in inputs:
             tool_name = inputs["tool_name"]
-            print(f"[DEBUG] Found tool_name in inputs: {tool_name}")
+            self.logger.debug(f"Found tool_name in inputs: {tool_name}")
         elif "input" in inputs and isinstance(inputs["input"], dict):
             tool_name = inputs["input"].get("tool_name")
-            print(f"[DEBUG] Found tool_name in nested input: {tool_name}")
+            self.logger.debug(f"Found tool_name in nested input: {tool_name}")
         elif "action" in inputs:
             # 从 LangChain agent 的 action 中获取
             action = inputs["action"]
             if hasattr(action, 'tool'):
                 tool_name = action.tool
-                print(f"[DEBUG] Found tool_name in action: {tool_name}")
+                self.logger.debug(f"Found tool_name in action: {tool_name}")
         
         # 如果仍然没有找到工具名称，尝试从输出中推断
         if not tool_name and isinstance(outputs, dict):
@@ -98,24 +86,24 @@ class DatabaseAnalysisMemory(BaseMemory):
             if isinstance(output_data, dict):
                 if "tables" in output_data and "columns" in output_data:
                     tool_name = "schema_extraction"
-                    print(f"[DEBUG] Inferred tool_name from output structure: {tool_name}")
+                    self.logger.debug(f"Inferred tool_name from output structure: {tool_name}")
                 elif "primary_domain" in output_data and "entities" in output_data:
                     tool_name = "domain_analysis"
-                    print(f"[DEBUG] Inferred tool_name from output structure: {tool_name}")
+                    self.logger.debug(f"Inferred tool_name from output structure: {tool_name}")
                 elif "field_classifications" in output_data:
                     tool_name = "field_classification"
-                    print(f"[DEBUG] Inferred tool_name from output structure: {tool_name}")
+                    self.logger.debug(f"Inferred tool_name from output structure: {tool_name}")
         
-        print(f"[DEBUG] Final tool_name: {tool_name}")
+        self.logger.debug(f"Final tool_name: {tool_name}")
         
         # 根据工具名称更新对应的记忆
         # 获取实际的数据（可能在 output 键中）
         actual_data = outputs.get("output", outputs) if isinstance(outputs, dict) else outputs
         
         if tool_name == "schema_extraction":
-            print(f"[DEBUG] Saving schema_extraction data to memory")
+            self.logger.debug(f"Saving schema_extraction data to memory")
             self.memories["schema_info"] = actual_data
-            print(f"[DEBUG] Saved schema_info, memory keys: {list(self.memories.keys())}")
+            self.logger.debug(f"Saved schema_info, memory keys: {list(self.memories.keys())}")
         elif tool_name == "domain_analysis":
             self.memories["domain_info"] = actual_data
         elif tool_name == "field_classification":
@@ -138,9 +126,8 @@ class DatabaseAnalysisMemory(BaseMemory):
             analysis_type: 分析类型
             result: 分析结果
         """
-        # 暂时禁用压缩避免FieldInfo错误
-        # if analysis_type == "schema_info" and self.enable_compression:
-        #     result = self._compress_schema_data(result)
+        if analysis_type == "schema_info" and self.enable_compression:
+            result = self._compress_schema_data(result)
         
         self.memories[analysis_type] = result
         self.logger.info(f"Successfully updated {analysis_type} in memory (data size: {len(str(result))} chars)")

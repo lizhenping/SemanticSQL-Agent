@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from models.schemas import SQLOperation
 from models.exceptions import ToolExecutionError, LLMError
 from utils.database import DatabaseManager
+from prompts.manager import PromptManager
 
 
 class SQLGenerationInput(BaseModel):
@@ -33,6 +34,7 @@ class SQLGenerationTool(BaseTool):
         super().__init__()
         object.__setattr__(self, 'llm', llm)
         object.__setattr__(self, 'db_manager', db_manager)
+        object.__setattr__(self, 'prompt_manager', PromptManager())
     
     def _run(
         self,
@@ -158,23 +160,12 @@ class SQLGenerationTool(BaseTool):
         dialect: str
     ) -> str:
         """使用LLM生成SQL"""
-        prompt = f"""基于以下数据库结构信息，生成SQL查询来回答用户的问题。
-
-{context}
-
-SQL方言：{dialect}
-
-用户问题：{question}
-
-请生成SQL查询，要求：
-1. SQL语法正确，符合{dialect}方言
-2. 只返回SQL语句，不要其他解释
-3. 使用合适的表和字段
-4. 如果需要聚合，使用GROUP BY
-5. 如果需要排序，使用ORDER BY
-6. 考虑性能，避免不必要的复杂度
-
-SQL查询："""
+        prompt = self.prompt_manager.get_tool_prompt(
+            "sql_generation",
+            context=context,
+            dialect=dialect,
+            question=question
+        )
 
         try:
             response = self.llm.invoke(prompt)

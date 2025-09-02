@@ -9,6 +9,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from models.exceptions import ToolExecutionError
+from prompts.manager import PromptManager
 
 
 class SQLReflectionInput(BaseModel):
@@ -29,6 +30,7 @@ class SQLReflectionTool(BaseTool):
     def __init__(self, llm: ChatOpenAI):
         super().__init__()
         object.__setattr__(self, 'llm', llm)
+        object.__setattr__(self, 'prompt_manager', PromptManager())
         
         # 定义质量权重，使用object.__setattr__避开Pydantic验证
         object.__setattr__(self, 'quality_weights', {
@@ -160,18 +162,11 @@ class SQLReflectionTool(BaseTool):
     ) -> Dict[str, Any]:
         """分析空结果原因"""
         # 基于LLM分析为什么没有结果
-        prompt = f"""分析以下SQL查询返回空结果的原因：
-
-问题：{question}
-SQL：{sql}
-
-可能的原因：
-1. WHERE条件过于严格
-2. JOIN条件不匹配
-3. 数据确实不存在
-4. 时间范围问题
-
-请分析最可能的原因。"""
+        prompt = self.prompt_manager.render_template(
+            "reflection/analyze_empty_result.j2",
+            question=question,
+            sql=sql
+        )
 
         try:
             response = self.llm.invoke(prompt)
@@ -224,22 +219,12 @@ SQL：{sql}
         }
         
         # 使用LLM评估语义匹配和结果相关性
-        prompt = f"""评估SQL查询结果的质量：
-
-用户问题：{question}
-生成的SQL：{sql}
-返回结果样例（前3行）：{result_data[:3]}
-
-请评估：
-1. SQL是否正确回答了用户的问题？（0-1分）
-2. 结果是否相关且有意义？（0-1分）
-3. 是否有改进空间？
-
-格式：
-语义匹配分数：X.X
-结果相关性分数：X.X
-改进建议：...
-"""
+        prompt = self.prompt_manager.render_template(
+            "reflection/evaluate_result_quality.j2",
+            question=question,
+            sql=sql,
+            result_sample=result_data[:3]
+        )
 
         try:
             response = self.llm.invoke(prompt)

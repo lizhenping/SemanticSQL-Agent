@@ -9,6 +9,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from models.exceptions import ToolExecutionError
+from prompts.manager import PromptManager
 
 
 class QuestionGenerationInput(BaseModel):
@@ -28,6 +29,7 @@ class QuestionGenerationTool(BaseTool):
     def __init__(self, llm: ChatOpenAI):
         super().__init__()
         object.__setattr__(self, 'llm', llm)
+        object.__setattr__(self, 'prompt_manager', PromptManager())
     
     def _run(self, tool_input: str = "", **kwargs) -> Dict[str, Any]:
         """生成问题"""
@@ -99,18 +101,10 @@ class QuestionGenerationTool(BaseTool):
     
     def _generate_question_with_llm(self, context: str) -> str:
         """使用LLM生成问题"""
-        prompt = f"""基于以下场景信息，生成一个自然、清晰的中文问题：
-
-{context}
-
-要求：
-1. 问题要自然、符合实际业务场景
-2. 问题要清晰、无歧义
-3. 问题要能够通过SQL查询来回答
-4. 使用中文，表达流畅
-5. 不要包含具体的数值或日期（使用"最近"、"去年"等相对表述）
-
-生成的问题："""
+        prompt = self.prompt_manager.get_tool_prompt(
+            "question_generation",
+            context=context
+        )
 
         response = self.llm.invoke(prompt)
         question = response.content.strip()

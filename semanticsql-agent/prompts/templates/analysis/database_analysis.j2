@@ -1,0 +1,12 @@
+请对数据库 {{ database_name }} 执行完整的分析：
+
+重要提示：数据库结构信息(schema_info)已经预先提取并保存到记忆中，你可以直接使用。
+
+请按以下顺序执行分析：
+1. 使用 domain_analysis 分析业务领域（schema_info已可用）
+2. 使用 field_classification 对字段进行分类
+3. 使用 column_meaning_analysis 分析列的业务含义
+4. 使用 table_meaning_analysis 分析表的业务含义
+5. 使用 er_analysis 分析实体关系
+
+请按顺序执行这些分析，并将结果保存到记忆中。

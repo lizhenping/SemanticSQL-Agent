@@ -7,7 +7,7 @@ from typing import Dict, Any, Type, List, Optional
 import json
 from pydantic import BaseModel, Field
 
-from models.schemas import DatabaseSchema, TableInfo, ColumnInfo, ForeignKey
+import logging
 from models.exceptions import (
     ToolExecutionError,
     DatabaseConnectionError,
@@ -15,6 +15,8 @@ from models.exceptions import (
 )
 from utils.database import DatabaseManager
 from .base_analysis_tool import BaseAnalysisTool
+
+logger = logging.getLogger(__name__)
 
 
 class SchemaExtractionInput(BaseModel):
@@ -39,6 +41,7 @@ class SchemaExtractionTool(BaseAnalysisTool):
 
     def __init__(self, db_manager: DatabaseManager):
         super().__init__(db_manager=db_manager)
+        self.logger = logger
 
     class Config:
         arbitrary_types_allowed = True
@@ -53,17 +56,6 @@ class SchemaExtractionTool(BaseAnalysisTool):
     ) -> str:
         """执行数据库结构提取"""
         try:
-            # Handle LangChain parameter passing - sometimes database_name is a JSON string
-            if isinstance(database_name, str) and database_name.startswith('{'):
-                try:
-                    params = json.loads(database_name)
-                    database_name = params.get("database_name", database_name)
-                    include_views = params.get("include_views", include_views)
-                    include_indexes = params.get("include_indexes", include_indexes) 
-                    sample_data = params.get("sample_data", sample_data)
-                    tables = params.get("tables", tables)
-                except json.JSONDecodeError:
-                    pass  # Use original parameter if JSON parsing fails
             if not self.db_manager:
                 raise ToolExecutionError(
                     tool_name=self.name, reason="数据库管理器未初始化"
@@ -116,14 +108,14 @@ class SchemaExtractionTool(BaseAnalysisTool):
                 },
             }
 
-            # 将结果保存到内存中供其他工具使用（暂时禁用避免FieldInfo错误）
+            # 将结果保存到内存中供其他工具使用
             if self._agent_memory:
                 try:
                     self._agent_memory.save_context(
                         inputs={"tool_name": "schema_extraction"}, outputs=result
                     )
                 except Exception as e:
-                    print(f"Warning: Failed to save schema info to memory: {e}")
+                    self.logger.warning(f"Failed to save schema info to memory: {e}")
 
             # 返回JSON字符串格式的结果（LangChain要求）
             return json.dumps(result, ensure_ascii=False, indent=2)
@@ -176,7 +168,7 @@ class SchemaExtractionTool(BaseAnalysisTool):
                 table_info["sample_data"] = self._get_sample_data(table_name, limit=3)
 
         except Exception as e:
-            print(f"提取表 {table_name} 信息时出错: {str(e)}")
+            self.logger.error(f"提取表 {table_name} 信息时出错: {str(e)}")
 
         return table_info
 
@@ -202,8 +194,8 @@ class SchemaExtractionTool(BaseAnalysisTool):
                 metadata["comment"] = row.get("TABLE_COMMENT", "") or ""
                 metadata["row_count"] = int(row.get("TABLE_ROWS", 0) or 0)
 
-        except Exception as e:
-            print(f"获取表 {table_name} 元数据失败: {str(e)}")
+                        except Exception as e:
+                    self.logger.warning(f"获取表 {table_name} 元数据失败: {str(e)}")
 
         return metadata
 
@@ -244,10 +236,8 @@ class SchemaExtractionTool(BaseAnalysisTool):
                         "comment": col["COLUMN_COMMENT"] or "",
                     }
 
-        except Exception as e:
-            print(f"获取表 {table_name} 列信息失败: {str(e)}")
-            import traceback
-            traceback.print_exc()
+                        except Exception as e:
+                    self.logger.error(f"获取表 {table_name} 列信息失败: {str(e)}")
 
         return columns
 
@@ -272,8 +262,8 @@ class SchemaExtractionTool(BaseAnalysisTool):
             if result.get("success") and result.get("data"):
                 primary_keys = [row["COLUMN_NAME"] for row in result["data"]]
 
-        except Exception as e:
-            print(f"获取表 {table_name} 主键失败: {str(e)}")
+                        except Exception as e:
+                    self.logger.warning(f"获取表 {table_name} 主键失败: {str(e)}")
 
         return primary_keys
 
@@ -297,7 +287,7 @@ class SchemaExtractionTool(BaseAnalysisTool):
 
         # 处理enum类型
         if "enum" in data_type.lower():
-            return self._safe_type_string(data_type)
+            return data_type
 
         return data_type
 
@@ -315,30 +305,7 @@ class SchemaExtractionTool(BaseAnalysisTool):
 
         return str_value
 
-    def _safe_type_string(self, column_type) -> str:
-        """安全地转换列类型为字符串，处理特殊字符"""
-        try:
-            type_str = str(column_type)
-            # 清理可能导致JSON解析问题的字符
-            if "enum(" in type_str.lower():
-                # 提取enum值并简化格式
-                import re
 
-                enum_match = re.search(r"enum\((.*?)\)", type_str, re.IGNORECASE)
-                if enum_match:
-                    enum_values = enum_match.group(1)
-                    # 解析enum值列表，移除引号并用逗号分隔
-                    values_list = []
-                    for val in enum_values.split(","):
-                        clean_val = val.strip().strip("'\"")
-                        if clean_val:
-                            values_list.append(clean_val)
-                    return f"ENUM({','.join(values_list)})"
-
-            # 移除其他可能的问题字符
-            return type_str.replace('"', "").replace("'", "")
-        except:
-            return "UNKNOWN"
 
     def _get_sample_data(self, table_name: str, limit: int = 5) -> List[Dict[str, Any]]:
         """获取表的样本数据，优化JSON序列化"""
@@ -349,7 +316,7 @@ class SchemaExtractionTool(BaseAnalysisTool):
                 return self._serialize_sample_data(result["data"])
             return []
         except Exception as e:
-            print(f"获取表 {table_name} 样本数据失败: {str(e)}")
+            self.logger.warning(f"获取表 {table_name} 样本数据失败: {str(e)}")
             return []
 
     def _serialize_sample_data(

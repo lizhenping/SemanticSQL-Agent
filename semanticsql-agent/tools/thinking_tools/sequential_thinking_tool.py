@@ -9,6 +9,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field, field_validator
 
 from models.exceptions import ToolExecutionError
+from prompts.manager import PromptManager
 
 
 class SequentialThinkingInput(BaseModel):
@@ -42,6 +43,7 @@ class SequentialThinkingTool(BaseTool):
     def __init__(self, llm: ChatOpenAI):
         super().__init__()
         object.__setattr__(self, 'llm', llm)
+        object.__setattr__(self, 'prompt_manager', PromptManager())
     
     def _run(
         self,
@@ -83,18 +85,11 @@ class SequentialThinkingTool(BaseTool):
         memory: Dict[str, Any]
     ) -> str:
         """构建分析提示词"""
-        prompt_parts = [
-            "请深入分析以下问题并制定解决策略：",
-            f"\n问题描述：{problem_description}",
-            f"\n上下文信息：{context}",
-            "\n请分析：",
-            "1. 问题的根本原因",
-            "2. 可能的解决方案",
-            "3. 建议的下一步行动",
-            "4. 具体的实施步骤"
-        ]
-        
-        return "\n".join(prompt_parts)
+        return self.prompt_manager.render_template(
+            "thinking/sequential_thinking.j2",
+            problem_description=problem_description,
+            context=context
+        )
     
     def _parse_strategy(self, analysis: str) -> Dict[str, Any]:
         """解析策略"""

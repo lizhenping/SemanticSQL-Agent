@@ -351,16 +351,14 @@ class DomainAnalysisTool(BaseAnalysisTool):
         return patterns
 
     def _save_to_memory(self, analysis_result: Dict[str, Any]):
-        """保存分析结果到memory（暂时禁用）"""
-        # 暂时禁用memory保存避免FieldInfo错误
-        # if self._agent_memory:
-        #     try:
-        #         self._agent_memory.save_context(
-        #             inputs={"tool_name": "domain_analysis"}, outputs=analysis_result
-        #         )
-        #     except Exception as e:
-        #         print(f"Warning: Failed to save domain analysis to memory: {e}")
-        pass
+        """保存分析结果到memory"""
+        if self._agent_memory:
+            try:
+                self._agent_memory.save_context(
+                    inputs={"tool_name": "domain_analysis"}, outputs=analysis_result
+                )
+            except Exception as e:
+                logger.warning(f"Failed to save domain analysis to memory: {e}")
 
     def _calculate_table_confidence(
         self, table_name: str, table_info: Dict[str, Any]
