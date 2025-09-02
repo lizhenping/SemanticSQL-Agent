@@ -1,0 +1,168 @@
+# 场景配置 - 层次化结构
+# 注意：不包含表信息，表映射在后续阶段处理
+
+scenarios:
+  # 一、项目执行监控场景
+  project_execution_monitoring:
+    name: "项目执行监控"
+    description: "监控项目的执行状态、进度、里程碑等信息"
+    weight: 0.20  # 在所有场景中的权重
+    type: "monitoring"  # 场景类型，用于匹配复杂度分布
+    
+    sub_scenarios:
+      contract_fulfillment:
+        name: "合同履行进度监控"
+        weight: 0.4  # 在大场景内的权重
+        focus_areas:
+          - "合同完成率分析"
+          - "合同拖期情况分析"
+          - "里程碑节点达成情况"
+          - "合同履行状态预警"
+        
+      lifecycle_management:
+        name: "项目生命周期管理"
+        weight: 0.6
+        focus_areas:
+          - "项目阶段分布分析"
+          - "阶段转换效率分析"
+          - "关键路径分析"
+          - "项目风险识别"
+
+  # 二、项目地理分布场景
+  project_geographical_distribution:
+    name: "项目地理分布"
+    description: "分析项目在不同地理区域的分布情况"
+    weight: 0.15
+    type: "analysis"
+    
+    sub_scenarios:
+      regional_distribution:
+        name: "区域项目分布分析"
+        weight: 0.5
+        focus_areas:
+          - "省份项目分布情况"
+          - "地级市承制能力分析"
+          - "军工集团地域布局"
+          - "民营企业参与度分析"
+          
+      regional_optimization:
+        name: "区域资源配置优化"
+        weight: 0.5
+        focus_areas:
+          - "区域承制单位密度分析"
+          - "跨区域合作项目统计"
+          - "区域产业集群分析"
+          - "资源配置均衡性评估"
+
+  # 三、项目类型分析场景
+  project_type_analysis:
+    name: "项目类型分析"
+    description: "分析不同类型项目的特征和分布"
+    weight: 0.15
+    type: "analysis"
+    
+    sub_scenarios:
+      type_characteristics:
+        name: "项目类型特征分析"
+        weight: 0.5
+        focus_areas:
+          - "重要项目vs一般项目对比"
+          - "装备类型项目分布"
+          - "合同类别分析"
+          - "合同类型成功率分析"
+          
+      military_branch_analysis:
+        name: "军兵种需求分析"
+        weight: 0.5
+        focus_areas:
+          - "各军兵种项目分布"
+          - "军兵种项目特点分析"
+          - "跨军兵种合作项目"
+          - "军兵种资源需求预测"
+
+  # 四、项目综合评估场景
+  project_comprehensive_evaluation:
+    name: "项目综合评估"
+    description: "对项目进行多维度的综合评估分析"
+    weight: 0.20
+    type: "analysis"
+    
+    sub_scenarios:
+      execution_efficiency:
+        name: "项目执行效率评估"
+        weight: 0.5
+        focus_areas:
+          - "合同执行效率综合评分"
+          - "承制单位履约能力评估"
+          - "项目成本控制效果分析"
+          - "项目投资回报分析"
+          
+      quality_assessment:
+        name: "质量管理效果评估"
+        weight: 0.5
+        focus_areas:
+          - "质量问题发生率分析"
+          - "质量问题解决效率"
+          - "质量问题影响评估"
+          - "质量改进趋势分析"
+
+  # 五、财务支付监控场景
+  financial_payment_monitoring:
+    name: "财务支付监控"
+    description: "监控项目资金支付情况和财务风险"
+    weight: 0.15
+    type: "monitoring"
+    
+    sub_scenarios:
+      payment_progress:
+        name: "资金支付进度监控"
+        weight: 0.5
+        focus_areas:
+          - "应付vs实付资金分析"
+          - "资金支付节奏分析"
+          - "超概算项目监控"
+          - "资金使用效率分析"
+          
+      cost_risk_control:
+        name: "成本风险管控"
+        weight: 0.5
+        focus_areas:
+          - "成本超支预警"
+          - "成本变更原因分析"
+          - "成本控制最佳实践"
+          - "预算执行偏差分析"
+
+  # 六、风险预警与决策支持场景
+  risk_warning_decision_support:
+    name: "风险预警与决策支持"
+    description: "识别项目风险并提供决策支持"
+    weight: 0.15
+    type: "analysis"
+    
+    sub_scenarios:
+      risk_warning:
+        name: "项目风险预警"
+        weight: 0.5
+        focus_areas:
+          - "风险合同识别与监控"
+          - "拖期风险预测模型"
+          - "质量风险等级评估"
+          - "多维度风险综合评估"
+          
+      decision_support:
+        name: "决策支持分析"
+        weight: 0.5
+        focus_areas:
+          - "项目优先级排序"
+          - "资源分配优化建议"
+          - "承制单位选择支持"
+          - "政策效果评估分析"
+
+# 场景配置元数据
+metadata:
+  total_scenarios: 6
+  total_sub_scenarios: 12
+  scenario_types:
+    monitoring: ["project_execution_monitoring", "financial_payment_monitoring"]
+    analysis: ["project_geographical_distribution", "project_type_analysis", "project_comprehensive_evaluation", "risk_warning_decision_support"]
+    reporting: []  # 可扩展

@@ -113,15 +113,55 @@ class SQLAgent(BaseAgent):
         """执行数据库分析"""
         self.logger.info(f"Starting database analysis for: {database_name}")
         
+        # 预先执行schema_extraction并保存到记忆中
+        try:
+            self.logger.info("Pre-executing schema_extraction to ensure schema_info is available")
+            schema_tool = SchemaExtractionTool(db_manager=self.db_manager)
+            schema_result = schema_tool._run(
+                database_name=database_name,
+                include_views=False,
+                include_indexes=True,
+                sample_data=False
+            )
+            
+            # 将schema_info保存到记忆中
+            if hasattr(self, 'memory') and self.memory:
+                # 解析JSON字符串为字典
+                import json
+                try:
+                    schema_data = json.loads(schema_result)
+                    self.memory.update_analysis('schema_info', schema_data)
+                    self.logger.info("Schema info saved to memory successfully")
+                except json.JSONDecodeError as e:
+                    self.logger.error(f"Failed to parse schema result as JSON: {e}")
+                    return {
+                        "success": False,
+                        "error": f"Schema result parsing failed: {str(e)}",
+                        "message": "数据库分析失败：Schema结果解析错误"
+                    }
+            else:
+                self.logger.warning("Memory not available, schema_info not saved")
+                
+        except Exception as e:
+            self.logger.error(f"Failed to pre-execute schema_extraction: {str(e)}")
+            return {
+                "success": False,
+                "error": f"Schema extraction failed: {str(e)}",
+                "message": "数据库分析失败：无法提取数据库结构"
+            }
+        
         # 构建分析任务
         analysis_task = f"""
         请对数据库 {database_name} 执行完整的分析：
-        1. 使用 schema_extraction 提取数据库结构
-        2. 使用 domain_analysis 分析业务领域
-        3. 使用 field_classification 对字段进行分类
-        4. 使用 column_meaning_analysis 分析列的业务含义
-        5. 使用 table_meaning_analysis 分析表的业务含义
-        6. 使用 er_analysis 分析实体关系
+        
+        重要提示：数据库结构信息(schema_info)已经预先提取并保存到记忆中，你可以直接使用。
+        
+        请按以下顺序执行分析：
+        1. 使用 domain_analysis 分析业务领域（schema_info已可用）
+        2. 使用 field_classification 对字段进行分类
+        3. 使用 column_meaning_analysis 分析列的业务含义
+        4. 使用 table_meaning_analysis 分析表的业务含义
+        5. 使用 er_analysis 分析实体关系
         
         请按顺序执行这些分析，并将结果保存到记忆中。
         """

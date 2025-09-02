@@ -45,14 +45,26 @@ def test_schema_extraction():
             tables=None
         )
         
+        # 解析JSON字符串为字典
+        import json
+        if isinstance(result, str):
+            result = json.loads(result)
+        
         print("\n=== Schema Extraction 结果 ===")
         print(f"数据库名: {result.get('database_name')}")
         print(f"表数量: {result.get('table_count')}")
         
         if 'tables' in result:
             print("\n表信息:")
-            for table_name, table_info in result['tables'].items():
-                print(f"  - {table_name}: {len(table_info.get('columns', []))} 个字段")
+            tables = result['tables']
+            print(f"Tables 类型: {type(tables)}")
+            if isinstance(tables, dict):
+                for table_name, table_info in tables.items():
+                    print(f"  - {table_name}: {len(table_info.get('columns', []))} 个字段")
+            elif isinstance(tables, list):
+                print(f"  Tables 是列表，包含 {len(tables)} 个元素")
+                for i, table in enumerate(tables[:3]):  # 只显示前3个
+                    print(f"  - 表 {i}: {table}")
         
         print("\n✓ Schema extraction 执行成功！")
         

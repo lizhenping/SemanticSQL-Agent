@@ -59,45 +59,77 @@ class DatabaseAnalysisMemory(BaseMemory):
             inputs: 输入参数，应包含 tool_name 或可以从 inputs 中推断
             outputs: 工具的输出结果
         """
+        import sys
+        print(f"[MEMORY] save_context 方法被调用 - FORCED OUTPUT")
+        sys.stdout.flush()
+        try:
+            print(f"[MEMORY] save_context 方法被调用")
+            print(f"[DEBUG] save_context called with inputs: {inputs}")
+            print(f"[DEBUG] outputs type: {type(outputs)}, keys: {list(outputs.keys()) if isinstance(outputs, dict) else 'Not dict'}")
+            sys.stdout.flush()
+        except Exception as e:
+            print(f"[ERROR] Exception in save_context debug prints: {e}")
+            import traceback
+            print(f"[ERROR] Traceback: {traceback.format_exc()}")
+            sys.stdout.flush()
+            return
+        
         # 尝试从多个位置获取工具名称
         tool_name = None
         if "tool_name" in inputs:
             tool_name = inputs["tool_name"]
+            print(f"[DEBUG] Found tool_name in inputs: {tool_name}")
         elif "input" in inputs and isinstance(inputs["input"], dict):
             tool_name = inputs["input"].get("tool_name")
+            print(f"[DEBUG] Found tool_name in nested input: {tool_name}")
         elif "action" in inputs:
             # 从 LangChain agent 的 action 中获取
             action = inputs["action"]
             if hasattr(action, 'tool'):
                 tool_name = action.tool
+                print(f"[DEBUG] Found tool_name in action: {tool_name}")
         
         # 如果仍然没有找到工具名称，尝试从输出中推断
         if not tool_name and isinstance(outputs, dict):
             # 检查输出结构特征来推断工具类型
-            if "tables" in outputs and "columns" in outputs:
-                tool_name = "schema_extraction"
-            elif "primary_domain" in outputs and "entities" in outputs:
-                tool_name = "domain_analysis"
-            elif "field_classifications" in outputs:
-                tool_name = "field_classification"
+            # 首先检查是否有嵌套的 output 键
+            output_data = outputs.get("output", outputs)
+            
+            if isinstance(output_data, dict):
+                if "tables" in output_data and "columns" in output_data:
+                    tool_name = "schema_extraction"
+                    print(f"[DEBUG] Inferred tool_name from output structure: {tool_name}")
+                elif "primary_domain" in output_data and "entities" in output_data:
+                    tool_name = "domain_analysis"
+                    print(f"[DEBUG] Inferred tool_name from output structure: {tool_name}")
+                elif "field_classifications" in output_data:
+                    tool_name = "field_classification"
+                    print(f"[DEBUG] Inferred tool_name from output structure: {tool_name}")
+        
+        print(f"[DEBUG] Final tool_name: {tool_name}")
         
         # 根据工具名称更新对应的记忆
+        # 获取实际的数据（可能在 output 键中）
+        actual_data = outputs.get("output", outputs) if isinstance(outputs, dict) else outputs
+        
         if tool_name == "schema_extraction":
-            self.memories["schema_info"] = outputs
+            print(f"[DEBUG] Saving schema_extraction data to memory")
+            self.memories["schema_info"] = actual_data
+            print(f"[DEBUG] Saved schema_info, memory keys: {list(self.memories.keys())}")
         elif tool_name == "domain_analysis":
-            self.memories["domain_info"] = outputs
+            self.memories["domain_info"] = actual_data
         elif tool_name == "field_classification":
-            self.memories["field_classification"] = outputs
+            self.memories["field_classification"] = actual_data
         elif tool_name == "column_meaning_analysis":
-            self.memories["column_meanings"] = outputs
+            self.memories["column_meanings"] = actual_data
         elif tool_name == "table_meaning_analysis":
-            self.memories["table_meanings"] = outputs
+            self.memories["table_meanings"] = actual_data
         elif tool_name == "er_analysis":
-            self.memories["er_relations"] = outputs
+            self.memories["er_relations"] = actual_data
         else:
             # 对于其他工具，可以选择保存或忽略
             if tool_name:
-                self.memories[f"tool_{tool_name}"] = outputs
+                self.memories[f"tool_{tool_name}"] = actual_data
     
     def update_analysis(self, analysis_type: str, result: Dict[str, Any]):
         """更新特定类型的分析结果
@@ -174,6 +206,7 @@ class DatabaseAnalysisMemory(BaseMemory):
             分析结果，如果不存在返回空字典
         """
         result = self.memories.get(analysis_type, {})
+        
         if result:
             self.logger.debug(f"Retrieved {analysis_type} from memory (size: {len(str(result))} chars)")
         else:

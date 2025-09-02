@@ -1,0 +1,265 @@
+{# 智能问题生成提示词模板 - 包含详细操作指导 #}
+你是一个数据分析专家，需要基于具体的业务场景和数据库结构生成自然语言问题。
+
+## 一、场景上下文
+### 业务场景
+- **主场景**: {{ scenario.name }} - {{ scenario.description }}
+- **子场景**: {{ sub_scenario.name }} - {{ sub_scenario.description }}
+- **关注重点**: 
+{% for area in sub_scenario.focus_areas %}
+  - {{ area }}
+{% endfor %}
+
+### 复杂度要求
+- **级别**: {{ complexity.name }} (Level {{ complexity.level }})
+- **描述**: {{ complexity.description }}
+- **操作限制**: 最多使用 {{ complexity_limits.max_operations }} 个操作
+
+## 二、数据库结构分析
+
+### 可用表及其关键列
+{% for table in selected_tables %}
+#### 表：{{ table.name }}
+| 列名 | 数据类型 | 类别 | 说明 | 推荐操作 |
+|------|----------|------|------|----------|
+{% for column in table.key_columns %}
+| {{ column.name }} | {{ column.type }} | {{ column.category }} | {{ column.description }} | {{ column.recommended_operations[:3] | join(', ') }} |
+{% endfor %}
+{% endfor %}
+
+{% if join_paths %}
+### 表连接路径
+{% for join in join_paths %}
+- **{{ join.source_table }} ⟷ {{ join.target_table }}**
+  - 连接类型: {{ join.join_type }}
+  - 连接条件: `{{ join.condition }}`
+  - 说明: {{ join.description }}
+{% endfor %}
+{% endif %}
+
+## 三、用例导向的问题生成
+
+根据场景特点，本次问题生成应重点关注以下用例类型：
+
+{% for use_case, weight in selected_use_cases %}
+### {{ loop.index }}. {{ use_case.name }} (权重: {{ "%.0f%%"|format(weight * 100) }})
+
+**用例描述**: {{ use_case.description }}
+
+#### 推荐的操作组合
+**表级操作**:
+{% for op_category, operations in use_case.operations.table_level.items() %}
+- {{ op_category }}: {{ operations | join(', ') }}
+{% endfor %}
+
+**列级操作**:
+{% for op_category, operations in use_case.operations.column_level.items() %}
+- {{ op_category }}: {{ operations | join(', ') }}
+{% endfor %}
+
+#### 针对不同列类型的操作建议
+{% for col_type, suggestions in use_case.column_type_focus.items() %}
+**{{ col_type }}类型列**:
+{% if suggestions is sequence and suggestions is not mapping %}
+{% for suggestion in suggestions %}
+- {{ suggestion }}
+{% endfor %}
+{% else %}
+- {{ suggestions }}
+{% endif %}
+{% endfor %}
+
+#### 参考问题模板
+{% for template in use_case.typical_questions %}
+{{ loop.index }}. {{ template }}
+{% endfor %}
+
+---
+{% endfor %}
+
+## 四、列类型特定的操作指导
+
+基于您的数据库结构，以下是每个列的具体操作建议：
+
+{% for table in selected_tables %}
+### {{ table.name }} 表的列操作
+{% for column in table.key_columns %}
+
+#### {{ column.name }} ({{ column.category }}类型)
+
+{% if column.category == 'numeric' %}
+{% if complexity.level >= 1 %}
+**基础操作**:
+- 比较: `{{ column.name }} = 100`, `{{ column.name }} > 1000`, `{{ column.name }} BETWEEN 100 AND 500`
+- 算术: `{{ column.name }} * 1.1`, `ROUND({{ column.name }}, 2)`
+{% endif %}
+{% if complexity.level >= 2 %}
+**聚合操作**:
+- 统计: `SUM({{ column.name }})`, `AVG({{ column.name }})`, `MAX({{ column.name }})`, `MIN({{ column.name }})`
+- 计数: `COUNT({{ column.name }})`, `COUNT(DISTINCT {{ column.name }})`
+{% endif %}
+{% if complexity.level >= 3 %}
+**高级操作**:
+- 条件: `CASE WHEN {{ column.name }} > 1000 THEN '高' WHEN {{ column.name }} > 500 THEN '中' ELSE '低' END`
+- 统计: `STDDEV({{ column.name }})`, `VARIANCE({{ column.name }})`
+{% endif %}
+{% if complexity.level == 4 %}
+**专家操作**:
+- 排名窗口: `RANK() OVER (PARTITION BY category ORDER BY {{ column.name }} DESC)`
+- 分析窗口: `{{ column.name }} - LAG({{ column.name }}, 1) OVER (ORDER BY date) AS change`
+- 累计窗口: `SUM({{ column.name }}) OVER (ORDER BY date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)`
+- 移动窗口: `AVG({{ column.name }}) OVER (ORDER BY date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS ma7`
+- 统计分析: `PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY {{ column.name }})`, `STDDEV({{ column.name }})`
+- 相关子查询: `(SELECT AVG({{ column.name }}) FROM same_table t2 WHERE t2.category = t1.category) AS category_avg`
+{% endif %}
+
+{% elif column.category == 'date' %}
+{% if complexity.level >= 1 %}
+**基础操作**:
+- 比较: `{{ column.name }} >= '2024-01-01'`, `{{ column.name }} BETWEEN '2024-01-01' AND '2024-12-31'`
+- 提取: `YEAR({{ column.name }})`, `MONTH({{ column.name }})`, `DAY({{ column.name }})`
+{% endif %}
+{% if complexity.level >= 2 %}
+**聚合操作**:
+- 分组: `GROUP BY DATE_FORMAT({{ column.name }}, '%Y-%m')`, `GROUP BY YEAR({{ column.name }})`
+- 计算: `DATEDIFF(NOW(), {{ column.name }})`, `DATE_ADD({{ column.name }}, INTERVAL 30 DAY)`
+{% endif %}
+{% if complexity.level >= 3 %}
+**高级操作**:
+- 时期: `DATE_TRUNC('quarter', {{ column.name }})`, `EXTRACT(WEEK FROM {{ column.name }})`
+- 条件: `CASE WHEN {{ column.name }} < CURRENT_DATE THEN '过期' ELSE '有效' END`
+{% endif %}
+{% if complexity.level == 4 %}
+**专家操作**:
+- 时序分析: `LAG(value, 1) OVER (ORDER BY {{ column.name }}) AS prev_period_value`
+- 同比计算: `LAG(value, 12) OVER (ORDER BY {{ column.name }}) AS same_period_last_year`
+- 首末值: `FIRST_VALUE(value) OVER (PARTITION BY YEAR({{ column.name }}) ORDER BY {{ column.name }}) AS year_start`
+- 时间间隔: `{{ column.name }} - LAG({{ column.name }}) OVER (ORDER BY {{ column.name }}) AS days_between`
+- 递归日期: `WITH RECURSIVE date_series AS (SELECT date UNION ALL SELECT date + INTERVAL 1 DAY FROM date_series WHERE ...)`
+{% endif %}
+
+{% elif column.category == 'text' %}
+{% if complexity.level >= 1 %}
+**基础操作**:
+- 比较: `{{ column.name }} = 'value'`, `{{ column.name }} != 'value'`
+- 模式: `{{ column.name }} LIKE '%keyword%'`, `{{ column.name }} LIKE 'prefix%'`
+- 函数: `UPPER({{ column.name }})`, `LENGTH({{ column.name }})`
+{% endif %}
+{% if complexity.level >= 2 %}
+**聚合操作**:
+- 计数: `COUNT(DISTINCT {{ column.name }})`, `COUNT(*) GROUP BY {{ column.name }}`
+- 连接: `GROUP_CONCAT({{ column.name }} SEPARATOR ', ')`
+{% endif %}
+{% if complexity.level >= 3 %}
+**高级操作**:
+- 正则: `{{ column.name }} REGEXP '^[A-Z]{2}-[0-9]{4}$'`
+- 处理: `SUBSTRING({{ column.name }}, 1, 10)`, `REPLACE({{ column.name }}, 'old', 'new')`
+{% endif %}
+
+{% elif column.category == 'categorical' %}
+{% if complexity.level >= 1 %}
+**基础操作**:
+- 比较: `{{ column.name }} = 'active'`, `{{ column.name }} IN ('A', 'B', 'C')`
+- 空值: `{{ column.name }} IS NOT NULL`
+{% endif %}
+{% if complexity.level >= 2 %}
+**聚合操作**:
+- 分组: `COUNT(*) GROUP BY {{ column.name }}`
+- 分布: `{{ column.name }}, COUNT(*) AS cnt GROUP BY {{ column.name }} ORDER BY cnt DESC`
+{% endif %}
+{% if complexity.level >= 3 %}
+**高级操作**:
+- 映射: `CASE {{ column.name }} WHEN 'A' THEN '优秀' WHEN 'B' THEN '良好' ELSE '一般' END`
+- 组合: `CONCAT({{ column.name }}, '-', sub_category) AS full_category`
+{% endif %}
+{% if complexity.level == 4 %}
+**专家操作**:
+- 分组排名: `DENSE_RANK() OVER (PARTITION BY {{ column.name }} ORDER BY metric DESC)`
+- 百分位排名: `PERCENT_RANK() OVER (PARTITION BY {{ column.name }} ORDER BY value)`
+- 分组累计: `COUNT(*) OVER (PARTITION BY {{ column.name }} ORDER BY date ROWS UNBOUNDED PRECEDING)`
+- 行转列: `MAX(CASE WHEN {{ column.name }} = 'A' THEN value END) AS value_a`
+- 多维分析: `GROUP BY CUBE({{ column.name }}, other_category)`
+- 递归层级: `WITH RECURSIVE cat_tree AS (SELECT * FROM categories WHERE parent_id IS NULL UNION ALL ...)`
+{% endif %}
+{% endif %}
+
+{% endfor %}
+{% endfor %}
+
+## 五、生成要求与约束
+
+### 必须遵守的规则
+1. **用例分配**: 按照权重分配生成不同类型的问题
+   - {{ selected_use_cases[0][0].name }}: {{ "%.0f"|format(selected_use_cases[0][1] * count) }}个问题
+   {% if selected_use_cases|length > 1 %}
+   - {{ selected_use_cases[1][0].name }}: {{ "%.0f"|format(selected_use_cases[1][1] * count) }}个问题
+   {% endif %}
+   {% if selected_use_cases|length > 2 %}
+   - 其他类型: 剩余问题
+   {% endif %}
+
+2. **复杂度控制**:
+   - 最多使用 {{ complexity_limits.max_operations }} 个SQL操作
+   - 必须使用的操作类别: {{ complexity_limits.allowed_categories.table_level | join(', ') }}
+   - 禁止使用: {{ complexity_limits.forbidden | join(', ') }}
+
+3. **数据相关性**:
+   - 必须使用上述分析的表和列
+   - 列操作必须符合其数据类型
+   - 表连接必须使用建议的连接路径
+
+### 问题质量要求
+- **业务相关**: 问题必须与{{ sub_scenario.name }}的业务逻辑相关
+- **自然表达**: 使用自然语言，避免SQL术语
+- **具体明确**: 包含具体的业务目标和分析意图
+- **多样性**: 覆盖不同的时间范围、条件组合、分析角度
+
+## 六、输出格式
+
+请生成 {{ count }} 个问题，使用以下JSON格式：
+
+```json
+{
+  "questions": [
+    {
+      "id": 1,
+      "question": "自然语言问题",
+      "use_case_type": "对应的用例类型",
+      "complexity_level": {{ complexity.level }},
+      "main_tables": ["主要使用的表"],
+      "key_columns": ["关键列及其操作类型"],
+      "sql_operations": ["主要的SQL操作类型"],
+      "business_purpose": "业务目的说明"
+    }
+  ]
+}
+```
+
+## 七、示例问题
+
+基于以上分析，这里是一些符合要求的示例：
+
+{% set example_count = 3 if count > 10 else 2 %}
+{% for i in range(example_count) %}
+### 示例 {{ i + 1 }}
+{% if i == 0 %}
+**用例类型**: {{ selected_use_cases[0][0].name }}
+**问题**: "{{ selected_use_cases[0][0].typical_questions[0] | replace('{table}', selected_tables[0].name) | replace('{column}', selected_tables[0].key_columns[0].name) | replace('{metric}', selected_tables[0].key_columns[1].name if selected_tables[0].key_columns|length > 1 else 'value') }}"
+**涉及操作**: 
+- 表: {{ selected_tables[0].name }}
+- 列: {{ selected_tables[0].key_columns[0].name }} ({{ selected_tables[0].key_columns[0].category }})
+- SQL: {{ selected_use_cases[0][0].operations.table_level | first | first }}
+{% elif i == 1 and selected_use_cases|length > 1 %}
+**用例类型**: {{ selected_use_cases[1][0].name }}
+**问题**: "{{ selected_use_cases[1][0].typical_questions[0] | replace('{table}', selected_tables[0].name) | replace('{table1}', selected_tables[0].name) | replace('{table2}', selected_tables[1].name if selected_tables|length > 1 else 'related_table') }}"
+**涉及操作**: 
+- 表: {{ selected_tables[:2] | map(attribute='name') | join(', ') }}
+- 操作: {{ selected_use_cases[1][0].operations.table_level | first | first }}
+{% else %}
+**用例类型**: 混合类型
+**问题**: 根据场景自定义
+{% endif %}
+{% endfor %}
+
+---
+现在，请根据以上详细指导生成 {{ count }} 个高质量的自然语言问题。

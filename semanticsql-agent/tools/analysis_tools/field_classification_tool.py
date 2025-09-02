@@ -4,7 +4,7 @@
 """
 
 from typing import Dict, Any, Type, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from models.exceptions import ToolExecutionError
 from .base_analysis_tool import BaseAnalysisTool, AnalysisToolInput
@@ -14,6 +14,23 @@ class FieldClassificationInput(AnalysisToolInput):
     """字段分类输入"""
     schema_info: Dict[str, Any] = Field(default_factory=dict, description="数据库结构信息（可选，未提供时从memory获取）")
     domain_info: Dict[str, Any] = Field(default_factory=dict, description="业务领域信息（可选，未提供时从memory获取）")
+    
+    @field_validator('schema_info', 'domain_info', mode='before')
+    @classmethod
+    def parse_json_fields(cls, v):
+        """解析JSON字符串字段"""
+        if isinstance(v, str):
+            try:
+                import json
+                parsed = json.loads(v)
+                if isinstance(parsed, dict):
+                    return parsed
+                # 如果解析结果不是字典，返回空字典
+                return {}
+            except (json.JSONDecodeError, TypeError):
+                # JSON解析失败，返回空字典
+                return {}
+        return v if v is not None else {}
 
 
 class FieldClassificationTool(BaseAnalysisTool):
@@ -84,6 +101,17 @@ class FieldClassificationTool(BaseAnalysisTool):
                 "insights": insights,
                 "total_fields": sum(len(fields) for fields in classification_summary.values())
             }
+            
+            # 将结果保存到内存中供其他工具使用
+            if self._agent_memory:
+                try:
+                    self._agent_memory.save_context(
+                        inputs={"tool_name": "field_classification"},
+                        outputs=result
+                    )
+                except Exception as e:
+                    # 内存保存失败不应该影响主要功能
+                    print(f"Warning: Failed to save field classification to memory: {e}")
             
             # 返回工具自己的结果（不包含累积数据）
             return result

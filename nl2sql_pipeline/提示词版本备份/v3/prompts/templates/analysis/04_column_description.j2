@@ -1,0 +1,82 @@
+你现在是一名顶尖的数据架构师。正在为数据库的表和列编写注释及在领域的业务特效说明。请首先认知到表的业务领域，围绕业务领域进行合理的编写注释的时候需要结合领域知识，根据针对领域的理解进行注释。
+
+# 任务
+为字段 "{{ table_name }}.{{ column_name }}" 生成一个简洁、准确的中文注释。
+
+# 上下文信息
+1. **数据库领域知识**:
+   数据库名称: {{ database_name }}
+   业务领域: {{ database_domain }}
+   {% if domain_knowledge %}
+   核心业务概念:
+   {% for concept in domain_knowledge.business_concepts %}
+   - {{ concept }}
+   {% endfor %}
+   
+   业务规则:
+   {% for rule in domain_knowledge.business_rules %}
+   - {{ rule }}
+   {% endfor %}
+   {% endif %}
+
+2. **表结构 (Table Schema)**:
+   {{ table_ddl }}
+
+3. **字段信息**:
+   - 字段名: {{ column_name }}
+   - 数据类型: {{ column_type }}
+   - 是否可为空: {{ '是' if is_nullable else '否' }}
+   - 是否主键: {{ '是' if is_primary_key else '否' }}
+   - 是否外键: {{ '是' if is_foreign_key else '否' }}
+   - 样例数据: {{ column_examples }}
+
+4. **字段分类信息**:
+   - 字段类别: {{ field_category }}
+   - 维度/度量: {{ dim_or_meas }}
+   - 业务重要性: {{ field_importance }}
+   
+5. **字段熵值信息（数据多样性分析）**:
+   {% if entropy_info and entropy_info.level %}
+   - 熵值水平: {{ entropy_info.level }} (熵值: {{ '%.3f' | format(entropy_info.value) }})
+     * low (低): 数据值相对集中，通常是状态码、类型标识、枚举值等
+     * medium (中): 数据有一定多样性，通常是分类、级别、区域代码等
+     * high (高): 数据非常分散，通常是唯一标识符、名称、金额等
+   - 唯一值比例: {{ '%.1f' | format(entropy_info.unique_ratio * 100) }}%
+   {% if entropy_info.null_ratio is defined and entropy_info.null_ratio > 0 %}
+   - 空值比例: {{ '%.1f' | format(entropy_info.null_ratio * 100) }}%
+   {% endif %}
+   
+   **熵值分析指导**：
+   - 低熵值({{ entropy_info.level == 'low' and '当前字段' or '' }}): 字段值重复度高，注释应体现其分类或状态特性
+   - 中熵值({{ entropy_info.level == 'medium' and '当前字段' or '' }}): 字段值有适度分散，注释应体现其分组或类别特性  
+   - 高熵值({{ entropy_info.level == 'high' and '当前字段' or '' }}): 字段值高度分散，注释应体现其标识或度量特性
+   {% else %}
+   - 熵值信息不可用，请根据字段名称、数据类型和样例数据进行推断
+   {% endif %}
+
+# 要求
+- 数据库领域知识仅仅是初步的了解存在错误，仅供参考，不要过度依赖。
+- 注释必须是中文。
+- 业务人员可能会使用简写首字母，简写首字母含义也是重要参考。
+- 准确描述字段的业务含义。
+- 关于字段注释，一定要详细参考传入的字段数据{{ column_examples }}。
+- **重要**：必须结合熵值信息理解字段特性并生成相应注释：
+  {% if entropy_info and entropy_info.level %}
+  * 当前字段熵值为{{ entropy_info.level }}，请按以下指导生成注释：
+    {% if entropy_info.level == 'low' %}
+    - 低熵值字段：数据重复度高，通常是枚举、状态、类型字段，注释应体现分类特性，如"订单状态"、"用户类型"、"审核状态"等
+    {% elif entropy_info.level == 'medium' %}
+    - 中熵值字段：数据有适度分散，通常是分类、级别、区域字段，注释应体现分组特性，如"产品类别"、"地区代码"、"风险等级"等
+    {% elif entropy_info.level == 'high' %}
+    - 高熵值字段：数据高度分散，通常是标识符、名称、金额字段，注释应体现唯一性或度量特性，如"订单编号"、"交易金额"、"客户姓名"等
+    {% endif %}
+  {% else %}
+  * 低熵值(low)字段：注释应反映其枚举或状态特性，如"订单状态"、"用户类型"等
+  * 中熵值(medium)字段：注释应反映其分类或分组特性，如"产品类别"、"地区代码"等
+  * 高熵值(high)字段：注释应反映其标识或度量特性，如"订单编号"、"交易金额"等
+  {% endif %}
+- 风格简洁，字段注释不超过15个汉字，业务说明不超过30个汉字。
+- 直接返回注释内容，不要包含任何其他解释或标签。
+- 格式是 注释-领域内业务说明，中间用-连接。请严格遵守该格式返回，不要输出任何其他解释或标签。
+
+例如，如果首先预测出字段的注释是"监管资金"，在注释之后进行领域内的业务含义说明。具体如："监管资金-监管资金是指在当年合同执行中，合同中的执行资金额度"。

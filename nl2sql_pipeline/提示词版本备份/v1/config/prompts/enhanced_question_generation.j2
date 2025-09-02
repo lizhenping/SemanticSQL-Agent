@@ -1,0 +1,123 @@
+{# 增强的问题生成提示词模板 - 包含表列分析 #}
+你是一个数据分析专家，需要基于具体的数据库结构生成自然语言问题。
+
+## 场景信息
+- **主场景**: {{ scenario.name }}
+- **子场景**: {{ sub_scenario.name }}
+- **场景描述**: {{ scenario.description }}
+- **关注领域**: 
+{% for area in sub_scenario.focus_areas %}
+  - {{ area }}
+{% endfor %}
+
+## 复杂度要求
+- **复杂度级别**: {{ complexity.name }} (Level {{ complexity.level }})
+- **复杂度描述**: {{ complexity.description }}
+
+## 数据库结构分析
+### 选中的表
+{% for table in selected_tables %}
+- **{{ table }}**
+  {% if table_columns[table] %}
+  相关列：
+  {% for column in table_columns[table] %}
+    - `{{ column.name }}` ({{ column.type }}{% if column.category %}, {{ column.category }}类型{% endif %})
+  {% endfor %}
+  {% endif %}
+{% endfor %}
+
+### 表连接关系
+{% if join_paths %}
+{% for join in join_paths %}
+- {{ join.source_table }} ⟷ {{ join.target_table }}
+  - 连接条件: `{{ join.condition }}`
+{% endfor %}
+{% else %}
+- 单表查询，无需连接
+{% endif %}
+
+## 可用的SQL操作
+### 基础操作
+{% for op in available_operations.basic_operations %}
+- {{ op }}
+{% endfor %}
+
+{% if available_operations.join_operations %}
+### 连接操作
+{% for op in available_operations.join_operations %}
+- {{ op }}
+{% endfor %}
+{% endif %}
+
+{% if available_operations.aggregate_operations %}
+### 聚合操作
+{% for op in available_operations.aggregate_operations %}
+- {{ op }}
+{% endfor %}
+{% endif %}
+
+{% if available_operations.advanced_operations %}
+### 高级操作
+{% for op in available_operations.advanced_operations %}
+- {{ op }}
+{% endfor %}
+{% endif %}
+
+## 具体列的操作建议
+{% for column_name, operations in column_operations.items() %}
+### {{ column_name }}
+{% for operation in operations %}
+- {{ operation }}
+{% endfor %}
+{% endfor %}
+
+## 生成示例
+基于以上分析，以下是一些符合要求的问题示例：
+
+{% if complexity.level == 1 %}
+1. "查询所有{{ selected_tables[0] }}中状态为'进行中'的记录"
+2. "显示最近30天内创建的{{ selected_tables[0] }}"
+3. "按金额从高到低排序，显示前10个{{ selected_tables[0] }}"
+{% elif complexity.level == 2 %}
+1. "统计每个部门的{{ selected_tables[0] }}数量和总金额"
+2. "查询每个{{ selected_tables[0] }}及其关联的{{ selected_tables[1] }}信息"
+3. "计算各个状态下{{ selected_tables[0] }}的平均完成率"
+{% elif complexity.level == 3 %}
+1. "找出完成率低于部门平均水平的所有{{ selected_tables[0] }}"
+2. "分析{{ selected_tables[0] }}在不同时间段的状态变化情况"
+3. "使用子查询找出没有关联{{ selected_tables[1] }}的{{ selected_tables[0] }}"
+{% elif complexity.level == 4 %}
+1. "计算{{ selected_tables[0] }}的完成率排名，并显示同比变化"
+2. "使用窗口函数分析{{ selected_tables[0] }}的累计金额趋势"
+3. "通过递归查询展示{{ selected_tables[0] }}的层级关系"
+{% endif %}
+
+## 生成要求
+1. 生成 {{ count }} 个符合上述要求的自然语言问题
+2. 问题要求：
+   - 必须使用上述分析中的表和列
+   - 符合{{ complexity.name }}级别的SQL操作要求
+   - 结合{{ sub_scenario.name }}的业务场景
+   - 问题表述自然，避免直接暴露技术细节
+   - 包含具体的业务含义和分析目的
+
+3. 多样性要求：
+   - 使用不同的列进行过滤和分析
+   - 涵盖子场景的不同关注领域
+   - 包含不同的时间范围和条件组合
+   - 体现不同的业务分析视角
+
+## 输出格式
+```json
+{
+  "questions": [
+    {
+      "question": "自然语言问题",
+      "used_tables": ["表名列表"],
+      "key_columns": ["主要使用的列"],
+      "sql_operations": ["主要的SQL操作"],
+      "focus_area": "对应的关注领域"
+    }
+  ]
+}
+```

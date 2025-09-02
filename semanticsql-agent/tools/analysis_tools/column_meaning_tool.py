@@ -79,6 +79,17 @@ class ColumnMeaningTool(BaseAnalysisTool):
                 "analysis_summary": self._generate_summary(column_meanings, business_terms)
             }
             
+            # 将结果保存到内存中供其他工具使用
+            if self._agent_memory:
+                try:
+                    self._agent_memory.save_context(
+                        inputs={"tool_name": "column_meaning_analysis"},
+                        outputs=result
+                    )
+                except Exception as e:
+                    # 内存保存失败不应该影响主要功能
+                    print(f"Warning: Failed to save column meaning analysis to memory: {e}")
+            
             # 返回工具自己的结果（不包含累积数据）
             return result
             

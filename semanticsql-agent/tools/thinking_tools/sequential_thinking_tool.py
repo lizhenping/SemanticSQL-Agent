@@ -6,7 +6,7 @@
 from typing import Dict, Any, Type
 from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from models.exceptions import ToolExecutionError
 
@@ -14,8 +14,22 @@ from models.exceptions import ToolExecutionError
 class SequentialThinkingInput(BaseModel):
     """顺序思考输入"""
     problem_description: str = Field(description="问题描述")
-    context: Dict[str, Any] = Field(description="上下文信息")
-    memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
+    context: Dict[str, Any] = Field(default_factory=dict, description="上下文信息")
+    memory: Dict[str, Any] = Field(default_factory=dict, description="包含数据库分析结果的记忆")
+    
+    @field_validator('context', 'memory', mode='before')
+    @classmethod
+    def parse_json_fields(cls, v):
+        """解析JSON字符串字段"""
+        if isinstance(v, str):
+            try:
+                import json
+                parsed = json.loads(v)
+                if isinstance(parsed, dict):
+                    return parsed
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return v if v is not None else {}
 
 
 class SequentialThinkingTool(BaseTool):

@@ -6,7 +6,8 @@ import pytest
 from unittest.mock import Mock, patch
 from typing import Dict, Any
 
-from tools.base_tool import BaseTool, ToolParameter
+from langchain.tools import BaseTool
+from pydantic import BaseModel, Field
 from tools.generation_tools.scenario_tool import ScenarioTool
 from tools.generation_tools.sql_generation_tool import SQLGenerationTool
 from tools.validation_tools.sql_validation_tool import SQLValidationTool
@@ -19,20 +20,6 @@ from config.database import DatabaseConfig, DatabaseType
 
 class TestBaseTool:
     """测试基础工具类"""
-    
-    def test_tool_parameter(self):
-        """测试工具参数"""
-        param = ToolParameter(
-            name="test_param",
-            type="string",
-            description="测试参数",
-            required=True
-        )
-        
-        assert param.name == "test_param"
-        assert param.type == "string"
-        assert param.required is True
-        assert param.default is None
     
     def test_base_tool_abstract(self):
         """测试基础工具抽象类"""

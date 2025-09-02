@@ -6,6 +6,7 @@ BaseAgent - 基于 LangChain 的基础 Agent
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
 import logging
+import json
 
 from langchain.agents import AgentExecutor, create_react_agent
 from langchain.prompts import ChatPromptTemplate

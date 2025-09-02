@@ -1,0 +1,86 @@
+你是一位经验丰富的数据架构师，正在分析数据库的业务领域特征。
+
+## 数据库概览
+- 数据库名称: {{ database_name }}
+- 总表数量: {{ total_tables }}
+- 分析的核心表数量: {{ core_tables_count }}
+
+## 核心表结构分析
+{% for table in core_tables %}
+### {{ loop.index }}. {{ table.name }} (置信度: {{ table.confidence }})
+- 表类型: {{ table.type }}
+- 表描述: {{ table.description }}
+{% if table.key_columns %}
+- 关键字段: {{ table.key_columns | join(', ') }}
+{% endif %}
+- 行数: {{ table.row_count if table.row_count else '未知' }}
+
+{% endfor %}
+
+## 数据特征统计
+- 实体表: {{ stats.entity_tables }}个
+- 关系表: {{ stats.relation_tables }}个  
+- 配置表: {{ stats.config_tables }}个
+- 日志表: {{ stats.log_tables }}个
+- 总关键字段数: {{ stats.total_key_columns }}个
+- 平均关键字段数: {{ stats.avg_key_columns | round(1) }}
+
+## 字段模式分析
+{% for pattern, count in stats.field_patterns.items() %}
+- {{ pattern }}: {{ count }}个
+{%- if stats.pattern_examples[pattern] %} (例: {{ stats.pattern_examples[pattern] | join(', ') }}){% endif %}
+{% endfor %}
+
+{% if patterns %}
+## 识别的数据模式
+{% for pattern in patterns %}
+- {{ pattern }}
+{% endfor %}
+{% endif %}
+
+## 任务要求
+
+基于以上数据库结构分析，请识别此数据库的主要业务领域并提供详细分析。
+
+### 分析目标：
+1. **主要业务领域识别** - 判断这是什么类型的业务系统
+2. **业务实体分析** - 识别核心业务对象和它们的关系
+3. **业务流程推断** - 基于表结构推断可能的业务流程
+4. **数据特征总结** - 总结该领域数据的特点和模式
+
+### 输出格式要求：
+请以JSON格式返回分析结果，包含以下字段：
+
+```json
+{
+    "primary_domain": "主要业务领域名称",
+    "domain_confidence": 0.85,
+    "sub_domains": ["子领域1", "子领域2"],
+    "business_entities": {
+        "表名1": {
+            "entity_type": "实体类型",
+            "business_role": "业务角色描述",
+            "confidence": 0.9
+        }
+    },
+    "business_processes": [
+        {
+            "process_name": "业务流程名称",
+            "involved_tables": ["相关表名"],
+            "description": "流程描述"
+        }
+    ],
+    "data_characteristics": {
+        "scale": "small/medium/large",
+        "complexity": "simple/moderate/complex", 
+        "time_sensitivity": true,
+        "audit_requirements": true
+    },
+    "recommendations": [
+        "基于领域特征的查询生成建议1",
+        "基于领域特征的查询生成建议2"
+    ]
+}
+```
+
+请基于表结构和命名模式进行专业分析，确保识别准确。

@@ -83,7 +83,14 @@ class BaseAnalysisTool(BaseTool):
                 if isinstance(parsed_data, dict) and parsed_data:
                     # 优先返回目标key的值
                     if memory_key in parsed_data:
-                        return parsed_data[memory_key]
+                        target_value = parsed_data[memory_key]
+                        # 如果值是字符串标识符，从memory获取实际数据
+                        if isinstance(target_value, str) and self._agent_memory:
+                            current_memory = self.get_current_memory()
+                            memory_data = self.get_analysis_from_memory(current_memory, memory_key)
+                            if memory_data:
+                                return memory_data
+                        return target_value
                     # 否则返回整个解析的数据
                     return parsed_data
             except (json.JSONDecodeError, TypeError):
@@ -106,6 +113,10 @@ class BaseAnalysisTool(BaseTool):
         Returns:
             分析结果字典，如果不存在则返回空字典
         """
+        # 优先直接从agent memory对象获取
+        if self._agent_memory and hasattr(self._agent_memory, 'get_analysis'):
+            return self._agent_memory.get_analysis(analysis_type)
+        
         # memory参数可能是完整的分析结果字典
         if isinstance(memory, dict) and analysis_type in memory:
             return memory[analysis_type]

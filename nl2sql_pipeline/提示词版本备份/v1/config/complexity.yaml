@@ -1,0 +1,216 @@
+# SQL复杂度定义 - 简洁实用版本
+complexity_levels:
+  simple:
+    name: "简单查询"
+    level: 1
+    description: "单表查询，基础条件过滤"
+    sql_capabilities:
+      required: ["SELECT", "FROM"]
+      allowed: ["WHERE", "ORDER BY", "LIMIT", "DISTINCT"]
+      forbidden: ["JOIN", "GROUP BY", "SUBQUERY", "UNION", "WINDOW_FUNCTION"]
+    constraints:
+      max_tables: 1
+      max_conditions: 3
+      max_columns: 10
+    operations:
+      WHERE:
+        - "等值条件: column = value"
+        - "范围条件: column BETWEEN x AND y"
+        - "IN列表: column IN (value1, value2)"
+        - "模糊匹配: column LIKE '%pattern%'"
+        - "空值判断: column IS NULL/IS NOT NULL"
+      ORDER_BY:
+        - "单字段排序: ORDER BY column [ASC|DESC]"
+        - "多字段排序: ORDER BY col1, col2"
+      基础函数:
+        - "日期函数: YEAR(), MONTH(), DATE()"
+        - "字符串函数: UPPER(), LOWER(), LENGTH()"
+        - "数学函数: ABS(), ROUND()"
+    
+  moderate:
+    name: "中等查询"
+    level: 2
+    description: "多表关联，分组聚合统计"
+    sql_capabilities:
+      required: ["SELECT", "FROM"]
+      allowed: ["JOIN", "WHERE", "GROUP BY", "HAVING", "ORDER BY", "LIMIT", "BASIC_AGG"]
+      forbidden: ["SUBQUERY", "WINDOW_FUNCTION", "CTE", "RECURSIVE"]
+    constraints:
+      max_tables: 3
+      max_conditions: 5
+      max_joins: 2
+      max_group_by_columns: 3
+      aggregation_functions: ["COUNT", "SUM", "AVG", "MAX", "MIN"]
+    operations:
+      JOIN:
+        - "内连接: INNER JOIN ON t1.id = t2.id"
+        - "左连接: LEFT JOIN保留左表所有记录"
+        - "多条件连接: ON t1.id = t2.id AND t1.type = t2.type"
+      GROUP_BY:
+        - "单字段分组: GROUP BY column"
+        - "多字段分组: GROUP BY col1, col2"
+        - "表达式分组: GROUP BY YEAR(date_col)"
+      聚合函数:
+        - "COUNT(*): 计数所有行"
+        - "COUNT(DISTINCT col): 去重计数"
+        - "SUM/AVG: 求和/平均值"
+        - "MAX/MIN: 最大/最小值"
+      HAVING:
+        - "聚合结果过滤: HAVING COUNT(*) > 10"
+        - "多条件: HAVING SUM(amount) > 1000 AND COUNT(*) > 5"
+      计算字段:
+        - "算术运算: price * quantity AS total"
+        - "百分比: (part/total) * 100 AS percentage"
+        - "日期差: DATEDIFF(end_date, start_date)"
+    
+  complex:
+    name: "复杂查询"
+    level: 3
+    description: "子查询，复杂逻辑，多表关联"
+    sql_capabilities:
+      required: ["SELECT", "FROM"]
+      allowed: ["JOIN", "SUBQUERY", "CASE_WHEN", "UNION", "EXISTS", "IN", "ALL_AGG", "GROUP BY", "HAVING"]
+      forbidden: ["WINDOW_FUNCTION", "CTE", "RECURSIVE"]
+    constraints:
+      max_tables: 5
+      max_joins: 4
+      max_subqueries: 3
+      subquery_depth: 2
+    operations:
+      子查询:
+        - "标量子查询: SELECT中嵌套"
+        - "IN子查询: WHERE col IN (SELECT...)"
+        - "EXISTS: WHERE EXISTS (SELECT...)"
+        - "相关子查询: 引用外部查询的列"
+        - "FROM子查询: FROM (SELECT...) AS t"
+      CASE_WHEN:
+        - "简单CASE: CASE col WHEN val1 THEN res1 END"
+        - "搜索CASE: CASE WHEN condition THEN result END"
+        - "嵌套CASE: CASE内部包含CASE"
+      集合操作:
+        - "UNION: 合并结果集(去重)"
+        - "UNION ALL: 合并结果集(保留重复)"
+      高级JOIN:
+        - "自连接: 表与自身连接"
+        - "多表连接: 3个以上表的复杂关联"
+      高级函数:
+        - "GROUP_CONCAT: 分组字符串连接"
+        - "IF/IFNULL: 条件判断"
+        - "COALESCE: 返回第一个非空值"
+        - "JSON函数: JSON_EXTRACT等"
+      
+  expert:
+    name: "专家查询"
+    level: 4
+    description: "窗口函数，CTE，递归查询"
+    sql_capabilities:
+      required: ["ADVANCED_FEATURES"]  # 至少使用一个高级特性
+      allowed: ["ALL"]  # 允许所有SQL特性
+    constraints:
+      max_tables: null  # 无限制
+      advanced_features: ["WINDOW_FUNCTION", "CTE", "RECURSIVE", "PIVOT"]
+    operations:
+      窗口函数:
+        排名函数:
+          - "ROW_NUMBER(): 行号"
+          - "RANK(): 排名(有并列)"
+          - "DENSE_RANK(): 密集排名"
+          - "PERCENT_RANK(): 百分比排名"
+        分析函数:
+          - "LAG/LEAD: 访问前后行"
+          - "FIRST_VALUE/LAST_VALUE: 首末值"
+        聚合窗口:
+          - "移动平均: AVG() OVER (ROWS BETWEEN...)"
+          - "累计求和: SUM() OVER (ORDER BY...)"
+        框架子句:
+          - "ROWS BETWEEN: 基于行"
+          - "RANGE BETWEEN: 基于值"
+      CTE:
+        - "简单CTE: WITH cte AS (SELECT...)"
+        - "多个CTE: WITH cte1 AS (...), cte2 AS (...)"
+        - "递归CTE: WITH RECURSIVE处理层级数据"
+      高级分析:
+        - "透视表: 行转列分析"
+        - "时间序列: 同比环比计算"
+        - "路径分析: 递归查询"
+        - "统计函数: STDDEV, VARIANCE"
+
+# 复杂度分布配置
+distribution:
+  # 默认分布
+  default:
+    simple: 0.30    # 30%
+    moderate: 0.40  # 40%
+    complex: 0.20   # 20%
+    expert: 0.10    # 10%
+  
+  # 可按场景调整
+  by_scenario:
+    # 监控类场景：偏向简单查询
+    monitoring:
+      simple: 0.40
+      moderate: 0.40
+      complex: 0.15
+      expert: 0.05
+    
+    # 分析类场景：需要更多复杂查询
+    analysis:
+      simple: 0.20
+      moderate: 0.35
+      complex: 0.30
+      expert: 0.15
+    
+    # 报表类场景：平衡分布
+    reporting:
+      simple: 0.25
+      moderate: 0.40
+      complex: 0.25
+      expert: 0.10
+
+# 场景与复杂度的映射指导
+scenario_complexity_guide:
+  项目执行监控:
+    simple:
+      - "查询特定状态的项目"
+      - "按日期筛选合同"
+      - "显示项目基本信息"
+    moderate:
+      - "统计各部门项目数量"
+      - "计算项目完成率"
+      - "关联项目和负责人信息"
+    complex:
+      - "识别高风险项目"
+      - "多维度项目分析"
+      - "项目状态变化追踪"
+    expert:
+      - "项目执行效率排名"
+      - "同比环比分析"
+      - "项目依赖关系分析"
+      
+  项目地理分布:
+    simple:
+      - "查询某省份的项目"
+      - "列出特定城市的承制单位"
+    moderate:
+      - "统计各地区项目数量"
+      - "计算地区项目金额汇总"
+    complex:
+      - "跨区域项目协作分析"
+      - "地理聚集度分析"
+    expert:
+      - "区域资源优化配置"
+      - "地理分布趋势预测"
+      
+  财务支付监控:
+    simple:
+      - "查询待支付项目"
+      - "显示支付记录"
+    moderate:
+      - "计算支付进度"
+      - "统计各类支付金额"
+    complex:
+      - "资金流向分析"
+      - "超预算项目识别"
+    expert:
+      - "资金使用效率分析"
+      - "支付风险预警模型"

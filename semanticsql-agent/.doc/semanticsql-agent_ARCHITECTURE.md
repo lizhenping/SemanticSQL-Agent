@@ -130,7 +130,7 @@ semanticsql-agent/
 
 **分析工具** (analysis_tools/)
 - **schema_extraction_tool**: 提取表结构、列信息、约束
-- **domain_analysis_tool**: 识别业务领域特征（电商、金融、医疗等）
+- **domain_analysis_tool**: 识别业务领域特征
 - **field_classification_tool**: 字段语义分类（ID、时间、金额、状态等）
 - **column_meaning_tool**: 分析列的业务含义和用途
 - **table_meaning_tool**: 分析表的业务含义和职责
