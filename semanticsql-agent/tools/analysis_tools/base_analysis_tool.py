@@ -7,6 +7,8 @@ from typing import Dict, Any, Type
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field, validator
 
+from models.exceptions import DataValidationError
+
 
 class AnalysisToolInput(BaseModel):
     """分析工具基础输入类"""
@@ -20,11 +22,19 @@ class AnalysisToolInput(BaseModel):
                 # 尝试解析JSON字符串
                 return json.loads(v)
             except json.JSONDecodeError:
-                raise ValueError(f"Invalid JSON string for memory: {v}")
+                raise DataValidationError(
+                    field="memory",
+                    value=v,
+                    expected="valid JSON string"
+                )
         elif isinstance(v, dict):
             return v
         else:
-            raise ValueError(f"Memory must be a dict or JSON string, got {type(v)}")
+            raise DataValidationError(
+                field="memory",
+                value=v,
+                expected="dict or JSON string"
+            )
 
 
 class BaseAnalysisTool(BaseTool):
