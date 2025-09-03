@@ -6,9 +6,11 @@
 from typing import Dict, Any, Type, List
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
+import json
 
 from models.base import SQLOperation, DifficultyLevel
 from models.exceptions import ToolExecutionError
+from tools.utils import merge_tool_params
 
 
 class OperationSelectionInput(BaseModel):
@@ -24,23 +26,22 @@ class OperationSelectionTool(BaseTool):
     description: str = "根据场景复杂度和业务需求选择合适的SQL操作组合"
     # args_schema: Type[BaseModel] = OperationSelectionInput  # Commented due to LangChain complex parameter issues
     
-    def _run(self, tool_input: str = "", **kwargs) -> Dict[str, Any]:
+    def _run(self, tool_input: Any = None, **kwargs) -> Dict[str, Any]:
         """选择SQL操作"""
         try:
-            # 解析JSON输入参数
-            import json
-            scenario = {}
-            memory = {}
-            try:
-                if tool_input:
-                    input_data = json.loads(tool_input)
-                    scenario = input_data.get('scenario', {})
-                    memory = input_data.get('memory', {})
-                    if isinstance(scenario, str):
-                        scenario = json.loads(scenario)
-            except:
-                scenario = {}
-                memory = {}
+            # 使用辅助函数解析参数
+            params = merge_tool_params(tool_input, kwargs, expected_params=["scenario", "memory"])
+            
+            # 获取参数
+            scenario = params.get('scenario', {})
+            memory = params.get('memory', {})
+            
+            # 处理scenario如果是字符串
+            if isinstance(scenario, str) and scenario.strip():
+                try:
+                    scenario = json.loads(scenario)
+                except json.JSONDecodeError:
+                    scenario = {}
             
             complexity = scenario.get("complexity", "medium")
             category = scenario.get("category", "")

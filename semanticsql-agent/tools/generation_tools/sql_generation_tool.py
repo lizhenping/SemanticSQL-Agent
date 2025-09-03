@@ -8,11 +8,13 @@ from typing import Dict, Any, Type, List, Optional
 from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field, ConfigDict
+import json
 
 from models.base import SQLOperation
 from models.exceptions import ToolExecutionError, LLMError
 from utils.database import DatabaseManager
 from prompts.manager import PromptManager
+from tools.utils import merge_tool_params
 
 
 class SQLGenerationInput(BaseModel):
@@ -38,7 +40,8 @@ class SQLGenerationTool(BaseTool):
     
     name: str = "sql_generation"
     description: str = "根据自然语言问题和数据库结构生成对应的SQL查询"
-    args_schema: Type[BaseModel] = SQLGenerationInput
+    # 注释掉args_schema以避免LangChain的参数验证问题
+    # args_schema: Type[BaseModel] = SQLGenerationInput
     
     # 定义必需的字段
     llm: Optional[ChatOpenAI] = Field(default=None, exclude=True)
@@ -56,13 +59,31 @@ class SQLGenerationTool(BaseTool):
     
     def _run(
         self,
-        question: str,
-        memory: Dict[str, Any],
-        operations: List[str] = None,
-        dialect: str = "mysql"
+        tool_input: Any = None,
+        **kwargs
     ) -> Dict[str, Any]:
         """生成SQL查询"""
         try:
+            # 使用辅助函数解析参数
+            params = merge_tool_params(
+                tool_input, 
+                kwargs, 
+                expected_params=["question", "memory", "operations", "dialect"]
+            )
+            
+            # 获取参数
+            question = params.get("question", "")
+            memory = params.get("memory", {})
+            operations = params.get("operations", [])
+            dialect = params.get("dialect", "mysql")
+            
+            # 处理memory如果是字符串
+            if isinstance(memory, str) and memory.strip():
+                try:
+                    memory = json.loads(memory)
+                except json.JSONDecodeError:
+                    memory = {}
+            
             # 从记忆中获取必要信息
             db_analysis = memory.get("db_analysis", {})
             schema_info = db_analysis.get("schema_info", {})

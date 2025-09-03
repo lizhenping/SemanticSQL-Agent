@@ -7,9 +7,11 @@ from typing import Dict, Any, Type, List, Optional
 from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field, ConfigDict
+import json
 
 from models.exceptions import ToolExecutionError
 from prompts.manager import PromptManager
+from tools.utils import merge_tool_params
 
 
 class QuestionGenerationInput(BaseModel):
@@ -46,26 +48,23 @@ class QuestionGenerationTool(BaseTool):
         self.llm = llm
         self.prompt_manager = PromptManager()
     
-    def _run(self, tool_input: str = "", **kwargs) -> Dict[str, Any]:
+    def _run(self, tool_input: Any = None, **kwargs) -> Dict[str, Any]:
         """生成问题"""
         try:
-            # 解析JSON输入参数
-            import json
-            scenario = {}
-            operations = []
-            memory = {}
-            try:
-                if tool_input:
-                    input_data = json.loads(tool_input)
-                    scenario = input_data.get('scenario', {})
-                    operations = input_data.get('operations', [])
-                    memory = input_data.get('memory', {})
-                    if isinstance(scenario, str):
-                        scenario = json.loads(scenario)
-            except:
-                scenario = {}
-                operations = []
-                memory = {}
+            # 使用辅助函数解析参数
+            params = merge_tool_params(tool_input, kwargs, expected_params=["scenario", "operations", "memory"])
+            
+            # 获取参数
+            scenario = params.get('scenario', {})
+            operations = params.get('operations', [])
+            memory = params.get('memory', {})
+            
+            # 处理scenario如果是字符串
+            if isinstance(scenario, str) and scenario.strip():
+                try:
+                    scenario = json.loads(scenario)
+                except json.JSONDecodeError:
+                    scenario = {}
             
             # QuestionGenerationTool基于场景和操作生成问题，不强制依赖数据库分析
             category = scenario.get("category", "通用查询")
