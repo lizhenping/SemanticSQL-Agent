@@ -7,26 +7,22 @@ Claude 等 LLM 在输出时可能包含 `<think>` 标签来表示内部思考过
 2. 不应该被包含在最终输出中
 3. 可能干扰 JSON 解析
 
-## 解决方案
+## 解决方案（基于 LangChain）
 
-### 1. 创建 LLM 输出解析器
-文件：`utils/llm_output_parser.py`
-- `parse_llm_output()`: 分离思考内容和实际响应
-- `clean_tool_response()`: 递归清理工具响应中的 think 标签
-- `extract_json_from_text()`: 从文本中安全提取 JSON
+### 1. 在 LangChain 回调处理器中过滤
+文件：`utils/callbacks.py`
+- 在 `on_llm_end()` 回调中使用正则表达式过滤 LLM 输出
+- 将思考内容记录到日志（debug级别）
+- 直接修改 `generation.text`，清理后的内容会传递给后续处理
+- 这是 LangChain 推荐的处理方式，在回调层面统一处理
 
 ### 2. 在工具基类中自动清理
 文件：`tools/base_tool.py`
 - 重写 `run()` 方法，在工具执行后自动清理输出
-- 确保所有工具输出都不包含 think 标签
+- 处理字符串和字典类型的返回值
+- 递归清理嵌套结构中的 think 标签
 
-### 3. 在回调处理器中过滤
-文件：`utils/callbacks.py`
-- 在 `on_llm_end()` 中过滤 LLM 输出
-- 将思考内容记录到日志（debug级别）
-- 只传递清理后的内容给后续处理
-
-### 4. 更新系统提示词
+### 3. 更新系统提示词
 文件：`prompts/templates/system/main.j2`
 - 明确告诉 LLM 不要使用 `<think>` 标签
 - 强调 Action Input 必须是有效的参数格式

@@ -63,10 +63,39 @@ class BaseSemanticSQLTool(BaseTool):
         pass
     
     def run(self, *args, **kwargs) -> Any:
-        """执行工具并清理输出中的think标签"""
-        from utils.llm_output_parser import clean_tool_response
+        """执行工具并清理输出"""
+        import re
         result = self._run(*args, **kwargs)
-        return clean_tool_response(result)
+        
+        # 如果结果是字符串，清理think标签
+        if isinstance(result, str):
+            think_pattern = re.compile(r'<think>(.*?)</think>', re.DOTALL)
+            result = think_pattern.sub('', result).strip()
+        elif isinstance(result, dict):
+            # 递归清理字典中的字符串值
+            result = self._clean_dict(result)
+        
+        return result
+    
+    def _clean_dict(self, d: dict) -> dict:
+        """递归清理字典中的think标签"""
+        import re
+        think_pattern = re.compile(r'<think>(.*?)</think>', re.DOTALL)
+        
+        cleaned = {}
+        for key, value in d.items():
+            if isinstance(value, str):
+                cleaned[key] = think_pattern.sub('', value).strip()
+            elif isinstance(value, dict):
+                cleaned[key] = self._clean_dict(value)
+            elif isinstance(value, list):
+                cleaned[key] = [
+                    think_pattern.sub('', item).strip() if isinstance(item, str) else item
+                    for item in value
+                ]
+            else:
+                cleaned[key] = value
+        return cleaned
     
     async def _arun(self, *args, **kwargs) -> Any:
         """异步执行（默认调用同步方法）"""
