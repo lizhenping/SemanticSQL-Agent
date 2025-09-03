@@ -1,5 +1,23 @@
 # 更新日志
 
+## [2024-01-17] - LLM 客户端规范化
+
+### 删除
+1. **冗余的 LLM 客户端**
+   - 删除了 `utils/llm_client.py`（未使用）
+   - 项目统一使用 LangChain 的 `ChatOpenAI`
+
+### 新增
+1. **Thinking 标签处理**（LangChain 标准实现）
+   - `utils/thinking_parser.py` - 符合 LangChain 的输出解析器
+   - `chains/thinking_chain.py` - 完整的思考链实现
+   - 支持 LCEL 和多步思考链
+
+### 文档
+1. **LLM 使用规范**
+   - 创建 `docs/LLM_USAGE.md` 说明统一使用 LangChain
+   - 明确不使用直接的 OpenAI SDK
+
 ## [2024-01-16] - 系统清理和优化
 
 ### 改进
