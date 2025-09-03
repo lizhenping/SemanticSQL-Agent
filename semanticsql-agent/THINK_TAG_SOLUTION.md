@@ -1,47 +1,51 @@
-# Think标签处理方案（LangChain 标准实现）
+# Think标签处理和思考工具实现（LangChain 标准）
 
-## 问题描述
+## 1. Think 标签处理
 
+### 问题描述
 Claude 等 LLM 在输出时可能包含 `<think>` 或 `<thinking>` 标签来表示内部思考过程。这些标签：
 1. 不应该被传递给工具作为参数
 2. 不应该被包含在最终输出中
 3. 可能干扰 JSON 解析
 
-## 解决方案（完全符合 LangChain 设计模式）
-
-### 1. 自定义输出解析器
+### 解决方案
 文件：`utils/thinking_parser.py`
 - `ThinkingOutputParser`: 继承自 `BaseOutputParser`，专门处理 thinking 标签
 - `ReActThinkingParser`: 专门用于 ReAct 模式，同时处理 thinking 和 action
-- 符合 LangChain 的可插拔设计，可以与任何 LLM 和 Chain 组合使用
+- 在 `utils/callbacks.py` 和 `tools/base_tool.py` 中集成使用
 
+## 2. Sequential Thinking Tool（LangChain 标准实现）
+
+### 重构说明
+文件：`tools/thinking_tools/sequential_thinking_tool.py`
+
+从自定义实现重构为使用 LangChain 标准组件：
+
+#### 使用的 LangChain 组件
+1. **ChatPromptTemplate** - 结构化的提示词模板
+2. **PydanticOutputParser** - 结构化输出解析
+3. **RunnableSequence** - LCEL 链式调用
+4. **LLMChain** - 后备方案的简单链
+
+#### 核心特性
 ```python
-# 使用方式
-from utils.thinking_parser import ThinkingOutputParser
+# 定义结构化输出
+class ThinkingStrategy(BaseModel):
+    analysis: str
+    root_cause: str
+    next_action: str
+    reasoning: str
+    confidence: float
 
-parser = ThinkingOutputParser()
-chain = prompt | llm | parser
-
-result = chain.invoke({"question": "你的问题"})
-print(f"思考过程: {result['thinking']}")
-print(f"最终答案: {result['answer']}")
+# 使用 LCEL 构建思考链
+thinking_chain = prompt | llm | parser
 ```
 
-### 2. Thinking Chain 实现
-文件：`chains/thinking_chain.py`
-- 提供了完整的 Chain 实现和 LCEL 实现
-- 支持单步思考和多步思考链
-- 完全符合 LangChain 的链式调用模式
-
-### 3. 在回调和工具中集成
-- `utils/callbacks.py`: 使用 `ThinkingOutputParser` 在回调层统一处理
-- `tools/base_tool.py`: 使用 parser 清理工具输出
-- 保持了 DRY 原则，核心逻辑只在 parser 中实现一次
-
-### 4. 测试驱动开发
-文件：`tests/test_thinking_parser.py`
-- 完整的单元测试覆盖各种场景
-- 易于验证和维护
+#### 优势
+1. **标准化** - 使用 LangChain 的标准组件
+2. **可维护** - 符合 LangChain 生态的最佳实践
+3. **灵活性** - 支持同步和异步执行
+4. **错误处理** - 内置后备分析机制
 
 ## 使用示例
 
