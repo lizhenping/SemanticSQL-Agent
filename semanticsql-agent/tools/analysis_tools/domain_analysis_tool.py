@@ -17,18 +17,15 @@ logger = logging.getLogger(__name__)
 
 
 class DomainAnalysisInput(BaseModel):
-    """领域分析输入"""
-    input: Union[Dict[str, Any], str] = Field(
-        default={}, 
-        description="输入数据，包含schema_info等"
-    )
+    """领域分析输入 - 无需参数，工具会从记忆中获取schema_info"""
+    pass
 
 
 class DomainAnalysisTool(BaseAnalysisTool):
     """业务领域分析工具 - 使用LLM驱动的分析"""
 
     name: str = "domain_analysis"
-    description: str = "使用LLM分析数据库的业务领域，识别主要业务场景和数据特征"
+    description: str = "使用LLM分析数据库的业务领域，识别主要业务场景和数据特征。无需参数，自动从记忆中获取schema_info"
     args_schema: Type[BaseModel] = DomainAnalysisInput
     
     # 定义必需的字段

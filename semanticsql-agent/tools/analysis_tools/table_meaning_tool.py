@@ -17,17 +17,15 @@ logger = logging.getLogger(__name__)
 
 
 class TableMeaningInput(BaseModel):
-    """表含义分析输入"""
-    schema_info: Dict[str, Any] = Field(default_factory=dict, description="数据库结构信息")
-    domain_info: Dict[str, Any] = Field(default_factory=dict, description="领域信息")
-    column_meanings: Dict[str, Any] = Field(default_factory=dict, description="列含义信息")
+    """表含义分析输入 - 无需参数，工具会从记忆中获取数据"""
+    pass
 
 
 class TableMeaningTool(BaseAnalysisTool):
     """表业务含义分析工具"""
     
     name: str = "table_meaning_analysis"
-    description: str = "使用LLM分析每个表的业务职责和含义"
+    description: str = "使用LLM分析每个表的业务职责和含义。无需参数，自动从记忆中获取数据"
     args_schema: Type[BaseModel] = TableMeaningInput
     
     # 定义必需的字段

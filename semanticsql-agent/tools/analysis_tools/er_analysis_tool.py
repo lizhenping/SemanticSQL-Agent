@@ -18,17 +18,15 @@ logger = logging.getLogger(__name__)
 
 
 class ERAnalysisInput(BaseModel):
-    """ER分析输入"""
-    schema_info: Dict[str, Any] = Field(default_factory=dict, description="数据库结构信息")
-    column_meanings: Dict[str, Any] = Field(default_factory=dict, description="列含义信息")
-    table_meanings: Dict[str, Any] = Field(default_factory=dict, description="表含义信息")
+    """ER分析输入 - 无需参数，工具会从记忆中获取数据"""
+    pass
 
 
 class ERAnalysisTool(BaseAnalysisTool):
     """实体关系分析工具"""
     
     name: str = "er_analysis"
-    description: str = "分析数据库表之间的物理关系和逻辑关系"
+    description: str = "分析数据库表之间的物理关系和逻辑关系。无需参数，自动从记忆中获取数据"
     args_schema: Type[BaseModel] = ERAnalysisInput
     
     # 定义必需的字段

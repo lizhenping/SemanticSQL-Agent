@@ -18,16 +18,15 @@ logger = logging.getLogger(__name__)
 
 
 class FieldClassificationInput(BaseModel):
-    """字段分类输入"""
-    schema_info: Dict[str, Any] = Field(default_factory=dict, description="数据库结构信息")
-    domain_info: Dict[str, Any] = Field(default_factory=dict, description="业务领域信息")
+    """字段分类输入 - 无需参数，工具会从记忆中获取数据"""
+    pass
 
 
 class FieldClassificationTool(BaseAnalysisTool):
     """字段语义分类工具 - 使用LLM进行智能分类"""
     
     name: str = "field_classification"
-    description: str = "使用LLM对数据库字段进行语义分类，识别字段的业务含义和用途"
+    description: str = "使用LLM对数据库字段进行语义分类，识别字段的业务含义和用途。无需参数，自动从记忆中获取数据"
     args_schema: Type[BaseModel] = FieldClassificationInput
     
     # 定义必需的字段
