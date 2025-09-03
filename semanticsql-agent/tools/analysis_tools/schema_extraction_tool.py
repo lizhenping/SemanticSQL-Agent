@@ -27,7 +27,7 @@ class SchemaExtractionTool(BaseAnalysisTool):
     """数据库结构提取工具"""
 
     name: str = "schema_extraction"
-    description: str = "提取数据库的完整结构信息，包括表、列、索引、外键等"
+    description: str = "提取数据库的完整结构信息，包括表、列、索引、外键等。需要参数：database_name（数据库名称）"
     args_schema: Type[BaseModel] = SchemaExtractionInput
     
     # 正确定义db_manager字段

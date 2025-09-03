@@ -75,8 +75,10 @@ class DatabaseAnalysisMemory(BaseMemory):
         }
         
         if tool_name in memory_mapping:
-            self.memories[memory_mapping[tool_name]] = data
-            self.logger.debug(f"Saved {tool_name} results to memory")
+            memory_key = memory_mapping[tool_name]
+            self.memories[memory_key] = data
+            self.logger.info(f"💾 Saved {tool_name} results to memory['{memory_key}']")
+            self.logger.debug(f"Memory keys: {list(self.memories.keys())}")
     
     def update_analysis(self, analysis_type: str, result: Dict[str, Any]):
         """更新特定类型的分析结果

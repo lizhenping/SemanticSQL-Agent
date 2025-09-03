@@ -66,20 +66,32 @@ class BaseSemanticSQLTool(BaseTool):
         """执行工具并清理输出"""
         from utils.thinking_parser import ThinkingOutputParser
         
-        result = self._run(*args, **kwargs)
-        parser = ThinkingOutputParser()
+        # 记录工具调用
+        self.logger.info(f"Tool '{self.name}' called with args: {args}, kwargs: {kwargs}")
         
-        # 如果结果是字符串，使用parser清理
-        if isinstance(result, str):
-            parsed = parser.parse(result)
-            if parsed['has_thinking']:
-                self.logger.debug(f"Tool thinking: {parsed['thinking'][:100]}...")
-            result = parsed['answer']
-        elif isinstance(result, dict):
-            # 递归清理字典中的字符串值
-            result = self._clean_dict_with_parser(result, parser)
-        
-        return result
+        try:
+            result = self._run(*args, **kwargs)
+            
+            # 记录成功执行
+            self.logger.info(f"Tool '{self.name}' executed successfully")
+            
+            parser = ThinkingOutputParser()
+            
+            # 如果结果是字符串，使用parser清理
+            if isinstance(result, str):
+                parsed = parser.parse(result)
+                if parsed['has_thinking']:
+                    self.logger.debug(f"Tool thinking: {parsed['thinking'][:100]}...")
+                result = parsed['answer']
+            elif isinstance(result, dict):
+                # 递归清理字典中的字符串值
+                result = self._clean_dict_with_parser(result, parser)
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"Tool '{self.name}' failed with error: {str(e)}")
+            raise
     
     def _clean_dict_with_parser(self, d: dict, parser) -> dict:
         """使用parser递归清理字典中的thinking标签"""
