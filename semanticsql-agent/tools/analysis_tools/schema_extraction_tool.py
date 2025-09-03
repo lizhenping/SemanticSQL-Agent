@@ -4,7 +4,6 @@
 """
 
 from typing import Dict, Any, Type, List, Optional
-import json
 from pydantic import BaseModel, Field
 
 from models.exceptions import (
@@ -75,7 +74,8 @@ class SchemaExtractionTool(BaseAnalysisTool):
             # 保存到记忆
             self.save_to_memory("schema_extraction", result)
 
-            return json.dumps(result, ensure_ascii=False, indent=2)
+            # 返回字典格式，让Agent决定如何序列化
+            return result
 
         except DatabaseConnectionError:
             raise

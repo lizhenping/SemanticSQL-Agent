@@ -69,11 +69,10 @@ class BaseAgent(ABC):
     
     def _setup_tool_memory_references(self):
         """为分析工具设置memory引用"""
-        from tools.analysis_tools.base_analysis_tool import BaseAnalysisTool
-        
         for tool in self.tools:
-            if isinstance(tool, BaseAnalysisTool):
-                tool.set_memory_reference(self.memory)
+            # 检查是否有set_memory方法
+            if hasattr(tool, 'set_memory'):
+                tool.set_memory(self.memory)
     
     def _create_prompt(self) -> ChatPromptTemplate:
         """创建Agent提示词"""

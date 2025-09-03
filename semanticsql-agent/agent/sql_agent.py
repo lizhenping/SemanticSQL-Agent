@@ -82,10 +82,10 @@ class SQLAgent(BaseAgent):
             [
                 SchemaExtractionTool(db_manager=self.db_manager),
                 DomainAnalysisTool(llm=self.llm),
-                FieldClassificationTool(),
-                ColumnMeaningTool(),
-                TableMeaningTool(),
-                ERAnalysisTool(),
+                FieldClassificationTool(llm=self.llm, db_manager=self.db_manager),
+                ColumnMeaningTool(llm=self.llm),
+                TableMeaningTool(llm=self.llm),
+                ERAnalysisTool(llm=self.llm, db_manager=self.db_manager),
             ]
         )
 

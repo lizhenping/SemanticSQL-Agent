@@ -63,8 +63,8 @@ class DomainAnalysisTool(BaseAnalysisTool):
             # 保存到记忆
             self.save_to_memory("domain_analysis", domain_knowledge)
 
-            # 返回JSON字符串
-            return json.dumps(domain_knowledge, ensure_ascii=False, indent=2)
+            # 返回字典格式
+            return domain_knowledge
 
         except Exception as e:
             raise ToolExecutionError(
