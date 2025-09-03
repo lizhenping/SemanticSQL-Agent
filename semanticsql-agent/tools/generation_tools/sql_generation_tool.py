@@ -7,7 +7,7 @@ import re
 from typing import Dict, Any, Type, List, Optional
 from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 import json
 
 from models.base import SQLOperation
@@ -22,6 +22,18 @@ class SQLGenerationInput(BaseModel):
     scenario: Optional[Dict[str, Any]] = Field(default=None, description="场景信息")
     memory: Optional[Dict[str, Any]] = Field(default=None, description="包含数据库分析结果的记忆")
     operations: Optional[List[str]] = Field(default=None, description="建议的SQL操作")
+    
+    @model_validator(mode='before')
+    @classmethod
+    def validate_input(cls, data):
+        """处理字符串输入"""
+        if isinstance(data, str):
+            import json
+            try:
+                data = json.loads(data)
+            except:
+                data = {}
+        return data
 
 
 class GeneratedSQL(BaseModel):

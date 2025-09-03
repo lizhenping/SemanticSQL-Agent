@@ -10,7 +10,7 @@ from datetime import datetime
 import uuid
 
 from langchain.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from models.base import DifficultyLevel, SQLOperation
 from models.exceptions import ToolExecutionError
@@ -30,13 +30,25 @@ class QueryScenario(BaseModel):
 class ScenarioToolInput(BaseModel):
     """场景工具输入"""
     iteration: int = Field(default=0, description="当前迭代次数")
+    
+    @model_validator(mode='before')
+    @classmethod
+    def validate_input(cls, data):
+        """处理字符串输入"""
+        if isinstance(data, str):
+            import json
+            try:
+                data = json.loads(data)
+            except:
+                data = {"iteration": 0}
+        return data
 
 
 class ScenarioTool(BaseTool):
     """基于预定义模板选择业务场景"""
     
     name: str = "scenario_tool"
-    description: str = "从预定义的场景模板中选择一个适合当前数据库的业务场景"
+    description: str = "从预定义的场景模板中选择一个适合当前数据库的业务场景。输入参数：iteration（整数，当前迭代次数）"
     args_schema: Type[BaseModel] = ScenarioToolInput
     
     def __init__(self):
@@ -50,11 +62,22 @@ class ScenarioTool(BaseTool):
             DifficultyLevel.EXPERT: 0.05
         })
     
-    def _run(self, iteration: int = 0,
-        **kwargs  # 接受额外的参数如 verbose
-    ) -> Dict[str, Any]:
+    def _run(self, *args, **kwargs) -> Dict[str, Any]:
         """选择一个场景"""
         try:
+            # 处理不同的输入格式
+            if args and isinstance(args[0], str):
+                # 如果第一个参数是字符串，尝试解析为JSON
+                import json
+                try:
+                    data = json.loads(args[0])
+                    iteration = data.get('iteration', 0)
+                except:
+                    iteration = 0
+            elif 'iteration' in kwargs:
+                iteration = kwargs['iteration']
+            else:
+                iteration = 0
             
             # ScenarioTool基于预定义模板工作，不需要数据库分析结果
             # 它会返回通用的业务场景，供后续工具使用

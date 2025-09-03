@@ -5,7 +5,7 @@
 
 from typing import Dict, Any, Type, List, Optional
 from langchain.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 import json
 
 from models.base import SQLOperation, DifficultyLevel
@@ -18,6 +18,18 @@ class OperationSelectionInput(BaseModel):
     complexity: str = Field(default="medium", description="场景复杂度")
     scenario: Optional[Dict[str, Any]] = Field(default=None, description="完整场景信息")
     memory: Optional[Dict[str, Any]] = Field(default=None, description="包含数据库分析结果的记忆")
+    
+    @model_validator(mode='before')
+    @classmethod
+    def validate_input(cls, data):
+        """处理字符串输入"""
+        if isinstance(data, str):
+            import json
+            try:
+                data = json.loads(data)
+            except:
+                data = {}
+        return data
 
 
 class OperationSelectionTool(BaseTool):

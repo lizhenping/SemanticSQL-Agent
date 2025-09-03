@@ -6,7 +6,7 @@
 from typing import Dict, Any, Type, List, Optional
 from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 import json
 
 from models.exceptions import ToolExecutionError
@@ -19,6 +19,18 @@ class QuestionGenerationInput(BaseModel):
     operations: List[str] = Field(default_factory=list, description="SQL操作列表")
     scenario: Optional[Dict[str, Any]] = Field(default=None, description="完整场景信息")
     memory: Optional[Dict[str, Any]] = Field(default=None, description="包含数据库分析结果的记忆")
+    
+    @model_validator(mode='before')
+    @classmethod
+    def validate_input(cls, data):
+        """处理字符串输入"""
+        if isinstance(data, str):
+            import json
+            try:
+                data = json.loads(data)
+            except:
+                data = {}
+        return data
 
 
 class GeneratedQuestion(BaseModel):
