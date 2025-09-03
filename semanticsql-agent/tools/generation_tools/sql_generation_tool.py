@@ -9,7 +9,7 @@ from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
-from models.schemas import SQLOperation
+from models.base import SQLOperation
 from models.exceptions import ToolExecutionError, LLMError
 from utils.database import DatabaseManager
 from prompts.manager import PromptManager
@@ -20,7 +20,17 @@ class SQLGenerationInput(BaseModel):
     question: str = Field(description="自然语言问题")
     memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
     operations: List[str] = Field(default_factory=list, description="建议的SQL操作")
+
+
+class GeneratedSQL(BaseModel):
+    """生成的SQL查询"""
+    sql: str = Field(description="SQL语句")
     dialect: str = Field(default="mysql", description="SQL方言")
+    tables_used: List[str] = Field(description="使用的表")
+    operations_used: List[str] = Field(description="使用的操作")
+    has_aggregation: bool = Field(description="是否包含聚合")
+    has_join: bool = Field(default=False, description="是否包含JOIN")
+    complexity: str = Field(default="medium", description="复杂度")
 
 
 class SQLGenerationTool(BaseTool):

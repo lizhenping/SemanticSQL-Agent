@@ -7,12 +7,24 @@ import random
 import json
 from typing import Dict, Any, Type, List, Optional
 from datetime import datetime
+import uuid
 
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from models.schemas import QueryScenario, DifficultyLevel, SQLOperation
+from models.base import DifficultyLevel, SQLOperation
 from models.exceptions import ToolExecutionError
+
+
+class QueryScenario(BaseModel):
+    """查询场景"""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    category: str = ""  # 销售分析、库存管理等
+    business_purpose: str = ""  # 业务目的
+    complexity: DifficultyLevel = DifficultyLevel.MEDIUM
+    applicable_tables: List[str] = Field(default_factory=list)
+    suggested_operations: List[SQLOperation] = Field(default_factory=list)
+    description: str = ""
 
 
 class ScenarioToolInput(BaseModel):

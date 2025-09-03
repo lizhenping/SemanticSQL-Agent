@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
-from models.schemas import AgentExecution, AgentStep
+from models.agent import AgentExecution, AgentStep
 
 
 class TrajectoryRecorder:

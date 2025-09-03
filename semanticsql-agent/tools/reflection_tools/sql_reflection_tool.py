@@ -20,6 +20,15 @@ class SQLReflectionInput(BaseModel):
     memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
 
 
+class ReflectionResult(BaseModel):
+    """反思结果"""
+    problem_source: str = Field(description="问题来源")
+    root_cause_analysis: str = Field(description="根本原因分析")
+    recommended_action: str = Field(description="推荐的下一步行动")
+    suggestions: List[str] = Field(description="具体建议")
+    improved_sql: Optional[str] = Field(default=None, description="改进的SQL")
+
+
 class SQLReflectionTool(BaseTool):
     """SQL执行反思与优化工具"""
     

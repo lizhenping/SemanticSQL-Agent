@@ -7,7 +7,7 @@ from typing import Dict, Any, Type, List
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from models.schemas import SQLOperation, DifficultyLevel
+from models.base import SQLOperation, DifficultyLevel
 from models.exceptions import ToolExecutionError
 
 

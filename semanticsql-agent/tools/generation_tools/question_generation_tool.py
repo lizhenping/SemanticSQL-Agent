@@ -3,7 +3,7 @@
 基于 LangChain BaseTool
 """
 
-from typing import Dict, Any, Type, List
+from typing import Dict, Any, Type, List, Optional
 from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
@@ -17,6 +17,14 @@ class QuestionGenerationInput(BaseModel):
     scenario: Dict[str, Any] = Field(description="场景信息")
     operations: List[str] = Field(description="SQL操作列表")
     memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
+
+
+class GeneratedQuestion(BaseModel):
+    """生成的自然语言问题"""
+    question: str = Field(description="生成的问题")
+    scenario_id: Optional[str] = Field(default=None, description="场景ID")
+    complexity: Optional[str] = Field(default=None, description="复杂度")
+    category: Optional[str] = Field(default=None, description="类别")
 
 
 class QuestionGenerationTool(BaseTool):

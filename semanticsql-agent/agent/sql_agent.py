@@ -17,7 +17,7 @@ from config.settings import Settings
 from config.database import DatabaseConfig
 from utils.memory import DatabaseAnalysisMemory
 from utils.database import DatabaseManager
-from models.schemas import TrainingDataResult
+from models.training import TrainingDataResult
 from models.exceptions import AgentExecutionError
 from prompts.manager import PromptManager
 

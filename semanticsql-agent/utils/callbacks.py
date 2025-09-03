@@ -12,7 +12,7 @@ from langchain.callbacks.base import BaseCallbackHandler
 from langchain_core.agents import AgentAction, AgentFinish
 from langchain_core.outputs import LLMResult
 
-from models.schemas import AgentExecution, AgentStep, AgentStepType
+from models.agent import AgentExecution, AgentStep, AgentStepType
 from utils.trajectory import TrajectoryRecorder
 
 
