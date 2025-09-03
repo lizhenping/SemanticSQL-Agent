@@ -11,8 +11,8 @@ Claude 等 LLM 在输出时可能包含 `<think>` 或 `<thinking>` 标签来表�
 ### 解决方案
 文件：`utils/thinking_parser.py`
 - `ThinkingOutputParser`: 继承自 `BaseOutputParser`，专门处理 thinking 标签
-- `ReActThinkingParser`: 专门用于 ReAct 模式，同时处理 thinking 和 action
 - 在 `utils/callbacks.py` 和 `tools/base_tool.py` 中集成使用
+- 支持 `<think>` 和 `<thinking>` 标签（大小写不敏感）
 
 ## 2. Sequential Thinking Tool（LangChain 标准实现）
 

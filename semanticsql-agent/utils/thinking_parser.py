@@ -56,38 +56,3 @@ class ThinkingOutputParser(BaseOutputParser[Dict[str, Any]]):
 这是我的最终答案。
 """
 
-
-class ReActThinkingParser(BaseOutputParser[Dict[str, Any]]):
-    """专门用于ReAct模式的Thinking解析器"""
-    
-    def parse(self, text: str) -> Dict[str, Any]:
-        """
-        解析ReAct格式的输出，同时处理thinking标签
-        
-        Returns:
-            包含action、action_input、thinking等信息的字典
-        """
-        # 先处理thinking标签
-        thinking_parser = ThinkingOutputParser()
-        thinking_result = thinking_parser.parse(text)
-        
-        cleaned_text = thinking_result["answer"]
-        
-        # 解析ReAct格式
-        action_match = re.search(r'Action:\s*(.+)', cleaned_text)
-        action_input_match = re.search(r'Action Input:\s*(.+)', cleaned_text)
-        thought_match = re.search(r'Thought:\s*(.+?)(?=Action:|$)', cleaned_text, re.DOTALL)
-        final_answer_match = re.search(r'Final Answer:\s*(.+)', cleaned_text, re.DOTALL)
-        
-        return {
-            "thinking": thinking_result["thinking"],
-            "thought": thought_match.group(1).strip() if thought_match else "",
-            "action": action_match.group(1).strip() if action_match else None,
-            "action_input": action_input_match.group(1).strip() if action_input_match else None,
-            "final_answer": final_answer_match.group(1).strip() if final_answer_match else None,
-            "is_final": final_answer_match is not None
-        }
-    
-    @property
-    def _type(self) -> str:
-        return "react_thinking"
