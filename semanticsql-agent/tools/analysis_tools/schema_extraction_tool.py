@@ -29,13 +29,11 @@ class SchemaExtractionTool(BaseAnalysisTool):
     name: str = "schema_extraction"
     description: str = "提取数据库的完整结构信息，包括表、列、索引、外键等"
     args_schema: Type[BaseModel] = SchemaExtractionInput
-    db_manager: DatabaseManager = Field(exclude=True)
 
-    def __init__(self, db_manager: DatabaseManager):
-        super().__init__(db_manager=db_manager)
-
-    class Config:
-        arbitrary_types_allowed = True
+    def __init__(self, db_manager: DatabaseManager, **kwargs):
+        super().__init__(**kwargs)
+        # 使用object.__setattr__避开Pydantic验证
+        object.__setattr__(self, 'db_manager', db_manager)
 
     def _run(
         self,

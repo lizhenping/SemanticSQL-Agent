@@ -31,8 +31,9 @@ class FieldClassificationTool(BaseAnalysisTool):
     args_schema: Type[BaseModel] = FieldClassificationInput
     
     def __init__(self, llm: ChatOpenAI, db_manager: DatabaseManager = None, **kwargs):
-        super().__init__(db_manager=db_manager, **kwargs)
+        super().__init__(**kwargs)
         object.__setattr__(self, 'llm', llm)
+        object.__setattr__(self, 'db_manager', db_manager)
         object.__setattr__(self, 'prompt_manager', PromptManager())
     
     def _run(self, schema_info: Dict[str, Any] = None, domain_info: Dict[str, Any] = None) -> Dict[str, Any]:

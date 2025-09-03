@@ -30,8 +30,12 @@ class BaseAnalysisTool(BaseSemanticSQLTool):
     - 通用的输入解析
     """
     
-    def __init__(self, db_manager: Optional[DatabaseManager] = None, **kwargs):
+    def __init__(self, **kwargs):
+        # 提取我们自己的参数
+        db_manager = kwargs.pop('db_manager', None)
+        # 调用父类初始化
         super().__init__(**kwargs)
+        # 设置db_manager
         if db_manager:
             object.__setattr__(self, 'db_manager', db_manager)
     
