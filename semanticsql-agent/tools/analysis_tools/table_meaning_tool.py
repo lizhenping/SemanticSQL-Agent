@@ -46,7 +46,7 @@ class TableMeaningTool(BaseAnalysisTool):
             # 从参数或memory获取数据
             schema_info = schema_info or self.get_schema_info()
             domain_info = domain_info or self.get_domain_info()
-            column_meanings = column_meanings or self.get_from_memory("column_meanings")
+            column_meanings = column_meanings or self.get_column_meanings()
             
             if not schema_info:
                 raise ToolExecutionError(

@@ -70,3 +70,35 @@ class BaseAnalysisTool(BaseSemanticSQLTool):
             领域信息字典
         """
         return self.get_from_memory("domain_info")
+    
+    def get_field_classification(self) -> Dict[str, Any]:
+        """获取字段分类信息
+        
+        Returns:
+            字段分类信息字典
+        """
+        return self.get_from_memory("field_classification")
+    
+    def get_column_meanings(self) -> Dict[str, Any]:
+        """获取列含义信息
+        
+        Returns:
+            列含义信息字典
+        """
+        return self.get_from_memory("column_meanings")
+    
+    def get_table_meanings(self) -> Dict[str, Any]:
+        """获取表含义信息
+        
+        Returns:
+            表含义信息字典
+        """
+        return self.get_from_memory("table_meanings")
+    
+    def get_er_relations(self) -> Dict[str, Any]:
+        """获取ER关系信息
+        
+        Returns:
+            ER关系信息字典
+        """
+        return self.get_from_memory("er_relations")
