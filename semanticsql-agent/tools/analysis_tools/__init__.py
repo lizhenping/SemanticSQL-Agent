@@ -1,5 +1,5 @@
 """
-分析工具 - 数据库结构和业务分析
+分析工具包 - 数据库分析相关工具
 """
 
 from .schema_extraction_tool import SchemaExtractionTool

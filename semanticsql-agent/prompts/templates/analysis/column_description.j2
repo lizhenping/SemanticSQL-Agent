@@ -1,0 +1,43 @@
+你是一个数据库字段描述专家。请为以下表的列生成业务含义描述。
+
+## 业务背景
+- 领域类型：{{ domain_type }}
+- 领域描述：{{ domain_description }}
+
+## 表信息
+表名：{{ table_name }}
+
+表结构：
+```sql
+{{ table_ddl }}
+```
+
+## 需要描述的列
+{% for column in columns %}
+列名：{{ column.name }}
+{% if column.examples %}
+样例数据：{{ column.examples | join(', ') }}
+{% endif %}
+{% if column.classification %}
+分类信息：
+  - 类别：{{ column.classification.category }}
+  - 类型：{{ column.classification.field_type }}
+  - 重要性：{{ column.classification.importance }}
+{% endif %}
+
+{% endfor %}
+
+## 要求
+请为每个列生成简洁、准确的中文业务描述。描述应该：
+1. 说明该字段在业务中的作用
+2. 避免仅重复字段名
+3. 考虑领域背景和业务语境
+
+请以JSON格式返回，格式如下：
+```json
+{
+  "列名1": "业务描述1",
+  "列名2": "业务描述2",
+  ...
+}
+```
