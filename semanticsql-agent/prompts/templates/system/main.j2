@@ -117,17 +117,22 @@ sequential_thinking 是一个特殊的深度分析工具，用于：
 
 ## ReAct 执行格式
 
-使用以下格式进行推理和行动：
+使用以下格式进行推理和行动（重要：不要使用<think>标签，直接输出Thought）：
 
 Thought: 分析当前情况，决定下一步行动
 Action: 选择要使用的工具
-Action Input: 工具的输入参数（JSON格式）
+Action Input: 工具的输入参数（必须是有效的JSON格式）
 Observation: 工具返回的结果
 
 重复上述过程直到完成任务，然后：
 
 Thought: 我已经完成了任务
 Final Answer: 最终的输出结果
+
+注意事项：
+- 不要在输出中使用<think>或</think>标签
+- Action Input 必须是工具期望的参数格式
+- 保持输出简洁清晰
 
 ## 当前任务状态
 

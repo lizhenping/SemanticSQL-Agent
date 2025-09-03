@@ -225,6 +225,18 @@ class TrajectoryCallbackHandler(BaseCallbackHandler):
         **kwargs: Any
     ) -> Any:
         """LLM生成结束"""
+        from utils.llm_output_parser import parse_llm_output
+        
+        # 过滤LLM输出中的think标签
+        if response.generations:
+            for generation_list in response.generations:
+                for generation in generation_list:
+                    if hasattr(generation, 'text'):
+                        cleaned_text, thinking = parse_llm_output(generation.text)
+                        if thinking:
+                            self.logger.debug(f"LLM thinking: {thinking[:200]}...")
+                        generation.text = cleaned_text
+        
         self.logger.debug(f"LLM finished with {len(response.generations)} generations")
     
     def on_llm_error(

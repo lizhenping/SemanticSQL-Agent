@@ -62,6 +62,12 @@ class BaseSemanticSQLTool(BaseTool):
         """执行工具的核心逻辑"""
         pass
     
+    def run(self, *args, **kwargs) -> Any:
+        """执行工具并清理输出中的think标签"""
+        from utils.llm_output_parser import clean_tool_response
+        result = self._run(*args, **kwargs)
+        return clean_tool_response(result)
+    
     async def _arun(self, *args, **kwargs) -> Any:
         """异步执行（默认调用同步方法）"""
-        return self._run(*args, **kwargs)
+        return self.run(*args, **kwargs)
