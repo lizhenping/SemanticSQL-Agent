@@ -123,43 +123,9 @@ class SQLAgent(BaseAgent):
         """执行数据库分析"""
         self.logger.info(f"Starting database analysis for: {database_name}")
 
-        # 预先执行schema_extraction并保存到记忆中
-        try:
-            self.logger.info(
-                "Pre-executing schema_extraction to ensure schema_info is available"
-            )
-            schema_tool = SchemaExtractionTool(db_manager=self.db_manager)
-            schema_result = schema_tool._run(
-                database_name=database_name,
-                include_views=False,
-                include_indexes=True,
-                sample_data=False,
-            )
-
-            # 保存到memory
-            if hasattr(self, "memory") and self.memory:
-                import json
-                try:
-                    schema_data = json.loads(schema_result)
-                    self.memory.update_analysis("schema_info", schema_data)
-                    self.logger.info("Schema info saved to memory successfully")
-                except json.JSONDecodeError as e:
-                    self.logger.error(f"Failed to parse schema result as JSON: {e}")
-                    return {"success": False, "error": f"Schema result parsing failed: {str(e)}", "message": "数据库分析失败：Schema结果解析错误"}
-            else:
-                self.logger.warning("Memory not available, schema_info not saved")
-
-        except Exception as e:
-            self.logger.error(f"Failed to pre-execute schema_extraction: {str(e)}")
-            return {
-                "success": False,
-                "error": f"Schema extraction failed: {str(e)}",
-                "message": "数据库分析失败：无法提取数据库结构",
-            }
-
-        # 构建分析任务
-        analysis_task = self.prompt_manager.get_analysis_prompt(
-            "database_analysis",
+        # 构建分析任务 - 让 Agent 自主决定执行流程
+        analysis_task = self.prompt_manager.render_template(
+            "analysis/database_analysis.j2",
             database_name=database_name
         )
 
