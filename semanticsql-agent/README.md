@@ -80,7 +80,6 @@ python cli.py generate -n 100 -d mydb -o output.json
 
 - [架构设计](.doc/semanticsql-agent_ARCHITECTURE.md) - 详细的系统架构说明
 - [设计规范](.doc/semanticsql-agent_DESIGN_SPEC.md) - 设计原则和规范
-- [Memory Chain示例](.doc/MEMORY_CHAIN_EXAMPLE.md) - Memory机制工作原理
 - [命令行指令](.doc/命令行指令.md) - CLI使用说明
 
 ## 许可证

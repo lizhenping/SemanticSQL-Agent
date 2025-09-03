@@ -80,23 +80,14 @@ class BaseAgent(ABC):
             from prompts.manager import PromptManager
             prompt_manager = PromptManager()
             
-            # 尝试使用灵活的提示词模板
+            # 加载系统提示词模板
             try:
-                # 不传递工具信息，让模板保留占位符
                 system_prompt = prompt_manager.render_template(
-                    'system/main_flexible.j2'
+                    'system/main.j2'
                 )
-            except Exception as template_error:
-                self.logger.warning(f"Failed to load flexible template: {template_error}")
-                # 如果灵活模板不存在，使用原有模板
-                try:
-                    system_prompt = prompt_manager.render_template(
-                        'system/main.j2'
-                    )
-                except Exception as main_error:
-                    self.logger.warning(f"Failed to load main template: {main_error}")
-                    # 如果都失败，使用默认模板
-                    system_prompt = None
+            except Exception as e:
+                self.logger.error(f"Failed to load system prompt template: {e}")
+                system_prompt = None
             
             if system_prompt:
                 return ChatPromptTemplate.from_messages([
