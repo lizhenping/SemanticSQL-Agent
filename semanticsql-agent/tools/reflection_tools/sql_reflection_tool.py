@@ -63,6 +63,8 @@ class SQLReflectionTool(BaseTool):
         sql: str,
         execution_result: Dict[str, Any],
         memory: Dict[str, Any]
+    ,
+        **kwargs  # 接受额外的参数如 verbose
     ) -> Dict[str, Any]:
         """执行SQL反思"""
         try:

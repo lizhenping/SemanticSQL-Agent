@@ -47,6 +47,8 @@ class TableMeaningTool(BaseAnalysisTool):
         schema_info: Dict[str, Any] = None,
         domain_info: Dict[str, Any] = None,
         column_meanings: Dict[str, Any] = None
+    ,
+        **kwargs  # 接受额外的参数如 verbose
     ) -> Dict[str, Any]:
         """执行表含义分析"""
         try:

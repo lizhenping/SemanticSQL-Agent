@@ -44,7 +44,9 @@ class FieldClassificationTool(BaseAnalysisTool):
         self.db_manager = db_manager
         self.prompt_manager = PromptManager()
     
-    def _run(self, schema_info: Dict[str, Any] = None, domain_info: Dict[str, Any] = None) -> Dict[str, Any]:
+    def _run(self, schema_info: Dict[str, Any] = None, domain_info: Dict[str, Any] = None,
+        **kwargs  # 接受额外的参数如 verbose
+    ) -> Dict[str, Any]:
         """执行字段分类"""
         try:
             # 从参数或memory获取数据

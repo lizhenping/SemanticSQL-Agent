@@ -50,7 +50,9 @@ class ScenarioTool(BaseTool):
             DifficultyLevel.EXPERT: 0.05
         })
     
-    def _run(self, iteration: int = 0) -> Dict[str, Any]:
+    def _run(self, iteration: int = 0,
+        **kwargs  # 接受额外的参数如 verbose
+    ) -> Dict[str, Any]:
         """选择一个场景"""
         try:
             

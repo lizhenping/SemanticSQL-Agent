@@ -100,6 +100,8 @@ class SequentialThinkingTool(BaseTool):
         problem_description: str,
         context: Dict[str, Any] = None,
         memory: Dict[str, Any] = None
+    ,
+        **kwargs  # 接受额外的参数如 verbose
     ) -> Dict[str, Any]:
         """执行链式思考"""
         try:

@@ -33,6 +33,8 @@ class OperationSelectionTool(BaseTool):
         complexity: str = "medium",
         scenario: Optional[Dict[str, Any]] = None,
         memory: Optional[Dict[str, Any]] = None
+    ,
+        **kwargs  # 接受额外的参数如 verbose
     ) -> Dict[str, Any]:
         """选择SQL操作"""
         try:

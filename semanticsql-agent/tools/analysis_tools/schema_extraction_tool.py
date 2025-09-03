@@ -47,6 +47,7 @@ class SchemaExtractionTool(BaseAnalysisTool):
         include_views: bool = False,
         sample_data: bool = True,
         tables: Optional[List[str]] = None,
+        **kwargs  # 接受额外的参数如 verbose
     ) -> str:
         """执行数据库结构提取"""
         try:

@@ -63,6 +63,8 @@ class SQLGenerationTool(BaseTool):
         memory: Optional[Dict[str, Any]] = None,
         operations: Optional[List[str]] = None,
         dialect: str = "mysql"
+    ,
+        **kwargs  # 接受额外的参数如 verbose
     ) -> Dict[str, Any]:
         """生成SQL查询"""
         try:

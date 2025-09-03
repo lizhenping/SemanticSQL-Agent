@@ -50,6 +50,8 @@ class ERAnalysisTool(BaseAnalysisTool):
         schema_info: Dict[str, Any] = None,
         column_meanings: Dict[str, Any] = None,
         table_meanings: Dict[str, Any] = None
+    ,
+        **kwargs  # 接受额外的参数如 verbose
     ) -> Dict[str, Any]:
         """执行ER关系分析"""
         try:

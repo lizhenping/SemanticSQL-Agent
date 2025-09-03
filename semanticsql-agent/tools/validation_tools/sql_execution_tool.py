@@ -34,7 +34,9 @@ class SQLExecutionTool(BaseTool):
         super().__init__()
         self.db_manager = db_manager
     
-    def _run(self, sql: str, limit: int = 100) -> Dict[str, Any]:
+    def _run(self, sql: str, limit: int = 100,
+        **kwargs  # 接受额外的参数如 verbose
+    ) -> Dict[str, Any]:
         """执行SQL"""
         try:
             # 添加LIMIT如果没有

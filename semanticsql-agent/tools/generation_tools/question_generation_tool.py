@@ -54,6 +54,8 @@ class QuestionGenerationTool(BaseTool):
         operations: List[str] = None,
         scenario: Optional[Dict[str, Any]] = None,
         memory: Optional[Dict[str, Any]] = None
+    ,
+        **kwargs  # 接受额外的参数如 verbose
     ) -> Dict[str, Any]:
         """生成问题"""
         try:

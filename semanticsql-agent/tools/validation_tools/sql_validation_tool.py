@@ -35,7 +35,9 @@ class SQLValidationTool(BaseTool):
         super().__init__()
         self.db_manager = db_manager
     
-    def _run(self, sql: str, memory: Dict[str, Any]) -> Dict[str, Any]:
+    def _run(self, sql: str, memory: Dict[str, Any],
+        **kwargs  # 接受额外的参数如 verbose
+    ) -> Dict[str, Any]:
         """验证SQL"""
         try:
             # 基本语法验证

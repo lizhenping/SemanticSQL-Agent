@@ -47,6 +47,8 @@ class ColumnMeaningTool(BaseAnalysisTool):
         schema_info: Dict[str, Any] = None,
         domain_info: Dict[str, Any] = None,
         field_classification: Dict[str, Any] = None
+    ,
+        **kwargs  # 接受额外的参数如 verbose
     ) -> Dict[str, Any]:
         """执行列含义分析"""
         try:
