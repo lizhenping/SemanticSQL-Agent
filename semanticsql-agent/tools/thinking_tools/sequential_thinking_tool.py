@@ -3,10 +3,10 @@
 基于 LangChain BaseTool
 """
 
-from typing import Dict, Any, Type
+from typing import Dict, Any, Type, Optional
 from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 from models.exceptions import ToolExecutionError
 from prompts.manager import PromptManager
@@ -40,10 +40,17 @@ class SequentialThinkingTool(BaseTool):
     description: str = "进行深度分析，制定问题解决策略"
     args_schema: Type[BaseModel] = SequentialThinkingInput
     
+    # 定义必需的字段
+    llm: Optional[ChatOpenAI] = Field(default=None, exclude=True)
+    prompt_manager: Optional[PromptManager] = Field(default=None, exclude=True)
+    
+    # Pydantic v2配置
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
     def __init__(self, llm: ChatOpenAI):
         super().__init__()
-        object.__setattr__(self, 'llm', llm)
-        object.__setattr__(self, 'prompt_manager', PromptManager())
+        self.llm = llm
+        self.prompt_manager = PromptManager()
     
     def _run(
         self,

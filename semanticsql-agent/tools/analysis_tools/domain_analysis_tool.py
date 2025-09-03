@@ -3,9 +3,9 @@
 基于 LangChain BaseTool，参考initial_domain_analysis_pipeline的实现
 """
 
-from typing import Dict, Any, Type, Union, List
+from typing import Dict, Any, Type, Union, List, Optional
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 import json
 import logging
 
@@ -30,11 +30,18 @@ class DomainAnalysisTool(BaseAnalysisTool):
     name: str = "domain_analysis"
     description: str = "使用LLM分析数据库的业务领域，识别主要业务场景和数据特征"
     args_schema: Type[BaseModel] = DomainAnalysisInput
+    
+    # 定义必需的字段
+    llm: Optional[ChatOpenAI] = Field(default=None, exclude=True)
+    prompt_manager: Optional[PromptManager] = Field(default=None, exclude=True)
+    
+    # Pydantic v2配置
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __init__(self, llm: ChatOpenAI, **kwargs):
         super().__init__(**kwargs)
-        object.__setattr__(self, "prompt_manager", PromptManager())
-        object.__setattr__(self, "llm", llm)
+        self.llm = llm
+        self.prompt_manager = PromptManager()
 
     def _run(self, input: Union[Dict[str, Any], str] = None, **kwargs) -> str:
         """执行LLM驱动的领域分析"""

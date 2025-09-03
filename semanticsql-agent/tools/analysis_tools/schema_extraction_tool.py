@@ -4,7 +4,7 @@
 """
 
 from typing import Dict, Any, Type, List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from models.exceptions import (
     ToolExecutionError,
@@ -29,11 +29,17 @@ class SchemaExtractionTool(BaseAnalysisTool):
     name: str = "schema_extraction"
     description: str = "提取数据库的完整结构信息，包括表、列、索引、外键等"
     args_schema: Type[BaseModel] = SchemaExtractionInput
+    
+    # 正确定义db_manager字段
+    db_manager: Optional[DatabaseManager] = Field(default=None, exclude=True)
+    
+    # Pydantic v2配置
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __init__(self, db_manager: DatabaseManager, **kwargs):
         super().__init__(**kwargs)
-        # 使用object.__setattr__避开Pydantic验证
-        object.__setattr__(self, 'db_manager', db_manager)
+        # 直接赋值，因为已经定义了字段
+        self.db_manager = db_manager
 
     def _run(
         self,

@@ -6,7 +6,7 @@ SQL反思工具 - 分析执行结果并提供优化建议
 from typing import Dict, Any, Type, List, Optional
 from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from models.exceptions import ToolExecutionError
 from prompts.manager import PromptManager
@@ -36,18 +36,26 @@ class SQLReflectionTool(BaseTool):
     description: str = "分析SQL执行结果，识别问题来源并建议下一步行动"
     args_schema: Type[BaseModel] = SQLReflectionInput
     
+    # 定义必需的字段
+    llm: Optional[ChatOpenAI] = Field(default=None, exclude=True)
+    prompt_manager: Optional[PromptManager] = Field(default=None, exclude=True)
+    quality_weights: Optional[Dict[str, float]] = Field(default=None, exclude=True)
+    
+    # Pydantic v2配置
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
     def __init__(self, llm: ChatOpenAI):
         super().__init__()
-        object.__setattr__(self, 'llm', llm)
-        object.__setattr__(self, 'prompt_manager', PromptManager())
+        self.llm = llm
+        self.prompt_manager = PromptManager()
         
-        # 定义质量权重，使用object.__setattr__避开Pydantic验证
-        object.__setattr__(self, 'quality_weights', {
+        # 定义质量权重
+        self.quality_weights = {
             "syntax_correctness": 0.3,
             "semantic_match": 0.3,
             "execution_success": 0.25,
             "result_relevance": 0.15
-        })
+        }
     
     def _run(
         self,

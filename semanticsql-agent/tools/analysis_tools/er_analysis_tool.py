@@ -3,9 +3,9 @@
 基于 LangChain BaseTool，参考er_analysis_pipeline的实现
 """
 
-from typing import Dict, Any, Type, List
+from typing import Dict, Any, Type, List, Optional
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 import json
 import logging
 
@@ -31,11 +31,19 @@ class ERAnalysisTool(BaseAnalysisTool):
     description: str = "分析数据库表之间的物理关系和逻辑关系"
     args_schema: Type[BaseModel] = ERAnalysisInput
     
+    # 定义必需的字段
+    llm: Optional[ChatOpenAI] = Field(default=None, exclude=True)
+    db_manager: Optional[DatabaseManager] = Field(default=None, exclude=True)
+    prompt_manager: Optional[PromptManager] = Field(default=None, exclude=True)
+    
+    # Pydantic v2配置
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
     def __init__(self, llm: ChatOpenAI, db_manager: DatabaseManager = None, **kwargs):
         super().__init__(**kwargs)
-        object.__setattr__(self, 'llm', llm)
-        object.__setattr__(self, 'db_manager', db_manager)
-        object.__setattr__(self, 'prompt_manager', PromptManager())
+        self.llm = llm
+        self.db_manager = db_manager
+        self.prompt_manager = PromptManager()
     
     def _run(
         self,
