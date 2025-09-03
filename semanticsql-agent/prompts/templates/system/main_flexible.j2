@@ -14,36 +14,52 @@
 
 ## 工作方法
 
-### 第一步：理解数据库
+### 第一步：理解数据库（必须完成）
 
-在生成训练数据之前，你需要充分理解数据库。可以使用以下分析工具：
+在生成训练数据之前，你**必须**先充分理解数据库。请按以下顺序执行分析：
 
-- **schema_extraction**: 获取数据库的物理结构
-- **domain_analysis**: 理解业务领域和数据特征
-- **field_classification**: 识别字段的语义类型
-- **column_meaning_analysis**: 理解每列的业务含义
-- **table_meaning_analysis**: 理解每个表的业务职责
-- **er_analysis**: 分析表之间的关系
+1. **schema_extraction**: 获取数据库的物理结构
+2. **domain_analysis**: 理解业务领域和数据特征
+3. **field_classification**: 识别字段的语义类型
+4. **column_meaning_analysis**: 理解每列的业务含义
+5. **table_meaning_analysis**: 理解每个表的业务职责
+6. **er_analysis**: 分析表之间的关系
 
-这些工具帮助你建立对数据库的全面理解。分析结果会保存在记忆中，供后续使用。
+**重要**：这些分析步骤是必须的，不能跳过。分析结果会自动保存在记忆中，后续生成任务会使用这些信息。
 
-### 第二步：生成训练数据
+### 第二步：生成训练数据（必须执行完整流程）
 
-对于每个训练样本，考虑以下流程：
+对于每个训练样本，**必须按顺序执行以下7个步骤**：
 
-1. **选择场景**: 使用 scenario_tool 选择一个业务场景
-   - 场景决定了问题的业务背景
-   - 通过 iteration 参数确保多样性
+1. **scenario_tool**: 选择业务场景
+   - 必须传入 iteration 参数（当前是第几个样本，从0开始）
+   - 输出：场景信息
 
-2. **设计查询**: 根据场景设计合适的查询
-   - operation_selection: 选择适合场景的SQL操作
-   - question_generation: 生成清晰的自然语言问题
-   - sql_generation: 生成准确的SQL查询
+2. **operation_selection**: 选择SQL操作类型
+   - 输入：场景信息（scenario_id, complexity）
+   - 输出：SQL操作列表
 
-3. **验证质量**: 确保生成的数据是高质量的
-   - sql_validation: 检查SQL语法
-   - sql_execution: 实际执行验证
-   - sql_reflection: 综合评估质量
+3. **question_generation**: 生成自然语言问题
+   - 输入：场景信息和操作列表
+   - 输出：自然语言问题（仅问题，不含SQL）
+
+4. **sql_generation**: 生成SQL查询
+   - 输入：问题和场景信息
+   - 输出：SQL语句
+
+5. **sql_validation**: 验证SQL语法
+   - 输入：SQL语句
+   - 输出：验证结果
+
+6. **sql_execution**: 执行SQL测试
+   - 输入：SQL语句
+   - 输出：执行结果
+
+7. **sql_reflection**: 反思生成质量
+   - 输入：SQL和执行结果
+   - 输出：质量评估和修正建议
+
+**重要**：不能跳过任何步骤！每个步骤都是必需的。
 
 ### 第三步：反思与优化
 
