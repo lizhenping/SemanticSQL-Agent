@@ -225,22 +225,24 @@ class TrajectoryCallbackHandler(BaseCallbackHandler):
         **kwargs: Any
     ) -> Any:
         """LLM生成结束"""
-        import re
+        from utils.thinking_parser import ThinkingOutputParser
         
-        # 使用正则表达式过滤think标签
-        think_pattern = re.compile(r'<think>(.*?)</think>', re.DOTALL)
+        # 使用 ThinkingOutputParser 处理输出
+        parser = ThinkingOutputParser()
         
         if response.generations:
             for generation_list in response.generations:
                 for generation in generation_list:
                     if hasattr(generation, 'text') and generation.text:
-                        # 提取think内容
-                        think_matches = think_pattern.findall(generation.text)
-                        if think_matches:
-                            self.logger.debug(f"LLM thinking: {think_matches[0][:200]}...")
+                        # 解析输出
+                        parsed = parser.parse(generation.text)
                         
-                        # 清理think标签
-                        generation.text = think_pattern.sub('', generation.text).strip()
+                        # 记录思考过程
+                        if parsed['has_thinking']:
+                            self.logger.debug(f"LLM thinking: {parsed['thinking'][:200]}...")
+                        
+                        # 更新生成的文本为清理后的答案
+                        generation.text = parsed['answer']
         
         self.logger.debug(f"LLM finished with {len(response.generations)} generations")
     

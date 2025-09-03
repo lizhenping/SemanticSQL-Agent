@@ -1,31 +1,47 @@
-# Think标签处理方案
+# Think标签处理方案（LangChain 标准实现）
 
 ## 问题描述
 
-Claude 等 LLM 在输出时可能包含 `<think>` 标签来表示内部思考过程。这些标签：
+Claude 等 LLM 在输出时可能包含 `<think>` 或 `<thinking>` 标签来表示内部思考过程。这些标签：
 1. 不应该被传递给工具作为参数
 2. 不应该被包含在最终输出中
 3. 可能干扰 JSON 解析
 
-## 解决方案（基于 LangChain）
+## 解决方案（完全符合 LangChain 设计模式）
 
-### 1. 在 LangChain 回调处理器中过滤
-文件：`utils/callbacks.py`
-- 在 `on_llm_end()` 回调中使用正则表达式过滤 LLM 输出
-- 将思考内容记录到日志（debug级别）
-- 直接修改 `generation.text`，清理后的内容会传递给后续处理
-- 这是 LangChain 推荐的处理方式，在回调层面统一处理
+### 1. 自定义输出解析器
+文件：`utils/thinking_parser.py`
+- `ThinkingOutputParser`: 继承自 `BaseOutputParser`，专门处理 thinking 标签
+- `ReActThinkingParser`: 专门用于 ReAct 模式，同时处理 thinking 和 action
+- 符合 LangChain 的可插拔设计，可以与任何 LLM 和 Chain 组合使用
 
-### 2. 在工具基类中自动清理
-文件：`tools/base_tool.py`
-- 重写 `run()` 方法，在工具执行后自动清理输出
-- 处理字符串和字典类型的返回值
-- 递归清理嵌套结构中的 think 标签
+```python
+# 使用方式
+from utils.thinking_parser import ThinkingOutputParser
 
-### 3. 更新系统提示词
-文件：`prompts/templates/system/main.j2`
-- 明确告诉 LLM 不要使用 `<think>` 标签
-- 强调 Action Input 必须是有效的参数格式
+parser = ThinkingOutputParser()
+chain = prompt | llm | parser
+
+result = chain.invoke({"question": "你的问题"})
+print(f"思考过程: {result['thinking']}")
+print(f"最终答案: {result['answer']}")
+```
+
+### 2. Thinking Chain 实现
+文件：`chains/thinking_chain.py`
+- 提供了完整的 Chain 实现和 LCEL 实现
+- 支持单步思考和多步思考链
+- 完全符合 LangChain 的链式调用模式
+
+### 3. 在回调和工具中集成
+- `utils/callbacks.py`: 使用 `ThinkingOutputParser` 在回调层统一处理
+- `tools/base_tool.py`: 使用 parser 清理工具输出
+- 保持了 DRY 原则，核心逻辑只在 parser 中实现一次
+
+### 4. 测试驱动开发
+文件：`tests/test_thinking_parser.py`
+- 完整的单元测试覆盖各种场景
+- 易于验证和维护
 
 ## 使用示例
 

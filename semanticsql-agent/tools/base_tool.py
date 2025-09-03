@@ -64,33 +64,35 @@ class BaseSemanticSQLTool(BaseTool):
     
     def run(self, *args, **kwargs) -> Any:
         """执行工具并清理输出"""
-        import re
-        result = self._run(*args, **kwargs)
+        from utils.thinking_parser import ThinkingOutputParser
         
-        # 如果结果是字符串，清理think标签
+        result = self._run(*args, **kwargs)
+        parser = ThinkingOutputParser()
+        
+        # 如果结果是字符串，使用parser清理
         if isinstance(result, str):
-            think_pattern = re.compile(r'<think>(.*?)</think>', re.DOTALL)
-            result = think_pattern.sub('', result).strip()
+            parsed = parser.parse(result)
+            if parsed['has_thinking']:
+                self.logger.debug(f"Tool thinking: {parsed['thinking'][:100]}...")
+            result = parsed['answer']
         elif isinstance(result, dict):
             # 递归清理字典中的字符串值
-            result = self._clean_dict(result)
+            result = self._clean_dict_with_parser(result, parser)
         
         return result
     
-    def _clean_dict(self, d: dict) -> dict:
-        """递归清理字典中的think标签"""
-        import re
-        think_pattern = re.compile(r'<think>(.*?)</think>', re.DOTALL)
-        
+    def _clean_dict_with_parser(self, d: dict, parser) -> dict:
+        """使用parser递归清理字典中的thinking标签"""
         cleaned = {}
         for key, value in d.items():
             if isinstance(value, str):
-                cleaned[key] = think_pattern.sub('', value).strip()
+                parsed = parser.parse(value)
+                cleaned[key] = parsed['answer']
             elif isinstance(value, dict):
-                cleaned[key] = self._clean_dict(value)
+                cleaned[key] = self._clean_dict_with_parser(value, parser)
             elif isinstance(value, list):
                 cleaned[key] = [
-                    think_pattern.sub('', item).strip() if isinstance(item, str) else item
+                    parser.parse(item)['answer'] if isinstance(item, str) else item
                     for item in value
                 ]
             else:
