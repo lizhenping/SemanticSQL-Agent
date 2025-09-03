@@ -3,6 +3,15 @@
 ## 业务背景
 - 领域类型：{{ domain_type }}
 - 领域描述：{{ domain_description }}
+{% if key_entities %}
+- 关键实体：{{ key_entities | join(', ') }}
+{% endif %}
+{% if business_characteristics %}
+- 业务特征：
+{% for char in business_characteristics %}
+  - {{ char }}
+{% endfor %}
+{% endif %}
 
 ## 表信息
 表名：{{ table_name }}

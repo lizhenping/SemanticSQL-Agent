@@ -201,13 +201,15 @@ class ColumnMeaningTool(BaseAnalysisTool):
         domain_info: Dict[str, Any]
     ) -> Dict[str, str]:
         """为一个表的所有列生成描述"""
-        # 准备提示词数据
+        # 准备提示词数据，包含所有前面步骤的信息
         prompt_data = {
             'table_name': table_name,
             'table_ddl': table_ddl,
             'columns': columns,
             'domain_type': domain_info.get('domain_type', '未知'),
-            'domain_description': domain_info.get('domain_description', '')
+            'domain_description': domain_info.get('domain_description', ''),
+            'key_entities': domain_info.get('key_entities', []),
+            'business_characteristics': domain_info.get('business_characteristics', [])
         }
         
         # 渲染提示词

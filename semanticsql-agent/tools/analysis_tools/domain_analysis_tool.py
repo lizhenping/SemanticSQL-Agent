@@ -163,12 +163,15 @@ class DomainAnalysisTool(BaseAnalysisTool):
         database_name: str
     ) -> Dict[str, Any]:
         """使用LLM生成领域描述"""
-        # 准备提示词数据
+        # 准备提示词数据，包含完整的统计信息
         prompt_data = {
             'database_name': database_name,
             'database_ddl': database_ddl,
             'type_distribution': field_statistics['type_distribution'],
-            'field_patterns': field_statistics['patterns']
+            'field_patterns': field_statistics['patterns'],
+            'pattern_examples': field_statistics.get('pattern_examples', {}),
+            'total_tables': database_ddl.count('CREATE TABLE'),
+            'total_fields': sum(field_statistics['type_distribution'].values())
         }
         
         # 使用结构化提示词
