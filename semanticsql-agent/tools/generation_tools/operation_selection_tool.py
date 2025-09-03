@@ -3,20 +3,21 @@
 基于 LangChain BaseTool
 """
 
-from typing import Dict, Any, Type, List
+from typing import Dict, Any, Type, List, Optional
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 import json
 
 from models.base import SQLOperation, DifficultyLevel
 from models.exceptions import ToolExecutionError
-from tools.utils import merge_tool_params
 
 
 class OperationSelectionInput(BaseModel):
     """操作选择输入"""
-    scenario: Dict[str, Any] = Field(description="场景信息")
-    memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
+    scenario_id: str = Field(default="", description="场景ID")
+    complexity: str = Field(default="medium", description="场景复杂度")
+    scenario: Optional[Dict[str, Any]] = Field(default=None, description="完整场景信息")
+    memory: Optional[Dict[str, Any]] = Field(default=None, description="包含数据库分析结果的记忆")
 
 
 class OperationSelectionTool(BaseTool):
@@ -24,28 +25,25 @@ class OperationSelectionTool(BaseTool):
     
     name: str = "operation_selection"
     description: str = "根据场景复杂度和业务需求选择合适的SQL操作组合"
-    # args_schema: Type[BaseModel] = OperationSelectionInput  # Commented due to LangChain complex parameter issues
+    args_schema: Type[BaseModel] = OperationSelectionInput
     
-    def _run(self, tool_input: Any = None, **kwargs) -> Dict[str, Any]:
+    def _run(
+        self, 
+        scenario_id: str = "",
+        complexity: str = "medium",
+        scenario: Optional[Dict[str, Any]] = None,
+        memory: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """选择SQL操作"""
         try:
-            # 使用辅助函数解析参数
-            params = merge_tool_params(tool_input, kwargs, expected_params=["scenario", "memory"])
-            
-            # 获取参数
-            scenario = params.get('scenario', {})
-            memory = params.get('memory', {})
-            
-            # 处理scenario如果是字符串
-            if isinstance(scenario, str) and scenario.strip():
-                try:
-                    scenario = json.loads(scenario)
-                except json.JSONDecodeError:
-                    scenario = {}
-            
-            complexity = scenario.get("complexity", "medium")
-            category = scenario.get("category", "")
-            suggested_operations = scenario.get("applicable_operations", [])
+            # 如果提供了完整的scenario，使用它；否则基于complexity选择
+            if scenario:
+                complexity = scenario.get("complexity", complexity)
+                category = scenario.get("category", "")
+                suggested_operations = scenario.get("applicable_operations", [])
+            else:
+                category = ""
+                suggested_operations = []
             
             # 如果场景已经有建议的操作，直接使用
             if suggested_operations:

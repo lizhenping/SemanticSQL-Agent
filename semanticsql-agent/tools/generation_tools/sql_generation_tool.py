@@ -14,14 +14,14 @@ from models.base import SQLOperation
 from models.exceptions import ToolExecutionError, LLMError
 from utils.database import DatabaseManager
 from prompts.manager import PromptManager
-from tools.utils import merge_tool_params
 
 
 class SQLGenerationInput(BaseModel):
     """SQL生成输入"""
     question: str = Field(description="自然语言问题")
-    memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
-    operations: List[str] = Field(default_factory=list, description="建议的SQL操作")
+    scenario: Optional[Dict[str, Any]] = Field(default=None, description="场景信息")
+    memory: Optional[Dict[str, Any]] = Field(default=None, description="包含数据库分析结果的记忆")
+    operations: Optional[List[str]] = Field(default=None, description="建议的SQL操作")
 
 
 class GeneratedSQL(BaseModel):
@@ -40,8 +40,7 @@ class SQLGenerationTool(BaseTool):
     
     name: str = "sql_generation"
     description: str = "根据自然语言问题和数据库结构生成对应的SQL查询"
-    # 注释掉args_schema以避免LangChain的参数验证问题
-    # args_schema: Type[BaseModel] = SQLGenerationInput
+    args_schema: Type[BaseModel] = SQLGenerationInput
     
     # 定义必需的字段
     llm: Optional[ChatOpenAI] = Field(default=None, exclude=True)
@@ -59,30 +58,21 @@ class SQLGenerationTool(BaseTool):
     
     def _run(
         self,
-        tool_input: Any = None,
-        **kwargs
+        question: str,
+        scenario: Optional[Dict[str, Any]] = None,
+        memory: Optional[Dict[str, Any]] = None,
+        operations: Optional[List[str]] = None,
+        dialect: str = "mysql"
     ) -> Dict[str, Any]:
         """生成SQL查询"""
         try:
-            # 使用辅助函数解析参数
-            params = merge_tool_params(
-                tool_input, 
-                kwargs, 
-                expected_params=["question", "memory", "operations", "dialect"]
-            )
-            
-            # 获取参数
-            question = params.get("question", "")
-            memory = params.get("memory", {})
-            operations = params.get("operations", [])
-            dialect = params.get("dialect", "mysql")
-            
-            # 处理memory如果是字符串
-            if isinstance(memory, str) and memory.strip():
-                try:
-                    memory = json.loads(memory)
-                except json.JSONDecodeError:
-                    memory = {}
+            # 处理默认值
+            if memory is None:
+                memory = {}
+            if operations is None:
+                operations = []
+            if scenario is None:
+                scenario = {}
             
             # 从记忆中获取必要信息
             db_analysis = memory.get("db_analysis", {})

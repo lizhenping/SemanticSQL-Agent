@@ -11,14 +11,14 @@ import json
 
 from models.exceptions import ToolExecutionError
 from prompts.manager import PromptManager
-from tools.utils import merge_tool_params
 
 
 class QuestionGenerationInput(BaseModel):
     """问题生成输入"""
-    scenario: Dict[str, Any] = Field(description="场景信息")
-    operations: List[str] = Field(description="SQL操作列表")
-    memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
+    scenario_id: str = Field(default="", description="场景ID")
+    operations: List[str] = Field(default_factory=list, description="SQL操作列表")
+    scenario: Optional[Dict[str, Any]] = Field(default=None, description="完整场景信息")
+    memory: Optional[Dict[str, Any]] = Field(default=None, description="包含数据库分析结果的记忆")
 
 
 class GeneratedQuestion(BaseModel):
@@ -34,7 +34,7 @@ class QuestionGenerationTool(BaseTool):
     
     name: str = "question_generation"
     description: str = "根据场景和数据库结构生成自然语言问题"
-    # args_schema: Type[BaseModel] = QuestionGenerationInput  # Commented due to LangChain complex parameter issues
+    args_schema: Type[BaseModel] = QuestionGenerationInput
     
     # 定义必需的字段
     llm: Optional[ChatOpenAI] = Field(default=None, exclude=True)
@@ -48,23 +48,22 @@ class QuestionGenerationTool(BaseTool):
         self.llm = llm
         self.prompt_manager = PromptManager()
     
-    def _run(self, tool_input: Any = None, **kwargs) -> Dict[str, Any]:
+    def _run(
+        self,
+        scenario_id: str = "",
+        operations: List[str] = None,
+        scenario: Optional[Dict[str, Any]] = None,
+        memory: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """生成问题"""
         try:
-            # 使用辅助函数解析参数
-            params = merge_tool_params(tool_input, kwargs, expected_params=["scenario", "operations", "memory"])
-            
-            # 获取参数
-            scenario = params.get('scenario', {})
-            operations = params.get('operations', [])
-            memory = params.get('memory', {})
-            
-            # 处理scenario如果是字符串
-            if isinstance(scenario, str) and scenario.strip():
-                try:
-                    scenario = json.loads(scenario)
-                except json.JSONDecodeError:
-                    scenario = {}
+            # 处理默认值
+            if operations is None:
+                operations = []
+            if scenario is None:
+                scenario = {}
+            if memory is None:
+                memory = {}
             
             # QuestionGenerationTool基于场景和操作生成问题，不强制依赖数据库分析
             category = scenario.get("category", "通用查询")
