@@ -822,103 +822,219 @@ class SQLAgent:
 - **简单循环控制**：外部只负责数量控制，内部完全自主
 - **提示词驱动**：通过提示词引导，而非硬编码流程
 
-#### 3.2.2 简化的提示词系统设计
+#### 3.2.2 分层的Jinja2提示词系统设计
 
-**关键原则**：在提示词中提供思考流程指导，但不强制执行顺序
+**核心原则**：采用分层的Jinja2模板管理，系统提示词 + 各工具独立提示词
 
-**简化的系统提示词模板**：
-```python
-from langchain.prompts import ChatPromptTemplate
+### **🏗️ 提示词架构设计**
 
-# 简化的系统提示词 - 提供指导但不强制流程
-system_prompt = """你是专业的NL2SQL训练数据生成专家。
+```
+prompts/
+├── templates/
+│   ├── system/
+│   │   └── main.j2                    # 系统主提示词
+│   ├── tools/
+│   │   ├── schema_extraction.j2       # schema提取工具提示词
+│   │   ├── domain_analysis.j2         # 领域分析工具提示词
+│   │   ├── scenario_operation.j2      # 场景-操作生成工具提示词
+│   │   ├── question_generation.j2     # 问题生成工具提示词
+│   │   ├── sql_generation.j2          # SQL生成工具提示词
+│   │   └── sql_reflection.j2          # 反思工具提示词
+│   └── analysis/
+│       └── database_analysis.j2       # 数据库分析提示词
+└── manager.py                         # 提示词管理器
+```
 
-## 当前任务  
+### **🎯 系统提示词模板（system/main.j2）**
+
+```jinja2
+你是专业的NL2SQL训练数据生成专家，基于ReAct模式工作。
+
+## 当前任务
 {{input}}
 
 ## 环境信息
 - 数据库: {{database_name}}
-- 样本编号: {{iteration + 1}}
-- 记忆状态: {{memory_summary}}
+{% if db_analysis %}
+- 分析状态: 已完成数据库分析
+{% else %}
+- 分析状态: 需要先分析数据库
+{% endif %}
+
+## 工作流程指导
+
+### 🧠 智能工作策略：
+
+1. **记忆检查优先**：
+   - 检查 {{db_analysis}} 中是否有完整的数据库分析
+   - 如果缺少关键分析，先调用相应的分析工具
+
+2. **场景方案获取**：
+   - 调用 scenario_operation_generation 获取场景和操作方案
+   - 工具会生成匹配的提示词模板
+
+3. **记忆驱动生成**：
+   - 调用 question_generation（工具自动注入场景信息）
+   - 调用 sql_generation（工具自动注入问题和场景信息）
+
+4. **质量保证**：
+   - 验证、执行、反思每个生成的样本
 
 ## 可用工具
 {{tools}}
 
-## 思考流程建议（仅供参考，可自主调整）
-
-### 🧠 生成单个样本的常见思考路径：
-
-1. **状态检查**：
-   - 我是否已经了解数据库结构？
-   - 记忆中有哪些可用的分析信息？
-
-2. **按需分析**（如果记忆中信息不足）：
-   - schema_extraction: 了解表结构
-   - domain_analysis: 识别业务领域
-   - field_classification: 理解字段类型
-   - column_meaning/table_meaning: 理解业务含义
-   - er_analysis: 分析表关系
-
-3. **场景构建**：
-   - scenario_tool: 选择合适的业务场景
-   - operation_selection: 根据场景选择SQL操作类型
-
-4. **内容生成**：
-   - question_generation: 生成自然语言问题
-   - sql_generation: 将问题转换为SQL
-
-5. **质量保证**：
-   - sql_validation: 验证SQL语法
-   - sql_execution: 执行SQL测试
-   - sql_reflection: 评估质量，决定是否需要修正
-
-6. **智能修正**（如果质量不达标）：
-   - sequential_thinking: 深度分析问题根源
-   - 重新调用相应工具进行修正
-
-### 🎯 决策原则
-- **记忆优先**: 优先使用已有的分析结果
-- **按需执行**: 只调用真正需要的工具
-- **质量导向**: 确保每个样本都是高质量的
-- **自主决策**: 根据实际情况灵活调整执行策略
-
-## ReAct格式
+## ReAct执行格式
 Thought: 分析当前情况，决定下一步
 Action: 工具名称
-Action Input: {{"参数": "值"}}  
-Observation: 工具返回结果
-... (重复直到完成)
-Final Answer: 最终的训练样本
+Action Input: 工具参数
+Observation: 工具结果
+...
+Final Answer: 最终结果
 
-**记住**: 这些建议只是参考，你有完全的自主决策权！根据实际需求灵活选择工具和执行顺序。
-
-### 💡 ReAct反思的正确方式
-
-当你发现质量问题时，应该这样自主推理：
-
-```
-Thought: 反思发现问题，我需要分析具体原因。
-Action: sequential_thinking
-Observation: 分析结果指出具体问题
-
-Thought: 根据分析结果，我认为需要重新生成更好的问题。
-Action: question_generation
-Observation: 生成了改进的问题
-
-Thought: 现在用新问题生成SQL。
-Action: sql_generation
-Observation: 生成了新的SQL
+**记住**：你有完全的自主决策权，根据实际需求灵活选择工具和执行顺序。
 ```
 
-**注意**：不要想着"回到某个步骤"，而是"我现在需要做什么"。
-"""
+### **🛠️ 工具独立提示词示例**
 
-# 创建简化的提示词模板
-prompt = ChatPromptTemplate.from_messages([
-    ("system", system_prompt),
-    ("human", "{input}"),
-    ("assistant", "{agent_scratchpad}")
-])
+#### **scenario_operation.j2**：
+```jinja2
+# scenario_operation_generation 工具的专用提示词
+
+你需要为NL2SQL训练数据生成选择场景和操作组合。
+
+## 前置条件
+{% if db_analysis.schema_info %}
+- ✅ 数据库结构: {{db_analysis.schema_info.table_count}} 个表
+{% endif %}
+{% if db_analysis.domain_info %}
+- ✅ 业务领域: {{db_analysis.domain_info.primary_domain}}
+{% endif %}
+
+## 任务要求
+基于数据库分析结果，选择一个合适的场景和操作组合。
+
+## 输出格式
+返回包含以下信息的JSON：
+- scenario: 场景信息（名称、复杂度、焦点领域）
+- operations: SQL操作列表
+- generated_prompt: 为问题生成工具准备的提示词模板
+
+根据数据库特征智能选择场景和操作组合。
+```
+
+#### **question_generation.j2**：
+```jinja2
+# question_generation 工具的专用提示词
+
+你需要基于场景信息生成自然语言问题。
+
+## 前置条件检查
+{% if db_analysis.scenario_operation %}
+- ✅ 场景方案: {{db_analysis.scenario_operation.scenario.name}}
+- ✅ 操作类型: {{db_analysis.scenario_operation.operations}}
+- ✅ 生成提示词: {{db_analysis.scenario_operation.generated_prompt}}
+{% else %}
+- ❌ 缺少场景方案，需要先调用 scenario_operation_generation
+{% endif %}
+
+## 任务要求
+{{db_analysis.scenario_operation.generated_prompt}}
+
+## 数据库上下文
+{% if db_analysis.schema_info %}
+可用表: {{db_analysis.schema_info.tables | map(attribute='name') | list}}
+{% endif %}
+
+生成一个清晰、具体的自然语言问题。
+```
+
+#### **sql_generation.j2**：
+```jinja2
+# sql_generation 工具的专用提示词
+
+你需要将自然语言问题转换为SQL查询。
+
+## 前置条件检查
+{% if db_analysis.question %}
+- ✅ 问题: {{db_analysis.question}}
+{% else %}
+- ❌ 缺少问题，需要先调用 question_generation
+{% endif %}
+
+{% if db_analysis.scenario_operation %}
+- ✅ 场景: {{db_analysis.scenario_operation.scenario.name}}
+- ✅ 操作: {{db_analysis.scenario_operation.operations}}
+{% endif %}
+
+{% if db_analysis.schema_info %}
+- ✅ 数据库结构: 可用
+{% else %}
+- ❌ 缺少数据库结构，需要先调用 schema_extraction
+{% endif %}
+
+## 数据库结构
+{% if db_analysis.schema_info %}
+{% for table in db_analysis.schema_info.tables %}
+表: {{table.name}}
+{% for column in table.columns %}
+  - {{column.name}} ({{column.type}})
+{% endfor %}
+{% endfor %}
+{% endif %}
+
+## 任务要求
+基于问题"{{db_analysis.question}}"和场景要求，生成对应的SQL查询。
+确保使用正确的表名和字段名。
+
+## 操作要求
+必须包含以下SQL操作: {{db_analysis.scenario_operation.operations}}
+```
+
+#### **sql_reflection.j2**：
+```jinja2
+# sql_reflection 工具的专用提示词
+
+你需要评估SQL生成的质量。
+
+## 评估对象
+- 问题: {{question}}
+- SQL: {{sql}}
+- 执行结果: {{execution_result}}
+
+## 评估维度
+1. SQL语法正确性
+2. 执行成功性
+3. 结果合理性
+4. 问题-SQL语义匹配度
+
+## 输出格式
+返回JSON格式的评估结果：
+{
+    "quality_score": 0.85,
+    "needs_revision": false,
+    "suggested_tool": "工具名称",
+    "suggestion": "修正建议"
+}
+```
+
+### **🎯 提示词管理器（prompts/manager.py）**
+
+```python
+class PromptManager:
+    """Jinja2提示词管理器"""
+    
+    def __init__(self):
+        self.env = Environment(loader=FileSystemLoader('prompts/templates'))
+    
+    def get_system_prompt(self, **context):
+        """获取系统提示词"""
+        template = self.env.get_template('system/main.j2')
+        return template.render(**context)
+    
+    def get_tool_prompt(self, tool_name: str, **context):
+        """获取工具专用提示词"""
+        template = self.env.get_template(f'tools/{tool_name}.j2')
+        return template.render(**context)
 ```
 
 ### **🎯 提示词设计的ReAct兼容性原则**
