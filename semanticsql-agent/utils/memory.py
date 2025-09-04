@@ -68,10 +68,13 @@ class DatabaseAnalysisMemory(BaseMemory):
         memory_mapping = {
             "schema_extraction": "schema_info",
             "domain_analysis": "domain_info", 
-            "field_classification": "field_classification",
-            "column_meaning_analysis": "column_meanings",
-            "table_meaning_analysis": "table_meanings",
-            "er_analysis": "er_relations"
+            "field_analysis": "field_classification",  # 更新工具名称
+            "column_analysis": "column_meanings",      # 更新工具名称
+            "table_analysis": "table_meanings",        # 更新工具名称
+            "er_analysis": "er_relations",
+            "scenario_operation_generation": "all_scenario_combinations",  # 新增
+            "question_generation": "current_question",  # 新增
+            "sql_generation": "current_sql"             # 新增
         }
         
         if tool_name in memory_mapping:

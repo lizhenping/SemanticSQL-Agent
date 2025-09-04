@@ -29,8 +29,7 @@ from tools.analysis_tools.column_meaning_tool import ColumnMeaningTool
 from tools.analysis_tools.table_meaning_tool import TableMeaningTool
 from tools.analysis_tools.er_analysis_tool import ERAnalysisTool
 
-from tools.generation_tools.scenario_tool import ScenarioTool
-from tools.generation_tools.operation_selection_tool import OperationSelectionTool
+from tools.generation_tools.scenario_operation_tool import ScenarioOperationTool
 from tools.generation_tools.question_generation_tool import QuestionGenerationTool
 from tools.generation_tools.sql_generation_tool import SQLGenerationTool
 
@@ -92,8 +91,7 @@ class SQLAgent(BaseAgent):
         # 生成工具
         tools.extend(
             [
-                ScenarioTool(),
-                OperationSelectionTool(),
+                ScenarioOperationTool(),  # 合并的场景-操作工具
                 QuestionGenerationTool(llm=self.llm),
                 SQLGenerationTool(llm=self.llm, db_manager=self.db_manager),
             ]
@@ -119,61 +117,16 @@ class SQLAgent(BaseAgent):
         """初始化记忆系统"""
         return DatabaseAnalysisMemory()
 
-    def analyze_database(self, database_name: str) -> Dict[str, Any]:
-        """执行数据库分析"""
-        self.logger.info(f"Starting database analysis for: {database_name}")
 
-        # 构建分析任务 - 让 Agent 自主决定执行流程
-        analysis_task = self.prompt_manager.render_template(
-            "analysis/database_analysis.j2",
-            database_name=database_name
-        )
+    def generate_training_data(self, output_file: str = "training_data.jsonl") -> List[Dict[str, Any]]:
+        """生成训练数据（完全由Agent自主驱动）"""
+        self.logger.info("Starting training data generation (Agent自主模式)")
 
-        # 使用专门的分析Agent执行器，不包含iteration参数
-        analysis_agent = self.create_analysis_agent()
-        
-        try:
-            # 执行分析任务
-            result = analysis_agent.invoke({"input": analysis_task})
-            
-            # 获取分析结果
-            memory_state = self.get_memory_state()
-            return {
-                "success": True,
-                "analysis": memory_state.get("db_analysis", {}),
-                "message": "数据库分析完成",
-                "result": result.get("output", "")
-            }
-        except Exception as e:
-            self.logger.error(f"Database analysis failed: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "message": "数据库分析失败",
-            }
+        # 极简的任务输入
+        task = "请生成高质量的NL2SQL训练数据集，覆盖所有场景组合"
 
-    def generate_training_data(
-        self, count: int, output_file: str, database_name: Optional[str] = None
-    ) -> TrainingDataResult:
-        """生成训练数据"""
-        self.logger.info(f"Starting training data generation: {count} examples")
-
-        # 如果指定了数据库，先执行分析
-        if database_name:
-            analysis_result = self.analyze_database(database_name)
-            if not analysis_result["success"]:
-                raise AgentExecutionError(
-                    step="database_analysis", reason=analysis_result["error"]
-                )
-
-        # 构建生成任务
-        generation_task = self.prompt_manager.render_template(
-            "generation/training_data_generation.j2",
-            count=count
-        )
-
-        # 执行生成任务
-        result = self.run(generation_task)
+        # 完全交给Agent自主决策
+        result = self.run(task)
 
         if not result["success"]:
             raise AgentExecutionError(
@@ -182,27 +135,15 @@ class SQLAgent(BaseAgent):
 
         # 处理生成结果
         try:
-            # 从 Agent 输出中提取生成的数据
+            # 从Agent输出中提取所有生成的样本
             output = result.get("result", {})
-            generated_examples = self._extract_generated_examples(output)
+            generated_examples = self._extract_all_samples(output)
 
             # 保存到文件
             self._save_training_data(generated_examples, output_file)
 
-            # 创建结果对象
-            training_result = TrainingDataResult(
-                total=count,
-                successful=len(generated_examples),
-                failed=count - len(generated_examples),
-                output_file=output_file,
-                examples=generated_examples[:5],  # 只返回前5个示例
-            )
-
-            self.logger.info(
-                f"Generation completed: {training_result.successful}/{count} successful"
-            )
-
-            return training_result
+            self.logger.info(f"Generation completed: {len(generated_examples)} samples generated")
+            return generated_examples
 
         except Exception as e:
             raise AgentExecutionError(
@@ -210,7 +151,7 @@ class SQLAgent(BaseAgent):
                 reason=f"Failed to process generation results: {str(e)}",
             )
 
-    def _extract_generated_examples(self, agent_output: Any) -> List[Dict[str, Any]]:
+    def _extract_all_samples(self, agent_output: Any) -> List[Dict[str, Any]]:
         """从 Agent 输出中提取生成的样例"""
         examples = []
 
@@ -227,17 +168,22 @@ class SQLAgent(BaseAgent):
                     tool = trajectory["tool"]
                     tool_output = trajectory.get("output", {})
 
-                    if tool == "scenario_tool":
-                        current_scenario = {
-                            "id": tool_output.get("scenario_id", ""),
-                            "category": tool_output.get("category", ""),
-                            "business_purpose": tool_output.get("business_purpose", ""),
-                            "difficulty": tool_output.get("complexity", "medium"),
-                        }
-                    elif tool == "operation_selection":
-                        current_example["operations"] = tool_output.get(
-                            "selected_operations", []
-                        )
+                    if tool == "scenario_operation_generation":
+                        # 新的合并工具处理
+                        if "combinations" in tool_output:
+                            # 处理get_all_combinations模式的输出
+                            current_example["all_combinations"] = tool_output.get("combinations", [])
+                            current_example["total_combinations"] = tool_output.get("total_combinations", 0)
+                        elif "combination" in tool_output:
+                            # 处理get_single_combination模式的输出
+                            combo = tool_output.get("combination", {})
+                            current_scenario = {
+                                "id": combo.get("combination_id", ""),
+                                "category": combo.get("scenario", {}).get("main_name", ""),
+                                "business_purpose": combo.get("scenario", {}).get("main_description", ""),
+                                "difficulty": combo.get("scenario", {}).get("complexity", "medium"),
+                            }
+                            current_example["operations"] = combo.get("operations", [])
                     elif tool == "question_generation":
                         current_example["question"] = tool_output.get("question", "")
                         current_example["scenario"] = current_scenario

@@ -80,17 +80,14 @@ def cli(ctx, config: Optional[str], verbose: bool):
 
 
 @cli.command()
-@click.option('--count', '-n', type=int, default=100, help='生成的问题数量')
 @click.option('--output', '-o', default='training_data.jsonl', help='输出文件路径')
 @click.option('--database', '-d', help='数据库名称')
-@click.option('--format', '-f', type=click.Choice(['json', 'jsonl']), default='jsonl', help='输出格式')
 @click.option('--config', '-c', help='配置文件路径')
 @click.pass_context
 @handle_errors
-def generate(ctx, count: int, output: str, database: Optional[str], 
-             format: str, config: Optional[str]):
+def generate(ctx, output: str, database: Optional[str], config: Optional[str]):
     """生成SQL训练数据"""
-    click.echo(f"开始生成 {count} 个SQL训练样本...")
+    click.echo("开始生成SQL训练数据（Agent自主模式）...")
     click.echo("=" * 50)
     
     # 加载配置
@@ -121,35 +118,27 @@ def generate(ctx, count: int, output: str, database: Optional[str],
     agent = SQLAgent(settings, db_config)
     
     # 生成数据
-    with click.progressbar(length=count, label='生成进度') as bar:
-        try:
-            result = agent.generate_training_data(
-                count=count,
-                output_file=output,
-                database_name=database
-            )
-            
-            # 更新进度条
-            bar.update(result.successful)
-            
-        except Exception as e:
-            bar.update(0)
-            raise
-    
-    # 显示结果
-    click.echo("\n" + "=" * 50)
-    click.echo(f"生成完成！")
-    click.echo(f"  成功: {result.successful} 个")
-    click.echo(f"  失败: {result.failed} 个")
-    click.echo(f"  输出文件: {result.output_file}")
-    
-    # 显示示例
-    if result.examples and ctx.obj.get('verbose'):
-        click.echo("\n生成示例:")
-        for i, example in enumerate(result.examples[:3], 1):
-            click.echo(f"\n示例 {i}:")
-            click.echo(f"  问题: {example.get('question', 'N/A')}")
-            click.echo(f"  SQL: {example.get('sql', 'N/A')}")
+    try:
+        click.echo("Agent开始自主生成训练数据...")
+        result = agent.generate_training_data(output_file=output)
+        
+        # 显示结果
+        click.echo("\n" + "=" * 50)
+        click.echo(f"生成完成！")
+        click.echo(f"  成功生成: {len(result)} 个样本")
+        click.echo(f"  输出文件: {output}")
+        
+        # 显示示例
+        if result and ctx.obj.get('verbose'):
+            click.echo("\n生成示例:")
+            for i, example in enumerate(result[:3], 1):
+                click.echo(f"\n示例 {i}:")
+                click.echo(f"  问题: {example.get('question', 'N/A')}")
+                click.echo(f"  SQL: {example.get('sql', 'N/A')}")
+                
+    except Exception as e:
+        click.echo(f"生成失败: {e}", err=True)
+        sys.exit(1)
 
 
 @cli.command()
