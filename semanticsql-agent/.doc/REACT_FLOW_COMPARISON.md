@@ -1,41 +1,191 @@
 # ReAct流程图对比分析
 
-## 完整的分析工具调用流程
+## Agent推理流程图（简洁版）
 
-### **场景1：首次生成样本时的完整分析流程**
+### **场景1：首次生成样本的完整流程**
 
 ```
-│  ┌─────────────────────────────────────────┐
-│  │            按需分析阶段                   │
-│  │                                         │
-│  │  Thought: 缺少schema信息，需要先了解数据库  │
-│  │  Action: schema_extraction              │
-│  │  Observation: 获得表结构信息              │
-│  │      ↓                                  │
-│  │  Thought: 需要理解业务领域特征             │
-│  │  Action: domain_analysis                │
-│  │  Observation: 识别出电商领域              │
-│  │      ↓                                  │
-│  │  Thought: 需要理解字段的语义类型           │
-│  │  Action: field_classification          │
-│  │  Observation: 识别出ID、时间、金额、状态等字段类型 │
-│  │      ↓                                  │
-│  │  Thought: 需要深入理解每个列的业务含义      │
-│  │  Action: column_meaning_analysis        │
-│  │  Observation: 理解了order_amount表示订单总金额等 │
-│  │      ↓                                  │
-│  │  Thought: 需要理解每个表的业务职责         │
-│  │  Action: table_meaning_analysis         │
-│  │  Observation: orders表负责交易记录，users表管理用户信息 │
-│  │      ↓                                  │
-│  │  Thought: 最后分析表之间的关系            │
-│  │  Action: er_analysis                    │
-│  │  Observation: orders.user_id关联users.id，一对多关系 │
-│  │      ↓                                  │
-│  │  Thought: 现在我对数据库有了全面的理解，   │
-│  │          所有分析结果已保存到记忆中        │
-│  └─────────────────────────────────────────┘
+用户任务: "生成第1个高质量NL2SQL训练样本"
+    ↓
+Thought: 我需要生成训练样本，先检查记忆状态
+    ↓
+记忆检查: schema_info为空，需要分析数据库
+    ↓
+Thought: 缺少schema信息，需要先了解数据库
+Action: schema_extraction
+Observation: 获得表结构信息 → 保存到记忆
+    ↓
+Thought: 需要理解业务领域特征
+Action: domain_analysis
+Observation: 识别出电商领域 → 保存到记忆
+    ↓
+Thought: 需要理解字段的语义类型
+Action: field_classification
+Observation: 识别出ID、时间、金额、状态等字段类型 → 保存到记忆
+    ↓
+Thought: 需要深入理解每个列的业务含义
+Action: column_meaning_analysis
+Observation: 理解了order_amount表示订单总金额等 → 保存到记忆
+    ↓
+Thought: 需要理解每个表的业务职责
+Action: table_meaning_analysis
+Observation: orders表负责交易记录，users表管理用户信息 → 保存到记忆
+    ↓
+Thought: 最后分析表之间的关系
+Action: er_analysis
+Observation: orders.user_id关联users.id，一对多关系 → 保存到记忆
+    ↓
+Thought: 现在我对数据库有了全面的理解，开始生成场景
+Action: scenario_tool
+Observation: 选择了"销售分析"场景
+    ↓
+Thought: 根据场景选择SQL操作类型
+Action: operation_selection
+Observation: 选择了聚合查询操作
+    ↓
+Thought: 基于场景和操作生成问题
+Action: question_generation
+Observation: "统计每月销售总额"
+    ↓
+Thought: 将问题转换为SQL查询
+Action: sql_generation
+Observation: "SELECT MONTH(order_date), SUM(amount) FROM orders GROUP BY MONTH(order_date)"
+    ↓
+Thought: 验证SQL语法正确性
+Action: sql_validation
+Observation: 语法正确
+    ↓
+Thought: 执行SQL看实际效果
+Action: sql_execution
+Observation: 执行成功，返回12行数据
+    ↓
+Thought: 评估整体生成质量
+Action: sql_reflection
+Observation: quality_score=0.85, needs_revision=false
+    ↓
+Thought: 质量良好，样本生成完成
+Final Answer: {"question": "统计每月销售总额", "sql": "SELECT...", "quality_score": 0.85}
 ```
+
+### **场景2：Agent发现问题并自主修正**
+
+```
+用户任务: "生成第2个高质量NL2SQL训练样本"
+    ↓
+Thought: 我需要生成第2个样本，记忆中已有数据库分析信息
+    ↓
+Thought: 直接选择业务场景
+Action: scenario_tool
+Observation: 选择了"用户分析"场景
+    ↓
+Thought: 根据场景选择操作
+Action: operation_selection
+Observation: 选择了基础查询操作
+    ↓
+Thought: 生成自然语言问题
+Action: question_generation
+Observation: "查询所有用户"
+    ↓
+Thought: 生成对应的SQL
+Action: sql_generation
+Observation: "SELECT * FROM users"
+    ↓
+Thought: 验证SQL语法
+Action: sql_validation
+Observation: 语法正确
+    ↓
+Thought: 执行SQL测试
+Action: sql_execution
+Observation: 执行成功，返回1000行数据
+    ↓
+Thought: 评估生成质量
+Action: sql_reflection
+Observation: quality_score=0.3, issues=["查询过于简单，缺乏业务价值"]
+    ↓
+Thought: 质量分数很低，确实太简单了。我需要深入分析原因
+Action: sequential_thinking
+Observation: "问题设计本身就太简单，应该设计更有业务价值的查询"
+    ↓
+Thought: 分析得对，我需要重新设计一个更有价值的问题
+Action: question_generation
+Observation: "统计不同城市的活跃用户数量"
+    ↓
+Thought: 这个问题更好，现在生成对应的SQL
+Action: sql_generation
+Observation: "SELECT city, COUNT(*) FROM users WHERE status='active' GROUP BY city"
+    ↓
+Thought: 验证新的SQL语法
+Action: sql_validation
+Observation: 语法正确
+    ↓
+Thought: 执行SQL测试效果
+Action: sql_execution
+Observation: 执行成功，返回25行数据
+    ↓
+Thought: 再次评估质量
+Action: sql_reflection
+Observation: quality_score=0.87, needs_revision=false
+    ↓
+Thought: 现在质量很好了，样本生成完成
+Final Answer: {"question": "统计不同城市的活跃用户数量", "sql": "SELECT...", "quality_score": 0.87}
+```
+
+### **场景3：Agent智能利用已有记忆**
+
+```
+用户任务: "生成第5个高质量NL2SQL训练样本"
+    ↓
+Thought: 我需要生成第5个样本，先检查记忆状态
+    ↓
+记忆检查: 已有完整的数据库分析信息 ✓
+    ├─ schema_info ✓
+    ├─ domain_analysis ✓ 
+    ├─ field_classification ✓
+    ├─ column_meanings ✓
+    ├─ table_meanings ✓
+    └─ er_analysis ✓
+    ↓
+Thought: 很好！我已经有了完整信息，直接开始生成场景
+Action: scenario_tool
+Observation: 选择了"库存管理"场景
+    ↓
+Thought: 根据场景选择操作类型
+Action: operation_selection
+Observation: 选择了JOIN和WHERE操作
+    ↓
+Thought: 生成库存相关的业务问题
+Action: question_generation
+Observation: "查询库存不足的商品及其供应商信息"
+    ↓
+Thought: 基于问题和表关系生成SQL
+Action: sql_generation
+Observation: "SELECT p.name, p.stock, s.supplier_name 
+             FROM products p JOIN suppliers s ON p.supplier_id = s.id 
+             WHERE p.stock < p.min_stock"
+    ↓
+Thought: 验证SQL语法
+Action: sql_validation
+Observation: 语法正确
+    ↓
+Thought: 执行SQL测试
+Action: sql_execution
+Observation: 成功返回8条记录
+    ↓
+Thought: 评估生成质量
+Action: sql_reflection
+Observation: quality_score=0.91, needs_revision=false
+    ↓
+Thought: 质量很好，样本生成完成
+Final Answer: {"question": "查询库存不足的商品及其供应商信息", "sql": "SELECT...", "quality_score": 0.91}
+```
+
+### **🎯 三个场景的核心区别**
+
+| 场景 | Agent行为特点 | 关键优势 |
+|------|-------------|---------|
+| **场景1** | 首次分析，按需获取完整信息 | 智能分析，建立完整的数据库理解 |
+| **场景2** | 发现问题，自主分析和修正 | 自我改进，确保样本质量 |
+| **场景3** | 利用记忆，高效生成样本 | 效率最高，避免重复分析 |
 
 ## 关键设计原则对比
 
