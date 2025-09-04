@@ -138,9 +138,9 @@ semanticsql-agent/
 - 特点：可重新执行，结果更新到记忆模块
 
 **生成工具** (generation_tools/)
-- **scenario_operation_tool**: 合并的场景-操作生成工具（内部封装三层for循环遍历）
-- **question_generation_tool**: 生成自然语言问题
-- **sql_generation_tool**: 将问题转换为SQL
+- **scenario_operation_tool**: 核心工具，内部三层for循环生成所有场景-操作组合，为每个组合生成专用提示词
+- **question_generation_tool**: 逐个处理场景组合，生成自然语言问题
+- **sql_generation_tool**: 基于问题和场景信息生成SQL查询
 - 特点：使用记忆模块中的数据库分析结果
 
 **验证工具** (validation_tools/)
@@ -280,79 +280,87 @@ llm = ChatOpenAI(
 - 支持自定义的进度通知
 ```
 
-## 4. 执行流程（基于真正的ReAct模式）
+## 4. 执行流程（基于最终设计方案）
 
-### 4.1 初始化流程（简化的LangChain集成）
+### 4.1 初始化流程（极简LangChain集成）
 ```
 1. 加载配置 (Settings)
 2. 初始化数据库连接 (DatabaseManager)  
 3. 创建 LangChain LLM 实例 (ChatOpenAI)
-4. 初始化 LangChain Memory (DatabaseAnalysisMemory)
-5. 创建完整的 LangChain Tools 列表（所有工具，不分类）
-6. 使用 create_react_agent 创建统一的 Agent
-7. 配置 AgentExecutor
+4. 初始化 DatabaseAnalysisMemory
+5. 创建所有工具（包含核心的ScenarioOperationTool）
+6. 使用 create_react_agent 创建Agent
+7. 配置 AgentExecutor（足够的max_iterations处理所有组合）
 ```
 
 ```python
-# 简化的初始化代码
+# 最终的初始化代码
 from langchain.agents import create_react_agent, AgentExecutor
 from langchain.chat_models import ChatOpenAI
 
 class SQLAgent:
     def __init__(self, settings, db_config):
         # 初始化 LLM
-        self.llm = ChatOpenAI(openai_api_base=config.llm_base_url)
+        self.llm = ChatOpenAI(openai_api_base=settings.llm_base_url)
         
         # 初始化记忆
         self.memory = DatabaseAnalysisMemory()
         
-        # 创建所有工具（不分类，不过滤）
+        # 创建所有工具（包含核心的ScenarioOperationTool）
         self.tools = self._initialize_all_tools()
         
-        # 创建统一的 Agent（拥有所有工具的访问权限）
-        agent = create_react_agent(self.llm, self.tools, self._get_prompt())
+        # 创建Agent（拥有所有工具访问权限）
+        prompt = self._get_system_prompt()
+        agent = create_react_agent(self.llm, self.tools, prompt)
+        
         self.agent_executor = AgentExecutor(
             agent=agent,
             tools=self.tools,
             memory=self.memory,
             verbose=True,
+            max_iterations=100,  # 足够处理所有场景组合
             callbacks=[TrajectoryCallback()]
         )
+    
+    def generate_training_data(self) -> List[Dict]:
+        """完全由Agent自主驱动的训练数据生成"""
+        
+        task = "请生成高质量的NL2SQL训练数据集，覆盖所有场景组合"
+        
+        result = self.agent_executor.invoke({
+            "input": task,
+            "database_name": self.db_config.database
+        })
+        
+        return self._extract_all_samples(result)
 ```
 
-### 4.2 统一的执行流程（外部大循环 + 内部纯ReAct）
+### 4.2 Agent自主执行流程（最终方案）
+
+**核心设计**：Agent接收简单任务，内部自主处理所有场景组合
 
 ```python
-def generate_training_data(self, count: int) -> List[Dict]:
-    """外部大循环控制数量，内部完全由Agent自主决策"""
-    results = []
+# Agent完全自主的执行流程
+def generate_training_data(self) -> List[Dict]:
+    """Agent自主驱动，无外部循环控制"""
     
-    # 🔄 外部大循环：简单的数量控制
-    for i in range(count):
-        print(f"🎯 生成第 {i+1}/{count} 个样本...")
-        
-        # 每次迭代都是独立的ReAct任务
-        sample = self._generate_single_sample(i)
-        
-        if sample:
-            results.append(sample)
-        
-    return results
-
-def _generate_single_sample(self, iteration: int) -> Optional[Dict]:
-    """生成单个样本 - 完全由Agent自主决策执行流程"""
+    task = "请生成高质量的NL2SQL训练数据集，覆盖所有场景组合"
     
-    task = f"生成第{iteration + 1}个高质量NL2SQL训练样本"
-    
-    # 完全交给Agent自主决策，不预设任何执行步骤
+    # 完全交给Agent自主决策
     result = self.agent_executor.invoke({
         "input": task,
-        "iteration": iteration,
         "database_name": self.db_config.database
     })
     
-    return self._extract_sample_from_result(result)
+    return self._extract_all_samples(result)
 ```
+
+**Agent内部的处理逻辑**：
+1. **智能记忆检查**：检查是否有完整的数据库分析
+2. **按需分析**：缺少信息时自主调用分析工具
+3. **获取所有组合**：调用ScenarioOperationTool获取48个场景组合
+4. **逐个处理**：对每个组合进行问题生成→SQL生成→验证→反思
+5. **质量保证**：确保每个样本都是高质量的
 
 ### 4.3 Agent内部的完全自主决策
 
@@ -363,7 +371,7 @@ def _generate_single_sample(self, iteration: int) -> Optional[Dict]:
 
 **典型的Agent推理流程**：
 ```
-用户: "生成第1个高质量NL2SQL训练样本"
+用户: "请生成高质量的NL2SQL训练数据集，覆盖所有场景组合"
 
 Thought: 我需要生成训练样本。首先检查是否了解数据库结构。
 Action: 检查记忆或调用schema_extraction
@@ -537,7 +545,7 @@ python cli.py generate --count 100 --output data.json
 python cli.py trajectory --latest
 ```
 
-### 7.3 API使用（基于 LangChain）
+### 7.3 API使用（最终方案）
 ```python
 from semanticsql_agent import SQLAgent
 from langchain.callbacks import StdOutCallbackHandler
@@ -547,29 +555,33 @@ from config import Settings, DatabaseConfig
 settings = Settings()
 db_config = DatabaseConfig.from_env()
 
-# 创建 Agent（内部使用 LangChain）
+# 创建 Agent
 agent = SQLAgent(
     settings=settings,
-    callbacks=[StdOutCallbackHandler()]  # LangChain 回调
+    db_config=db_config,
+    callbacks=[StdOutCallbackHandler()]
 )
 
-# 生成训练数据（使用 AgentExecutor）
-result = agent.generate_training_data(
-    count=100,
-    output_file="training_data.json"
-)
+# 生成训练数据（Agent完全自主）
+result = agent.generate_training_data()
 
-# 获取执行轨迹（通过 LangChain Callbacks）
+# 结果包含所有场景组合的样本
+print(f"生成了 {len(result)} 个训练样本")
+for sample in result:
+    print(f"- {sample['combination_id']}: {sample['question']}")
+
+# 获取执行轨迹
 trajectory = agent.get_trajectory()
 ```
 
 ## 8. 最佳实践
 
-### 8.1 Agent设计原则
-- **提示词驱动**：通过提示词引导行为，避免硬编码流程
-- **自主决策**：让Agent根据上下文自主选择工具
-- **记忆机制**：利用记忆模块在工具间共享上下文
-- **反思循环**：执行后评估质量，必要时自动修正
+### 8.1 Agent设计原则（最终方案）
+- **完全自主**：Agent接收简单任务，自主决策所有执行流程
+- **记忆驱动**：工具通过记忆自动协作，无需手动传参
+- **工具内部批处理**：复杂逻辑封装在工具内部（如ScenarioOperationTool的三层循环）
+- **逐个处理**：获得所有组合后，Agent逐个处理每个场景组合
+- **质量保证**：每个样本都经过完整的生成-验证-反思流程
 
 ### 8.2 工具开发指南
 - **单一职责**：每个工具专注一个任务
