@@ -52,8 +52,8 @@ class BaseAgent(ABC):
         # 为分析工具设置memory引用
         self._setup_tool_memory_references()
         
-        # 创建 Agent
-        self.agent_executor = self._create_agent()
+        # 不在初始化时创建Agent，而是在执行时动态创建
+        self.agent_executor = None
         
         self.logger.info(f"Initialized {self.__class__.__name__} with {len(self.tools)} tools")
     
@@ -74,19 +74,166 @@ class BaseAgent(ABC):
             if hasattr(tool, 'set_memory'):
                 tool.set_memory(self.memory)
     
-    def _create_prompt(self) -> ChatPromptTemplate:
-        """创建Agent提示词"""
+    def _determine_execution_stage(self) -> str:
+        """根据Memory状态智能判断当前执行阶段
+        
+        Returns:
+            'analysis' 或 'generation'
+        """
+        try:
+            memory_state = self.get_memory_state()
+            
+            # 检查分析阶段的关键要素是否完成
+            analysis_indicators = [
+                'schema_info', 'domain_info', 'field_classification', 
+                'column_meanings', 'table_meanings', 'er_relationships'
+            ]
+            
+            # 统计已完成的分析项目
+            completed_analysis = sum(
+                1 for key in analysis_indicators 
+                if memory_state.get(key) and len(str(memory_state[key])) > 10
+            )
+            
+            # 如果完成了大部分分析（至少4项），则进入生成阶段
+            if completed_analysis >= 4:
+                return 'generation'
+            else:
+                return 'analysis'
+                
+        except Exception as e:
+            self.logger.warning(f"Failed to determine stage, defaulting to analysis: {e}")
+            return 'analysis'
+    
+    def _create_execution_params(self, task: str, **kwargs) -> Dict[str, Any]:
+        """根据当前阶段智能创建执行参数
+        
+        Args:
+            task: 任务描述
+            **kwargs: 额外参数
+            
+        Returns:
+            阶段特定的执行参数字典
+        """
+        # 判断当前执行阶段
+        current_stage = self._determine_execution_stage()
+        
+        # 基础参数（所有阶段都需要）
+        params = {
+            "input": task,
+            "database_name": getattr(self.db_config, 'database', 'unknown'),
+            "memory_summary": self._get_memory_summary(),
+        }
+        
+        # 根据阶段添加特定参数
+        if current_stage == 'generation':
+            # 生成阶段需要iteration参数
+            iteration = kwargs.get('iteration', 0)
+            params["iteration"] = iteration
+            self.logger.info(f"Generation stage - iteration: {iteration}")
+        else:
+            # 分析阶段不需要iteration参数，确保不传入
+            self.logger.info("Analysis stage - no iteration parameter needed")
+        
+        # 添加其他kwargs（除了iteration，因为已经处理过了）
+        for key, value in kwargs.items():
+            if key != 'iteration':  # iteration已经根据阶段处理过了
+                params[key] = value
+        
+        return params
+    
+    def _get_stage_relevant_tools(self, stage: str, iteration: int = 0) -> List[BaseTool]:
+        """根据阶段和iteration获取相关工具
+        
+        Args:
+            stage: 当前阶段 ('analysis' 或 'generation')
+            iteration: 当前iteration（仅生成阶段使用）
+            
+        Returns:
+            当前阶段相关的工具列表
+        """
+        if stage == 'analysis':
+            # 分析阶段：只返回分析相关工具
+            return [tool for tool in self.tools if self._is_analysis_tool(tool)]
+        
+        elif stage == 'generation':
+            # 生成阶段：根据iteration返回相应工具
+            return [tool for tool in self.tools if self._is_generation_relevant_tool(tool, iteration)]
+        
+        else:
+            # 默认返回所有工具
+            return self.tools
+    
+    def _is_analysis_tool(self, tool: BaseTool) -> bool:
+        """判断是否为分析阶段工具"""
+        analysis_tool_names = {
+            'schema_extraction', 'domain_analysis', 'field_classification',
+            'column_meaning_analysis', 'table_meaning_analysis', 'er_analysis',
+            'sequential_thinking'  # 分析阶段也可能需要深度思考
+        }
+        return tool.name in analysis_tool_names
+    
+    def _is_generation_relevant_tool(self, tool: BaseTool, iteration: int) -> bool:
+        """判断工具是否与当前生成iteration相关"""
+        # 始终可用的工具
+        always_available = {
+            'sequential_thinking', 'sql_reflection', 
+            'sql_validation', 'sql_execution'
+        }
+        
+        if tool.name in always_available:
+            return True
+        
+        # 根据您描述的动态注入逻辑
+        # 这里可以根据具体需求进一步细化
+        generation_tools = {
+            'scenario_tool', 'operation_selection', 
+            'question_generation', 'sql_generation'
+        }
+        
+        return tool.name in generation_tools
+    
+    def _create_prompt(self, **runtime_params) -> ChatPromptTemplate:
+        """创建统一的Agent提示词模板
+        
+        Args:
+            **runtime_params: 运行时参数，包含iteration等信息
+            
+        Returns:
+            统一的ChatPromptTemplate，支持智能阶段感知
+        """
         try:
             from prompts.manager import PromptManager
             prompt_manager = PromptManager()
             
-            # 加载系统提示词模板
+            # 判断当前阶段
+            current_stage = self._determine_execution_stage()
+            iteration = runtime_params.get('iteration', 0)
+            
+            # 获取阶段相关的工具
+            relevant_tools = self._get_stage_relevant_tools(current_stage, iteration)
+            
+            # 准备模板参数
+            tool_descriptions = "\n".join([f"- {tool.name}: {tool.description}" for tool in relevant_tools])
+            tool_names = ", ".join([tool.name for tool in relevant_tools])
+            
+            # 基础参数（所有阶段都需要）
+            template_params = {
+                'tools': tool_descriptions,
+                'tool_names': tool_names,
+                'database_name': getattr(self.db_config, 'database', 'unknown'),
+                'memory_summary': self._get_memory_summary()
+            }
+            
+            # 如果是生成阶段且有iteration，添加到模板参数中
+            if current_stage == 'generation' and iteration is not None:
+                template_params['iteration'] = iteration
+            
+            # 加载统一的智能模板
             try:
-                system_prompt = prompt_manager.render_template(
-                    'system/main.j2'
-                )
+                system_prompt = prompt_manager.render_template('system/main.j2', **template_params)
             except Exception as e:
-                self.logger.error(f"Failed to load system prompt template: {e}")
+                self.logger.error(f"Failed to load main.j2 template: {e}")
                 system_prompt = None
             
             if system_prompt:
@@ -100,7 +247,7 @@ class BaseAgent(ABC):
                 
         except Exception as e:
             self.logger.warning(f"Failed to load prompt template: {e}. Using default.")
-            # 使用默认提示词 - 保留LangChain需要的占位符
+            # 使用默认提示词
             return ChatPromptTemplate.from_messages([
                 ("system", """你是一个专业的SQL训练数据生成专家。
 
@@ -116,17 +263,61 @@ Observation: 工具返回的结果
 Thought: 我现在知道最终答案了
 Final Answer: 最终结果
 
-请根据任务需求，灵活选择和使用工具。
-
-开始!"""),
+请根据任务需求，灵活选择和使用工具。"""),
                 ("human", "{input}"),
                 ("assistant", "{agent_scratchpad}")
             ])
     
+    def _create_stage_aware_agent(self, execution_params: Dict[str, Any]) -> AgentExecutor:
+        """根据执行参数动态创建阶段感知的Agent
+        
+        Args:
+            execution_params: 执行参数，包含阶段和iteration信息
+            
+        Returns:
+            配置了正确工具集合的AgentExecutor
+        """
+        # 从执行参数中提取阶段信息
+        current_stage = self._determine_execution_stage()
+        iteration = execution_params.get('iteration', 0)
+        
+        # 获取当前阶段相关的工具
+        relevant_tools = self._get_stage_relevant_tools(current_stage, iteration)
+        
+        self.logger.info(
+            f"Creating {current_stage} stage agent with {len(relevant_tools)} tools"
+            f"{f' (iteration {iteration})' if current_stage == 'generation' else ''}"
+        )
+        
+        # 创建提示词模板（传入iteration信息）
+        prompt = self._create_prompt(iteration=iteration)
+        
+        # 创建 ReAct agent（使用过滤后的工具）
+        agent = create_react_agent(
+            llm=self.llm,
+            tools=relevant_tools,
+            prompt=prompt
+        )
+        
+        # 创建执行器
+        callbacks = [self.callback_handler]
+        if hasattr(self, 'extra_callbacks'):
+            callbacks.extend(self.extra_callbacks)
+        
+        return AgentExecutor(
+            agent=agent,
+            tools=relevant_tools,  # 使用过滤后的工具
+            memory=self.memory,
+            verbose=True,
+            max_iterations=self.settings.max_steps,
+            handle_parsing_errors=True,
+            callbacks=callbacks
+        )
+    
     def _create_agent(self) -> AgentExecutor:
-        """创建 LangChain Agent"""
-        # 创建提示词模板
-        prompt = self._create_prompt()
+        """创建 LangChain Agent（兼容性方法，建议使用_create_stage_aware_agent）"""
+        # 创建统一的提示词模板
+        prompt = self._create_prompt(iteration=0)
         
         # 创建 ReAct agent
         agent = create_react_agent(
@@ -151,6 +342,7 @@ Final Answer: 最终结果
             callbacks=callbacks
         )
     
+    
     def run(self, task: str, **kwargs) -> Dict[str, Any]:
         """执行任务"""
         # 创建执行记录
@@ -173,19 +365,13 @@ Final Answer: 最终结果
             # 执行任务
             self.logger.info(f"Starting task: {task}")
             
-            # 准备执行参数，包含模板需要的变量
-            execution_params = {
-                "input": task,
-                "database_name": getattr(self.db_config, 'database', 'unknown'),
-                "memory_summary": self._get_memory_summary(),
-                **kwargs
-            }
+            # 智能创建阶段感知的执行参数
+            execution_params = self._create_execution_params(task, **kwargs)
             
-            # 如果kwargs中有count参数，使用它，否则默认为1
-            if 'count' not in execution_params:
-                execution_params['count'] = kwargs.get('target_count', 1)
+            # 动态创建阶段相关的Agent执行器
+            agent_executor = self._create_stage_aware_agent(execution_params)
             
-            result = self.agent_executor.invoke(execution_params)
+            result = agent_executor.invoke(execution_params)
             
             # 更新执行状态
             execution.status = "completed"

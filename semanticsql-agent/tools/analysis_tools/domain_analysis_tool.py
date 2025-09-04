@@ -185,6 +185,7 @@ class DomainAnalysisTool(BaseAnalysisTool):
         
         # 调用LLM
         response = self.llm.invoke(prompt)
+        print(response.content)
         
         # 解析响应
         return self._parse_domain_response(response.content)

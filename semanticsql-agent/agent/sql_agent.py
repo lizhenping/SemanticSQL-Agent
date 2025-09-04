@@ -129,20 +129,26 @@ class SQLAgent(BaseAgent):
             database_name=database_name
         )
 
-        result = self.run(analysis_task)
-
-        if result["success"]:
+        # 使用专门的分析Agent执行器，不包含iteration参数
+        analysis_agent = self.create_analysis_agent()
+        
+        try:
+            # 执行分析任务
+            result = analysis_agent.invoke({"input": analysis_task})
+            
             # 获取分析结果
             memory_state = self.get_memory_state()
             return {
                 "success": True,
                 "analysis": memory_state.get("db_analysis", {}),
                 "message": "数据库分析完成",
+                "result": result.get("output", "")
             }
-        else:
+        except Exception as e:
+            self.logger.error(f"Database analysis failed: {e}")
             return {
                 "success": False,
-                "error": result.get("error", "分析失败"),
+                "error": str(e),
                 "message": "数据库分析失败",
             }
 
