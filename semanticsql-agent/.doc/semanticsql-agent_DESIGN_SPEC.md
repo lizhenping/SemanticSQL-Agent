@@ -1411,7 +1411,24 @@ Observation: ...
 │  │  Action: domain_analysis                │                │
 │  │  Observation: 识别出电商领域              │                │
 │  │      ↓                                  │                │
-│  │  [继续按需调用其他分析工具...]              │                │
+│  │  Thought: 需要理解字段的语义类型           │                │
+│  │  Action: field_classification          │                │
+│  │  Observation: 识别出ID、时间、金额、状态等字段类型 │        │
+│  │      ↓                                  │                │
+│  │  Thought: 需要深入理解每个列的业务含义      │                │
+│  │  Action: column_meaning_analysis        │                │
+│  │  Observation: 理解了order_amount表示订单总金额等 │         │
+│  │      ↓                                  │                │
+│  │  Thought: 需要理解每个表的业务职责         │                │
+│  │  Action: table_meaning_analysis         │                │
+│  │  Observation: orders表负责交易记录，users表管理用户信息 │  │
+│  │      ↓                                  │                │
+│  │  Thought: 最后分析表之间的关系            │                │
+│  │  Action: er_analysis                    │                │
+│  │  Observation: orders.user_id关联users.id，一对多关系 │   │
+│  │      ↓                                  │                │
+│  │  Thought: 现在我对数据库有了全面的理解，   │                │
+│  │          所有分析结果已保存到记忆中        │                │
 │  └─────────────────────────────────────────┘                │
 │      ↓                                                      │
 │  ┌─────────────────────────────────────────┐                │
@@ -1566,3 +1583,79 @@ Observation: ...
     ↓
 💾 外部循环保存样本，继续生成下一个
 ```
+
+#### **场景3：Agent智能利用已有记忆**
+```
+🎯 用户任务: "生成第5个高质量NL2SQL训练样本"（数据库已分析过）
+    ↓
+┌─────────────────────────────────────────────────────────────┐
+│                   Agent ReAct 推理循环                        │
+│                                                             │
+│  Thought: 我需要生成第5个样本，先检查记忆状态                  │
+│      ↓                                                      │
+│  🧠 智能记忆检查：                                            │
+│      ├─ 记忆中已有完整的schema_info ✓                        │
+│      ├─ 记忆中已有domain_analysis ✓                         │
+│      ├─ 记忆中已有field_classification ✓                    │
+│      ├─ 记忆中已有column_meanings ✓                         │
+│      ├─ 记忆中已有table_meanings ✓                          │
+│      └─ 记忆中已有er_analysis ✓                             │
+│      ↓                                                      │
+│  Thought: 很好！我已经有了完整的数据库分析信息，             │
+│          可以直接开始生成场景和问题                           │
+│      ↓                                                      │
+│  ┌─────────────────────────────────────────┐                │
+│  │            直接进入场景构建               │                │
+│  │                                         │                │
+│  │  Thought: 基于已有的分析信息选择场景       │                │
+│  │  Action: scenario_tool                  │                │
+│  │  Action Input: {"iteration": 4, "domain": "电商"}  │     │
+│  │  Observation: 选择了"库存管理"场景         │                │
+│  │      ↓                                  │                │
+│  │  Thought: 根据场景和数据库特点选择操作      │                │
+│  │  Action: operation_selection            │                │
+│  │  Observation: 选择了JOIN和WHERE操作       │                │
+│  │      ↓                                  │                │
+│  │  Thought: 生成库存相关的业务问题          │                │
+│  │  Action: question_generation            │                │
+│  │  Observation: "查询库存不足的商品及其供应商信息" │           │
+│  │      ↓                                  │                │
+│  │  Thought: 基于问题和表关系生成SQL         │                │
+│  │  Action: sql_generation                 │                │
+│  │  Observation: "SELECT p.name, p.stock, s.supplier_name   │
+│  │                FROM products p JOIN suppliers s         │
+│  │                ON p.supplier_id = s.id                  │
+│  │                WHERE p.stock < p.min_stock"             │
+│  │      ↓                                  │                │
+│  │  Thought: 验证SQL语法                   │                │
+│  │  Action: sql_validation                 │                │
+│  │  Observation: 语法正确                   │                │
+│  │      ↓                                  │                │
+│  │  Thought: 执行SQL测试                   │                │
+│  │  Action: sql_execution                  │                │
+│  │  Observation: 成功返回8条记录             │                │
+│  │      ↓                                  │                │
+│  │  Thought: 评估生成质量                   │                │
+│  │  Action: sql_reflection                 │                │
+│  │  Observation: {"quality_score": 0.91, "needs_revision": false} │
+│  │      ↓                                  │                │
+│  │  Thought: 质量很好，样本生成完成          │                │
+│  └─────────────────────────────────────────┘                │
+│      ↓                                                      │
+│  Final Answer: {                                            │
+│    "question": "查询库存不足的商品及其供应商信息",             │
+│    "sql": "SELECT p.name, p.stock, s.supplier_name...",    │
+│    "quality_score": 0.91                                   │
+│  }                                                          │
+└─────────────────────────────────────────────────────────────┘
+    ↓
+💾 外部循环保存样本，继续生成下一个
+```
+
+### **🎯 三个场景的核心区别**
+
+| 场景 | Agent行为特点 | 关键优势 |
+|------|-------------|---------|
+| **场景1** | 首次分析，按需获取完整信息 | 智能分析，建立完整的数据库理解 |
+| **场景2** | 发现问题，自主分析和修正 | 自我改进，确保样本质量 |
+| **场景3** | 利用记忆，高效生成样本 | 效率最高，避免重复分析 |
