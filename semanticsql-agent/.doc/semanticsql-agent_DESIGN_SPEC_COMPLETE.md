@@ -697,24 +697,276 @@ Final Answer: [
 
 ## 7. 提示词系统设计
 
-### 7.1 分层Jinja2模板架构
+### 7.1 完整的Jinja2模板架构（基于实际实现）
 
 ```
 prompts/
 ├── templates/
-│   ├── system/
-│   │   └── main.j2                    # Agent系统提示词
-│   ├── tools/
-│   │   ├── schema_extraction.j2       # 数据库结构提取提示词
-│   │   ├── domain_analysis.j2         # 业务领域分析提示词
-│   │   ├── scenario_operation.j2      # 场景-操作生成提示词
-│   │   ├── question_generation.j2     # 问题生成提示词
-│   │   ├── sql_generation.j2          # SQL生成提示词
-│   │   └── sql_reflection.j2          # 反思评估提示词
-│   └── analysis/
-│       └── database_analysis.j2       # 数据库分析专用提示词
+│   ├── system/                        # 系统级提示词
+│   │   ├── main.j2                    # Agent主系统提示词（3.3KB, 82行）
+│   │   └── analysis_main.j2           # 数据库分析专用系统提示词（2.5KB, 81行）
+│   │
+│   ├── tools/                         # 工具通用提示词
+│   │   ├── tool_system.j2             # 工具系统通用提示词（698B, 35行）
+│   │   ├── question_generation.j2     # 问题生成工具提示词（450B, 15行）
+│   │   └── sql_generation.j2          # SQL生成工具提示词（582B, 23行）
+│   │
+│   ├── analysis/                      # 数据库分析专用提示词
+│   │   ├── database_analysis.j2       # 数据库分析入口（130B, 3行）
+│   │   ├── initial_domain_analysis.j2 # 初始领域分析（1.0KB, 40行）
+│   │   ├── field_classification.j2    # 字段分类分析（1.7KB, 62行）
+│   │   ├── column_description.j2      # 列描述分析（1.2KB, 52行）
+│   │   ├── table_description.j2       # 表描述分析（1.0KB, 38行）
+│   │   ├── er_analysis_logical.j2     # 逻辑关系分析（879B, 30行）
+│   │   └── er_analysis_conceptual.j2  # 概念关系分析（920B, 35行）
+│   │
+│   ├── generation/                    # 生成专用提示词
+│   │   └── training_data_generation.j2 # 训练数据生成（55B, 1行）
+│   │
+│   ├── reflection/                    # 反思专用提示词
+│   │   ├── reflection_guide.j2        # 反思指导（2.5KB, 87行）
+│   │   ├── evaluate_result_quality.j2 # 结果质量评估（375B, 15行）
+│   │   └── analyze_empty_result.j2    # 空结果分析（238B, 12行）
+│   │
+│   ├── thinking/                      # 深度思考提示词
+│   │   ├── sequential_thinking.j2     # 顺序思考（243B, 11行）
+│   │   └── sequential_thinking_guide.j2 # 思考指导（3.4KB, 121行）
+│   │
+│   └── README.md                      # 提示词使用说明（3.7KB, 115行）
+│
 └── manager.py                         # 提示词管理器
 ```
+
+**提示词模板总计**：约15个专用模板，涵盖所有工具的专业指导
+
+### 7.2 提示词模板分类和用途
+
+#### 7.2.1 系统级提示词（system/）
+
+**main.j2**：
+- **用途**：Agent的主系统提示词
+- **内容**：ReAct执行格式、工具使用指导、决策原则
+- **变量**：`{{input}}`, `{{database_name}}`, `{{tools}}`, `{{db_analysis}}`
+
+**analysis_main.j2**：
+- **用途**：数据库分析阶段的专用系统提示词
+- **内容**：分析工具链的执行指导
+- **使用时机**：当Agent需要进行数据库分析时
+
+#### 7.2.2 分析工具提示词（analysis/）
+
+**initial_domain_analysis.j2**：
+- **功能**：识别数据库的业务领域特征
+- **输入变量**：`database_name`, `database_ddl`, `type_distribution`, `field_patterns`
+- **输出要求**：`domain_type`, `domain_description`, `key_entities`, `business_rules`
+
+**field_classification.j2**：
+- **功能**：对数据库字段进行语义分类
+- **输入变量**：`fields[]`, `domain_type`, `domain_description`
+- **输出要求**：字段类别（identifier/measure/dimension等）、类型、重要性
+
+**column_description.j2**：
+- **功能**：生成每个列的业务含义描述
+- **输入变量**：`table_name`, `table_ddl`, `columns[]`, `domain_type`
+- **依赖**：需要domain_analysis和field_classification的结果
+
+**table_description.j2**：
+- **功能**：生成每个表的业务职责描述
+- **输入变量**：`tables[]`, `domain_type`, `domain_description`
+- **依赖**：需要column_description的结果
+
+**er_analysis_logical.j2**：
+- **功能**：分析表之间的逻辑关系
+- **输入变量**：`formatted_schema`, `fk_info`, `database_name`
+- **输出要求**：逻辑关系列表
+
+**er_analysis_conceptual.j2**：
+- **功能**：分析概念层面的实体关系
+- **输入变量**：`formatted_schema`, `physical_relations`, `logical_relations`
+- **依赖**：需要logical关系分析结果
+
+#### 7.2.3 生成工具提示词（tools/ & generation/）
+
+**question_generation.j2**：
+- **功能**：基于场景组合生成自然语言问题
+- **前置条件**：需要scenario_operation的结果
+- **自动注入**：场景信息、操作要求、生成的专用提示词
+
+**sql_generation.j2**：
+- **功能**：将问题转换为SQL查询
+- **前置条件**：需要question和scenario_operation的结果
+- **自动注入**：问题文本、场景要求、数据库结构
+
+**training_data_generation.j2**：
+- **功能**：训练数据生成的总体指导
+- **用途**：可能用于批量生成的整体指导
+
+#### 7.2.4 反思工具提示词（reflection/）
+
+**reflection_guide.j2**：
+- **功能**：SQL质量反思的详细指导（2.5KB, 87行）
+- **内容**：评估维度、质量标准、修正建议
+
+**evaluate_result_quality.j2**：
+- **功能**：结果质量评估的专用提示词
+- **输出格式**：标准化的质量评估结果
+
+**analyze_empty_result.j2**：
+- **功能**：分析SQL返回空结果的原因
+- **用途**：特殊情况的问题诊断
+
+#### 7.2.5 思考工具提示词（thinking/）
+
+**sequential_thinking.j2**：
+- **功能**：顺序思考的基础提示词
+- **用途**：简单的思考任务
+
+**sequential_thinking_guide.j2**：
+- **功能**：深度思考的详细指导（3.4KB, 121行）
+- **内容**：复杂问题分析、策略制定、修正方案
+
+### 7.3 提示词使用的记忆依赖关系
+
+```
+分析工具链的记忆依赖：
+schema_extraction → memories["schema_info"]
+                    ↓
+domain_analysis   → memories["domain_info"] 
+                    ↓
+field_analysis    → memories["field_classification"]
+                    ↓
+column_analysis   → memories["column_meanings"]
+                    ↓
+table_analysis    → memories["table_meanings"]
+                    ↓
+er_analysis       → memories["er_relations"]
+
+生成工具链的记忆依赖：
+scenario_operation_generation → memories["all_scenario_combinations"]
+                              ↓
+question_generation          → memories["current_question"]
+                              ↓
+sql_generation              → memories["current_sql"]
+```
+
+每个提示词模板都通过 `{{db_analysis.xxx}}` 访问相应的记忆内容。
+
+### 7.4 提示词管理器设计（prompts/manager.py）
+
+```python
+from jinja2 import Environment, FileSystemLoader
+from pathlib import Path
+
+class PromptManager:
+    """Jinja2提示词管理器"""
+    
+    def __init__(self):
+        template_dir = Path(__file__).parent / 'templates'
+        self.env = Environment(loader=FileSystemLoader(str(template_dir)))
+    
+    def get_system_prompt(self, prompt_type: str = "main", **context):
+        """获取系统提示词"""
+        template = self.env.get_template(f'system/{prompt_type}.j2')
+        return template.render(**context)
+    
+    def get_analysis_prompt(self, analysis_type: str, **context):
+        """获取分析工具提示词"""
+        template = self.env.get_template(f'analysis/{analysis_type}.j2')
+        return template.render(**context)
+    
+    def get_tool_prompt(self, tool_name: str, **context):
+        """获取工具专用提示词"""
+        template = self.env.get_template(f'tools/{tool_name}.j2')
+        return template.render(**context)
+    
+    def get_reflection_prompt(self, reflection_type: str, **context):
+        """获取反思提示词"""
+        template = self.env.get_template(f'reflection/{reflection_type}.j2')
+        return template.render(**context)
+    
+    def get_thinking_prompt(self, thinking_type: str = "sequential_thinking", **context):
+        """获取思考提示词"""
+        template = self.env.get_template(f'thinking/{thinking_type}.j2')
+        return template.render(**context)
+    
+    def render_template(self, template_path: str, **context):
+        """通用模板渲染方法"""
+        template = self.env.get_template(template_path)
+        return template.render(**context)
+```
+
+### 7.5 工具与提示词的集成方式
+
+#### 7.5.1 分析工具的提示词使用
+
+```python
+class DomainAnalysisTool(BaseTool):
+    def __init__(self, llm, prompt_manager):
+        self.llm = llm
+        self.prompt_manager = prompt_manager
+    
+    def _run(self, **kwargs):
+        # 获取专用提示词
+        prompt = self.prompt_manager.get_analysis_prompt(
+            "initial_domain_analysis",
+            database_name=kwargs.get("database_name"),
+            database_ddl=kwargs.get("schema_info"),
+            **kwargs
+        )
+        
+        # 调用LLM
+        result = self.llm.invoke(prompt)
+        return result
+```
+
+#### 7.5.2 生成工具的提示词使用
+
+```python
+class QuestionGenerationTool(BaseTool):
+    def __init__(self, llm, prompt_manager):
+        self.llm = llm
+        self.prompt_manager = prompt_manager
+    
+    def _run(self, combination_index: int = 0, **kwargs):
+        # 从记忆中获取场景组合信息
+        memory_data = self.memory.load_memory_variables({})
+        db_analysis = memory_data.get("db_analysis", {})
+        
+        # 获取专用提示词，自动注入记忆信息
+        prompt = self.prompt_manager.get_tool_prompt(
+            "question_generation",
+            db_analysis=db_analysis,
+            combination_index=combination_index,
+            **kwargs
+        )
+        
+        result = self.llm.invoke(prompt)
+        return result
+```
+
+### 7.6 提示词的前置条件检查机制
+
+每个工具的提示词都包含前置条件检查：
+
+```jinja2
+## 前置条件检查
+{% if db_analysis.schema_info %}
+- ✅ 数据库结构: 已加载
+{% else %}
+- ❌ 缺少数据库结构，请先调用 schema_extraction
+{% endif %}
+
+{% if db_analysis.scenario_operation %}
+- ✅ 场景方案: {{db_analysis.scenario_operation.scenario.name}}
+{% else %}
+- ❌ 缺少场景方案，请先调用 scenario_operation_generation
+{% endif %}
+```
+
+这样的设计确保：
+1. **工具知道自己的依赖**：每个工具清楚需要哪些前置信息
+2. **Agent获得明确指导**：Agent知道缺少什么信息需要先调用哪个工具
+3. **自动信息注入**：满足前置条件时，信息自动注入到提示词中
 
 ### 7.2 系统提示词（system/main.j2）
 
