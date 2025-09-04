@@ -17,8 +17,9 @@ from config.settings import Settings
 from config.database import DatabaseConfig
 from utils.memory import DatabaseAnalysisMemory
 from utils.database import DatabaseManager
-from models.schemas import TrainingDataResult
+from models.training import TrainingDataResult
 from models.exceptions import AgentExecutionError
+from prompts.manager import PromptManager
 
 # 导入所有工具
 from tools.analysis_tools.schema_extraction_tool import SchemaExtractionTool
@@ -70,6 +71,7 @@ class SQLAgent(BaseAgent):
         super().__init__(settings, db_config)
 
         self.logger = logging.getLogger(__name__)
+        self.prompt_manager = PromptManager()
 
     def _initialize_tools(self) -> List[BaseTool]:
         """初始化所有工具"""
@@ -80,10 +82,10 @@ class SQLAgent(BaseAgent):
             [
                 SchemaExtractionTool(db_manager=self.db_manager),
                 DomainAnalysisTool(llm=self.llm),
-                FieldClassificationTool(),
-                ColumnMeaningTool(),
-                TableMeaningTool(),
-                ERAnalysisTool(),
+                FieldClassificationTool(llm=self.llm, db_manager=self.db_manager),
+                ColumnMeaningTool(llm=self.llm),
+                TableMeaningTool(llm=self.llm),
+                ERAnalysisTool(llm=self.llm, db_manager=self.db_manager),
             ]
         )
 
@@ -121,70 +123,32 @@ class SQLAgent(BaseAgent):
         """执行数据库分析"""
         self.logger.info(f"Starting database analysis for: {database_name}")
 
-        # 预先执行schema_extraction并保存到记忆中
+        # 构建分析任务 - 让 Agent 自主决定执行流程
+        analysis_task = self.prompt_manager.render_template(
+            "analysis/database_analysis.j2",
+            database_name=database_name
+        )
+
+        # 使用专门的分析Agent执行器，不包含iteration参数
+        analysis_agent = self.create_analysis_agent()
+        
         try:
-            self.logger.info(
-                "Pre-executing schema_extraction to ensure schema_info is available"
-            )
-            schema_tool = SchemaExtractionTool(db_manager=self.db_manager)
-            schema_result = schema_tool._run(
-                database_name=database_name,
-                include_views=False,
-                include_indexes=True,
-                sample_data=False,
-            )
-
-            # 暂时禁用memory保存避免FieldInfo错误
-            # if hasattr(self, "memory") and self.memory:
-            #     import json
-            #     try:
-            #         schema_data = json.loads(schema_result)
-            #         self.memory.update_analysis("schema_info", schema_data)
-            #         self.logger.info("Schema info saved to memory successfully")
-            #     except json.JSONDecodeError as e:
-            #         self.logger.error(f"Failed to parse schema result as JSON: {e}")
-            #         return {"success": False, "error": f"Schema result parsing failed: {str(e)}", "message": "数据库分析失败：Schema结果解析错误"}
-            # else:
-            #     self.logger.warning("Memory not available, schema_info not saved")
-
-        except Exception as e:
-            self.logger.error(f"Failed to pre-execute schema_extraction: {str(e)}")
-            return {
-                "success": False,
-                "error": f"Schema extraction failed: {str(e)}",
-                "message": "数据库分析失败：无法提取数据库结构",
-            }
-
-        # 构建分析任务
-        analysis_task = f"""
-        请对数据库 {database_name} 执行完整的分析：
-        
-        重要提示：数据库结构信息(schema_info)已经预先提取并保存到记忆中，你可以直接使用。
-        
-        请按以下顺序执行分析：
-        1. 使用 domain_analysis 分析业务领域（schema_info已可用）
-        2. 使用 field_classification 对字段进行分类
-        3. 使用 column_meaning_analysis 分析列的业务含义
-        4. 使用 table_meaning_analysis 分析表的业务含义
-        5. 使用 er_analysis 分析实体关系
-        
-        请按顺序执行这些分析，并将结果保存到记忆中。
-        """
-
-        result = self.run(analysis_task)
-
-        if result["success"]:
+            # 执行分析任务
+            result = analysis_agent.invoke({"input": analysis_task})
+            
             # 获取分析结果
             memory_state = self.get_memory_state()
             return {
                 "success": True,
                 "analysis": memory_state.get("db_analysis", {}),
                 "message": "数据库分析完成",
+                "result": result.get("output", "")
             }
-        else:
+        except Exception as e:
+            self.logger.error(f"Database analysis failed: {e}")
             return {
                 "success": False,
-                "error": result.get("error", "分析失败"),
+                "error": str(e),
                 "message": "数据库分析失败",
             }
 
@@ -203,27 +167,10 @@ class SQLAgent(BaseAgent):
                 )
 
         # 构建生成任务
-        generation_task = f"""
-        请生成 {count} 个高质量的 SQL 训练数据：
-        
-        1. 对于每个训练样本，执行以下步骤：
-           - 使用 scenario_tool 选择一个场景
-           - 使用 operation_selection 根据场景选择合适的 SQL 操作
-           - 使用 question_generation 生成自然语言问题
-           - 使用 sql_generation 生成对应的 SQL 查询
-           - 使用 sql_validation 验证 SQL 语法
-           - 使用 sql_execution 执行 SQL 测试
-           - 使用 sql_reflection 反思生成质量
-        
-        2. 如果反思发现问题：
-           - 分析问题来源（problem_source）
-           - 根据建议（recommended_action）调用相应工具修正
-           - 重新执行有问题的步骤
-        
-        3. 每生成一个成功的样本，保存到结果列表中
-        
-        请确保生成的问题和 SQL 具有多样性，覆盖不同的场景和操作类型。
-        """
+        generation_task = self.prompt_manager.render_template(
+            "generation/training_data_generation.j2",
+            count=count
+        )
 
         # 执行生成任务
         result = self.run(generation_task)

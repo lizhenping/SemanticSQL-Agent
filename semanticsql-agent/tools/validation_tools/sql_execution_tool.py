@@ -3,9 +3,9 @@ SQL执行工具 - 执行SQL并返回结果
 基于 LangChain BaseTool
 """
 
-from typing import Dict, Any, Type, List
+from typing import Dict, Any, Type, List, Optional
 from langchain.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from models.exceptions import ToolExecutionError, SQLExecutionError
 from utils.database import DatabaseManager
@@ -24,11 +24,19 @@ class SQLExecutionTool(BaseTool):
     description: str = "执行SQL查询并返回结果"
     args_schema: Type[BaseModel] = SQLExecutionInput
     
+    # 定义必需的字段
+    db_manager: Optional[DatabaseManager] = Field(default=None, exclude=True)
+    
+    # Pydantic v2配置
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
     def __init__(self, db_manager: DatabaseManager):
         super().__init__()
-        object.__setattr__(self, 'db_manager', db_manager)
+        self.db_manager = db_manager
     
-    def _run(self, sql: str, limit: int = 100) -> Dict[str, Any]:
+    def _run(self, sql: str, limit: int = 100,
+        **kwargs  # 接受额外的参数如 verbose
+    ) -> Dict[str, Any]:
         """执行SQL"""
         try:
             # 添加LIMIT如果没有

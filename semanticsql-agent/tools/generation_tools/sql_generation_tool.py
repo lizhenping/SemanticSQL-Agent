@@ -7,19 +7,44 @@ import re
 from typing import Dict, Any, Type, List, Optional
 from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict, model_validator
+import json
 
-from models.schemas import SQLOperation
+from models.base import SQLOperation
 from models.exceptions import ToolExecutionError, LLMError
 from utils.database import DatabaseManager
+from prompts.manager import PromptManager
 
 
 class SQLGenerationInput(BaseModel):
     """SQL生成输入"""
     question: str = Field(description="自然语言问题")
-    memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
-    operations: List[str] = Field(default_factory=list, description="建议的SQL操作")
+    scenario: Optional[Dict[str, Any]] = Field(default=None, description="场景信息")
+    memory: Optional[Dict[str, Any]] = Field(default=None, description="包含数据库分析结果的记忆")
+    operations: Optional[List[str]] = Field(default=None, description="建议的SQL操作")
+    
+    @model_validator(mode='before')
+    @classmethod
+    def validate_input(cls, data):
+        """处理字符串输入"""
+        if isinstance(data, str):
+            import json
+            try:
+                data = json.loads(data)
+            except:
+                data = {}
+        return data
+
+
+class GeneratedSQL(BaseModel):
+    """生成的SQL查询"""
+    sql: str = Field(description="SQL语句")
     dialect: str = Field(default="mysql", description="SQL方言")
+    tables_used: List[str] = Field(description="使用的表")
+    operations_used: List[str] = Field(description="使用的操作")
+    has_aggregation: bool = Field(description="是否包含聚合")
+    has_join: bool = Field(default=False, description="是否包含JOIN")
+    complexity: str = Field(default="medium", description="复杂度")
 
 
 class SQLGenerationTool(BaseTool):
@@ -29,20 +54,40 @@ class SQLGenerationTool(BaseTool):
     description: str = "根据自然语言问题和数据库结构生成对应的SQL查询"
     args_schema: Type[BaseModel] = SQLGenerationInput
     
+    # 定义必需的字段
+    llm: Optional[ChatOpenAI] = Field(default=None, exclude=True)
+    db_manager: Optional[DatabaseManager] = Field(default=None, exclude=True)
+    prompt_manager: Optional[PromptManager] = Field(default=None, exclude=True)
+    
+    # Pydantic v2配置
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
     def __init__(self, llm: ChatOpenAI, db_manager: Optional[DatabaseManager] = None):
         super().__init__()
-        object.__setattr__(self, 'llm', llm)
-        object.__setattr__(self, 'db_manager', db_manager)
+        self.llm = llm
+        self.db_manager = db_manager
+        self.prompt_manager = PromptManager()
     
     def _run(
         self,
         question: str,
-        memory: Dict[str, Any],
-        operations: List[str] = None,
+        scenario: Optional[Dict[str, Any]] = None,
+        memory: Optional[Dict[str, Any]] = None,
+        operations: Optional[List[str]] = None,
         dialect: str = "mysql"
+    ,
+        **kwargs  # 接受额外的参数如 verbose
     ) -> Dict[str, Any]:
         """生成SQL查询"""
         try:
+            # 处理默认值
+            if memory is None:
+                memory = {}
+            if operations is None:
+                operations = []
+            if scenario is None:
+                scenario = {}
+            
             # 从记忆中获取必要信息
             db_analysis = memory.get("db_analysis", {})
             schema_info = db_analysis.get("schema_info", {})
@@ -158,23 +203,12 @@ class SQLGenerationTool(BaseTool):
         dialect: str
     ) -> str:
         """使用LLM生成SQL"""
-        prompt = f"""基于以下数据库结构信息，生成SQL查询来回答用户的问题。
-
-{context}
-
-SQL方言：{dialect}
-
-用户问题：{question}
-
-请生成SQL查询，要求：
-1. SQL语法正确，符合{dialect}方言
-2. 只返回SQL语句，不要其他解释
-3. 使用合适的表和字段
-4. 如果需要聚合，使用GROUP BY
-5. 如果需要排序，使用ORDER BY
-6. 考虑性能，避免不必要的复杂度
-
-SQL查询："""
+        prompt = self.prompt_manager.get_tool_prompt(
+            "sql_generation",
+            context=context,
+            dialect=dialect,
+            question=question
+        )
 
         try:
             response = self.llm.invoke(prompt)

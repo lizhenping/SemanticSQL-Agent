@@ -6,9 +6,10 @@ SQL反思工具 - 分析执行结果并提供优化建议
 from typing import Dict, Any, Type, List, Optional
 from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from models.exceptions import ToolExecutionError
+from prompts.manager import PromptManager
 
 
 class SQLReflectionInput(BaseModel):
@@ -19,6 +20,15 @@ class SQLReflectionInput(BaseModel):
     memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
 
 
+class ReflectionResult(BaseModel):
+    """反思结果"""
+    problem_source: str = Field(description="问题来源")
+    root_cause_analysis: str = Field(description="根本原因分析")
+    recommended_action: str = Field(description="推荐的下一步行动")
+    suggestions: List[str] = Field(description="具体建议")
+    improved_sql: Optional[str] = Field(default=None, description="改进的SQL")
+
+
 class SQLReflectionTool(BaseTool):
     """SQL执行反思与优化工具"""
     
@@ -26,17 +36,26 @@ class SQLReflectionTool(BaseTool):
     description: str = "分析SQL执行结果，识别问题来源并建议下一步行动"
     args_schema: Type[BaseModel] = SQLReflectionInput
     
+    # 定义必需的字段
+    llm: Optional[ChatOpenAI] = Field(default=None, exclude=True)
+    prompt_manager: Optional[PromptManager] = Field(default=None, exclude=True)
+    quality_weights: Optional[Dict[str, float]] = Field(default=None, exclude=True)
+    
+    # Pydantic v2配置
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
     def __init__(self, llm: ChatOpenAI):
         super().__init__()
-        object.__setattr__(self, 'llm', llm)
+        self.llm = llm
+        self.prompt_manager = PromptManager()
         
-        # 定义质量权重，使用object.__setattr__避开Pydantic验证
-        object.__setattr__(self, 'quality_weights', {
+        # 定义质量权重
+        self.quality_weights = {
             "syntax_correctness": 0.3,
             "semantic_match": 0.3,
             "execution_success": 0.25,
             "result_relevance": 0.15
-        })
+        }
     
     def _run(
         self,
@@ -44,6 +63,8 @@ class SQLReflectionTool(BaseTool):
         sql: str,
         execution_result: Dict[str, Any],
         memory: Dict[str, Any]
+    ,
+        **kwargs  # 接受额外的参数如 verbose
     ) -> Dict[str, Any]:
         """执行SQL反思"""
         try:
@@ -160,18 +181,11 @@ class SQLReflectionTool(BaseTool):
     ) -> Dict[str, Any]:
         """分析空结果原因"""
         # 基于LLM分析为什么没有结果
-        prompt = f"""分析以下SQL查询返回空结果的原因：
-
-问题：{question}
-SQL：{sql}
-
-可能的原因：
-1. WHERE条件过于严格
-2. JOIN条件不匹配
-3. 数据确实不存在
-4. 时间范围问题
-
-请分析最可能的原因。"""
+        prompt = self.prompt_manager.render_template(
+            "reflection/analyze_empty_result.j2",
+            question=question,
+            sql=sql
+        )
 
         try:
             response = self.llm.invoke(prompt)
@@ -224,22 +238,12 @@ SQL：{sql}
         }
         
         # 使用LLM评估语义匹配和结果相关性
-        prompt = f"""评估SQL查询结果的质量：
-
-用户问题：{question}
-生成的SQL：{sql}
-返回结果样例（前3行）：{result_data[:3]}
-
-请评估：
-1. SQL是否正确回答了用户的问题？（0-1分）
-2. 结果是否相关且有意义？（0-1分）
-3. 是否有改进空间？
-
-格式：
-语义匹配分数：X.X
-结果相关性分数：X.X
-改进建议：...
-"""
+        prompt = self.prompt_manager.render_template(
+            "reflection/evaluate_result_quality.j2",
+            question=question,
+            sql=sql,
+            result_sample=result_data[:3]
+        )
 
         try:
             response = self.llm.invoke(prompt)

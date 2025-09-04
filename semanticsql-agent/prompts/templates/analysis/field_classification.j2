@@ -1,0 +1,62 @@
+你是一个数据库字段分类专家。请对以下字段进行语义分类。
+
+## 业务背景
+{% if domain_type %}
+- 领域类型：{{ domain_type }}
+{% endif %}
+{% if domain_description %}
+- 领域描述：{{ domain_description }}
+{% endif %}
+
+## 需要分类的字段
+{% for field in fields %}
+### {{ field.field_name }}
+- 表名：{{ field.table_name }}
+- 字段名：{{ field.column_name }}
+- 数据类型：{{ field.data_type }}
+{% if field.samples %}
+- 样例数据：{{ field.samples | join(', ') }}
+{% endif %}
+{% if field.entropy %}
+- 熵值：{{ field.entropy }}
+{% endif %}
+
+{% endfor %}
+
+## 分类要求
+
+请为每个字段提供以下分类信息：
+
+1. **category**: 字段类别，必须是以下之一：
+   - identifier: 标识符（如ID、编号、代码等）
+   - measure: 度量值（可计算、聚合的数值）
+   - dimension: 维度（用于分类、分组的字段）
+   - temporal: 时间相关（日期、时间、时间戳）
+   - text: 文本（名称、描述、备注等）
+   - boolean: 布尔值（是否、状态标志等）
+   - other: 其他
+
+2. **field_type**: 更具体的业务类型描述
+   - 例如：主键、外键、用户ID、订单编号、金额、数量、状态码、创建时间等
+
+3. **importance**: 业务重要性
+   - high: 核心业务字段
+   - medium: 重要辅助字段
+   - low: 一般字段
+
+## 输出格式
+
+请严格按照以下JSON格式返回结果：
+```json
+{
+  {% for field in fields %}
+  "{{ field.field_name }}": {
+    "category": "类别",
+    "field_type": "具体业务类型",
+    "importance": "重要性"
+  }{% if not loop.last %},{% endif %}
+  {% endfor %}
+}
+```
+
+注意：请基于字段名、数据类型、样例数据和业务背景综合判断。

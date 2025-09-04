@@ -3,18 +3,33 @@
 基于 LangChain BaseTool
 """
 
-from typing import Dict, Any, Type, List
+from typing import Dict, Any, Type, List, Optional
 from langchain.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+import json
 
-from models.schemas import SQLOperation, DifficultyLevel
+from models.base import SQLOperation, DifficultyLevel
 from models.exceptions import ToolExecutionError
 
 
 class OperationSelectionInput(BaseModel):
     """操作选择输入"""
-    scenario: Dict[str, Any] = Field(description="场景信息")
-    memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
+    scenario_id: str = Field(default="", description="场景ID")
+    complexity: str = Field(default="medium", description="场景复杂度")
+    scenario: Optional[Dict[str, Any]] = Field(default=None, description="完整场景信息")
+    memory: Optional[Dict[str, Any]] = Field(default=None, description="包含数据库分析结果的记忆")
+    
+    @model_validator(mode='before')
+    @classmethod
+    def validate_input(cls, data):
+        """处理字符串输入"""
+        if isinstance(data, str):
+            import json
+            try:
+                data = json.loads(data)
+            except:
+                data = {}
+        return data
 
 
 class OperationSelectionTool(BaseTool):
@@ -22,29 +37,27 @@ class OperationSelectionTool(BaseTool):
     
     name: str = "operation_selection"
     description: str = "根据场景复杂度和业务需求选择合适的SQL操作组合"
-    # args_schema: Type[BaseModel] = OperationSelectionInput  # Commented due to LangChain complex parameter issues
+    args_schema: Type[BaseModel] = OperationSelectionInput
     
-    def _run(self, tool_input: str = "", **kwargs) -> Dict[str, Any]:
+    def _run(
+        self, 
+        scenario_id: str = "",
+        complexity: str = "medium",
+        scenario: Optional[Dict[str, Any]] = None,
+        memory: Optional[Dict[str, Any]] = None
+    ,
+        **kwargs  # 接受额外的参数如 verbose
+    ) -> Dict[str, Any]:
         """选择SQL操作"""
         try:
-            # 解析JSON输入参数
-            import json
-            scenario = {}
-            memory = {}
-            try:
-                if tool_input:
-                    input_data = json.loads(tool_input)
-                    scenario = input_data.get('scenario', {})
-                    memory = input_data.get('memory', {})
-                    if isinstance(scenario, str):
-                        scenario = json.loads(scenario)
-            except:
-                scenario = {}
-                memory = {}
-            
-            complexity = scenario.get("complexity", "medium")
-            category = scenario.get("category", "")
-            suggested_operations = scenario.get("applicable_operations", [])
+            # 如果提供了完整的scenario，使用它；否则基于complexity选择
+            if scenario:
+                complexity = scenario.get("complexity", complexity)
+                category = scenario.get("category", "")
+                suggested_operations = scenario.get("applicable_operations", [])
+            else:
+                category = ""
+                suggested_operations = []
             
             # 如果场景已经有建议的操作，直接使用
             if suggested_operations:

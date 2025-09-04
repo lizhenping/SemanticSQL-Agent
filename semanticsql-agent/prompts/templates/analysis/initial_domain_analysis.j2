@@ -1,0 +1,40 @@
+你是一个数据库业务领域分析专家。请分析以下数据库的业务领域和特征。
+
+## 数据库信息
+- 数据库名称：{{ database_name }}
+- 表数量：{{ type_distribution | length }}
+- 字段类型分布：
+{% for type, count in type_distribution.items() %}
+  - {{ type }}: {{ count }}个
+{% endfor %}
+
+## 字段模式统计
+{% for pattern, count in field_patterns.items() %}
+- {{ pattern }}: {{ count }}个
+{% endfor %}
+
+## 数据库DDL结构
+```sql
+{{ database_ddl }}
+```
+
+## 分析要求
+请基于以上信息，分析该数据库的业务领域，并以JSON格式返回结果：
+
+```json
+{
+  "domain_type": "主要业务领域（如：电商、金融、教育、医疗等）",
+  "domain_description": "详细的领域描述",
+  "key_entities": ["核心业务实体1", "核心业务实体2", ...],
+  "business_rules": [
+    "发现的业务规则1",
+    "发现的业务规则2"
+  ],
+  "data_characteristics": [
+    "数据特征1",
+    "数据特征2"
+  ]
+}
+```
+
+请确保返回有效的JSON格式。

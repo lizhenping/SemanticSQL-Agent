@@ -3,10 +3,10 @@ SQL验证工具 - 验证SQL语法正确性
 基于 LangChain BaseTool
 """
 
-from typing import Dict, Any, Type, List
+from typing import Dict, Any, Type, List, Optional
 import sqlparse
 from langchain.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from models.exceptions import ToolExecutionError
 from utils.database import DatabaseManager
@@ -25,11 +25,19 @@ class SQLValidationTool(BaseTool):
     description: str = "验证SQL语句的语法正确性"
     args_schema: Type[BaseModel] = SQLValidationInput
     
+    # 定义必需的字段
+    db_manager: Optional[DatabaseManager] = Field(default=None, exclude=True)
+    
+    # Pydantic v2配置
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
     def __init__(self, db_manager: DatabaseManager):
         super().__init__()
-        object.__setattr__(self, 'db_manager', db_manager)
+        self.db_manager = db_manager
     
-    def _run(self, sql: str, memory: Dict[str, Any]) -> Dict[str, Any]:
+    def _run(self, sql: str, memory: Dict[str, Any],
+        **kwargs  # 接受额外的参数如 verbose
+    ) -> Dict[str, Any]:
         """验证SQL"""
         try:
             # 基本语法验证

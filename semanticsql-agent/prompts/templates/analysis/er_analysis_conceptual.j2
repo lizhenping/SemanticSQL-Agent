@@ -1,0 +1,35 @@
+你是一个业务概念建模专家。请基于数据库结构分析业务概念和实体关系。
+
+## 数据库结构
+{{ formatted_schema }}
+
+## 已识别的关系
+### 物理关系（外键）
+{% for rel in physical_relations %}
+- {{ rel.from_table }}.{{ rel.from_column }} -> {{ rel.to_table }}.{{ rel.to_column }}
+{% endfor %}
+
+### 逻辑关系
+{% for rel in logical_relations %}
+- {{ rel.from }} -> {{ rel.to }} ({{ rel.type }})
+{% endfor %}
+
+## 任务
+请从业务概念层面分析实体之间的关系，包括：
+1. 核心业务实体及其关系
+2. 业务流程中的实体交互
+3. 聚合根和值对象的识别
+4. 业务不变量和约束
+
+请以JSON格式返回概念关系：
+```json
+[
+  {
+    "entity1": "业务实体1",
+    "entity2": "业务实体2", 
+    "relationship": "关系描述",
+    "type": "contains|references|depends|extends",
+    "business_rule": "相关的业务规则或约束"
+  }
+]
+```

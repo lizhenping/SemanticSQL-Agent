@@ -5,26 +5,50 @@
 
 import random
 import json
-from typing import Dict, Any, Type, List, Optional
+from typing import Dict, Any, Type, List, Optional, Union
 from datetime import datetime
+import uuid
 
 from langchain.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
-from models.schemas import QueryScenario, DifficultyLevel, SQLOperation
+from models.base import DifficultyLevel, SQLOperation
 from models.exceptions import ToolExecutionError
+
+
+class QueryScenario(BaseModel):
+    """查询场景"""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    category: str = ""  # 销售分析、库存管理等
+    business_purpose: str = ""  # 业务目的
+    complexity: DifficultyLevel = DifficultyLevel.MEDIUM
+    applicable_tables: List[str] = Field(default_factory=list)
+    suggested_operations: List[SQLOperation] = Field(default_factory=list)
+    description: str = ""
 
 
 class ScenarioToolInput(BaseModel):
     """场景工具输入"""
     iteration: int = Field(default=0, description="当前迭代次数")
+    
+    @model_validator(mode='before')
+    @classmethod
+    def validate_input(cls, data):
+        """处理字符串输入"""
+        if isinstance(data, str):
+            import json
+            try:
+                data = json.loads(data)
+            except:
+                data = {"iteration": 0}
+        return data
 
 
 class ScenarioTool(BaseTool):
     """基于预定义模板选择业务场景"""
     
     name: str = "scenario_tool"
-    description: str = "从预定义的场景模板中选择一个适合当前数据库的业务场景"
+    description: str = "从预定义的场景模板中选择一个适合当前数据库的业务场景。输入参数：iteration（整数，当前迭代次数）"
     args_schema: Type[BaseModel] = ScenarioToolInput
     
     def __init__(self):
@@ -38,19 +62,22 @@ class ScenarioTool(BaseTool):
             DifficultyLevel.EXPERT: 0.05
         })
     
-    def _run(self, iteration: int = 0, **kwargs) -> Dict[str, Any]:
+    def _run(self, *args, **kwargs) -> Dict[str, Any]:
         """选择一个场景"""
         try:
-            # Handle LangChain parameter passing - sometimes iteration is a JSON string
-            if isinstance(iteration, str) and iteration.startswith('{'):
+            # 处理不同的输入格式
+            if args and isinstance(args[0], str):
+                # 如果第一个参数是字符串，尝试解析为JSON
+                import json
                 try:
-                    params = json.loads(iteration)
-                    iteration = params.get("iteration", 0)
-                    # Extract other parameters that might be passed via JSON
-                    database = params.get("database", "")
-                    num_scenarios = params.get("num_scenarios", 1)
-                except json.JSONDecodeError:
-                    iteration = 0  # Use default if JSON parsing fails
+                    data = json.loads(args[0])
+                    iteration = data.get('iteration', 0)
+                except:
+                    iteration = 0
+            elif 'iteration' in kwargs:
+                iteration = kwargs['iteration']
+            else:
+                iteration = 0
             
             # ScenarioTool基于预定义模板工作，不需要数据库分析结果
             # 它会返回通用的业务场景，供后续工具使用

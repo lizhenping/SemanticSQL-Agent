@@ -12,7 +12,7 @@ from langchain.callbacks.base import BaseCallbackHandler
 from langchain_core.agents import AgentAction, AgentFinish
 from langchain_core.outputs import LLMResult
 
-from models.schemas import AgentExecution, AgentStep, AgentStepType
+from models.agent import AgentExecution, AgentStep, AgentStepType
 from utils.trajectory import TrajectoryRecorder
 
 
@@ -79,6 +79,19 @@ class TrajectoryCallbackHandler(BaseCallbackHandler):
         """记录Agent完成"""
         self.logger.info(f"Agent finished with output: {finish.return_values}")
         
+        # 打印工具调用历史
+        if hasattr(self, 'tool_call_history') and self.tool_call_history:
+            self.logger.info("\n📊 Tool Call History:")
+            self.logger.info("=" * 80)
+            for i, record in enumerate(self.tool_call_history, 1):
+                self.logger.info(f"{i}. Tool: {record['tool']}")
+                self.logger.info(f"   Time: {record['timestamp']}")
+                self.logger.info(f"   Status: {record['status']}")
+                self.logger.info(f"   Input: {record['input'][:100]}...")
+                if 'output_preview' in record:
+                    self.logger.info(f"   Output: {record['output_preview']}...")
+                self.logger.info("-" * 40)
+        
         self.trajectories.append({
             "type": "finish",
             "output": finish.return_values,
@@ -97,7 +110,18 @@ class TrajectoryCallbackHandler(BaseCallbackHandler):
     ) -> Any:
         """工具开始执行"""
         tool_name = serialized.get("name", "unknown")
-        self.logger.debug(f"Tool {tool_name} started with input: {input_str}")
+        self.logger.info(f"🔧 Tool '{tool_name}' started with input: {input_str}")
+        
+        # 记录到工具调用历史
+        if not hasattr(self, 'tool_call_history'):
+            self.tool_call_history = []
+        
+        self.tool_call_history.append({
+            "tool": tool_name,
+            "input": input_str,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "status": "started"
+        })
         
         if self.current_execution:
             self.current_step = AgentStep(
@@ -117,7 +141,16 @@ class TrajectoryCallbackHandler(BaseCallbackHandler):
         **kwargs: Any
     ) -> Any:
         """工具执行结束"""
-        self.logger.debug(f"Tool finished with output: {output}")
+        self.logger.info(f"✅ Tool finished successfully")
+        
+        # 更新工具调用历史
+        if hasattr(self, 'tool_call_history') and self.tool_call_history:
+            # 找到最后一个 started 状态的记录
+            for record in reversed(self.tool_call_history):
+                if record.get("status") == "started":
+                    record["status"] = "completed"
+                    record["output_preview"] = output[:100] if isinstance(output, str) else str(output)[:100]
+                    break
         
         if self.current_step:
             # 解析工具输出 - 处理JSON字符串格式
@@ -225,6 +258,25 @@ class TrajectoryCallbackHandler(BaseCallbackHandler):
         **kwargs: Any
     ) -> Any:
         """LLM生成结束"""
+        from utils.thinking_parser import ThinkingOutputParser
+        
+        # 使用 ThinkingOutputParser 处理输出
+        parser = ThinkingOutputParser()
+        
+        if response.generations:
+            for generation_list in response.generations:
+                for generation in generation_list:
+                    if hasattr(generation, 'text') and generation.text:
+                        # 解析输出
+                        parsed = parser.parse(generation.text)
+                        
+                        # 记录思考过程
+                        if parsed['has_thinking']:
+                            self.logger.debug(f"LLM thinking: {parsed['thinking'][:200]}...")
+                        
+                        # 更新生成的文本为清理后的答案
+                        generation.text = parsed['answer']
+        
         self.logger.debug(f"LLM finished with {len(response.generations)} generations")
     
     def on_llm_error(
