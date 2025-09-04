@@ -703,16 +703,9 @@ Final Answer: [
 prompts/
 ├── templates/
 │   ├── system/                        # 系统级提示词
-│   │   ├── main.j2                    # Agent主系统提示词（3.3KB, 82行）
-│   │   └── analysis_main.j2           # 数据库分析专用系统提示词（2.5KB, 81行）
-│   │
-│   ├── tools/                         # 工具通用提示词
-│   │   ├── tool_system.j2             # 工具系统通用提示词（698B, 35行）
-│   │   ├── question_generation.j2     # 问题生成工具提示词（450B, 15行）
-│   │   └── sql_generation.j2          # SQL生成工具提示词（582B, 23行）
+│   │   └── main.j2                    # Agent主系统提示词（3.3KB, 82行）
 │   │
 │   ├── analysis/                      # 数据库分析专用提示词
-│   │   ├── database_analysis.j2       # 数据库分析入口（130B, 3行）
 │   │   ├── initial_domain_analysis.j2 # 初始领域分析（1.0KB, 40行）
 │   │   ├── field_classification.j2    # 字段分类分析（1.7KB, 62行）
 │   │   ├── column_description.j2      # 列描述分析（1.2KB, 52行）
@@ -721,16 +714,14 @@ prompts/
 │   │   └── er_analysis_conceptual.j2  # 概念关系分析（920B, 35行）
 │   │
 │   ├── generation/                    # 生成专用提示词
-│   │   └── training_data_generation.j2 # 训练数据生成（55B, 1行）
+│   │   ├── question_generation.j2     # 问题生成工具提示词（450B, 15行）
+│   │   └── sql_generation.j2          # SQL生成工具提示词（582B, 23行）
 │   │
 │   ├── reflection/                    # 反思专用提示词
-│   │   ├── reflection_guide.j2        # 反思指导（2.5KB, 87行）
-│   │   ├── evaluate_result_quality.j2 # 结果质量评估（375B, 15行）
-│   │   └── analyze_empty_result.j2    # 空结果分析（238B, 12行）
+│   │   └── reflection_guide.j2        # 反思专用提示词
 │   │
 │   ├── thinking/                      # 深度思考提示词
-│   │   ├── sequential_thinking.j2     # 顺序思考（243B, 11行）
-│   │   └── sequential_thinking_guide.j2 # 思考指导（3.4KB, 121行）
+│   │   └── sequential_thinking.j2     # 顺序思考（243B, 11行）
 │   │
 │   └── README.md                      # 提示词使用说明（3.7KB, 115行）
 │
