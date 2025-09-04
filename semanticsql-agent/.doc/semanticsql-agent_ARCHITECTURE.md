@@ -149,7 +149,7 @@ semanticsql-agent/
 - **sql_execution_tool**: 安全执行SQL并返回结果
 
 **反思工具** (reflection_tools/)
-- **sql_reflection_tool**: 评估执行结果质量，定位问题源头，推荐修正工具
+- **sql_reflection_tool**: 评估执行结果质量，分析问题特征，提供质量评分
 
 **思考工具** (thinking_tools/)
 - **sequential_thinking_tool**: 深度分析问题，制定修正策略

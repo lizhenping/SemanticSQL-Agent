@@ -674,6 +674,26 @@ Observation: 工具返回结果
 Final Answer: 最终的训练样本
 
 **记住**: 这些建议只是参考，你有完全的自主决策权！根据实际需求灵活选择工具和执行顺序。
+
+### 💡 ReAct反思的正确方式
+
+当你发现质量问题时，应该这样自主推理：
+
+```
+Thought: 反思发现问题，我需要分析具体原因。
+Action: sequential_thinking
+Observation: 分析结果指出具体问题
+
+Thought: 根据分析结果，我认为需要重新生成更好的问题。
+Action: question_generation
+Observation: 生成了改进的问题
+
+Thought: 现在用新问题生成SQL。
+Action: sql_generation
+Observation: 生成了新的SQL
+```
+
+**注意**：不要想着"回到某个步骤"，而是"我现在需要做什么"。
 """
 
 # 创建简化的提示词模板
@@ -683,6 +703,158 @@ prompt = ChatPromptTemplate.from_messages([
     ("assistant", "{agent_scratchpad}")
 ])
 ```
+
+### **🎯 提示词设计的ReAct兼容性原则**
+
+#### **✅ 正确的提示词设计方式**
+
+1. **提供思考建议，不强制执行**：
+```python
+# ✅ 正确：给出建议但强调自主决策
+"""
+## 常见思考路径（仅供参考）：
+1. 检查记忆状态
+2. 按需分析数据库
+3. 选择场景和操作
+4. 生成问题和SQL
+5. 验证和反思
+
+**记住**：这只是建议，你可以根据实际情况灵活调整！
+"""
+
+# ❌ 错误：硬性要求执行顺序
+"""
+## 执行步骤（必须按顺序）：
+1. 首先执行 schema_extraction
+2. 然后执行 domain_analysis
+3. 接下来执行 question_generation
+"""
+```
+
+2. **描述工具用途，不指定使用时机**：
+```python
+# ✅ 正确：描述工具功能
+"""
+可用工具：
+- schema_extraction: 提取数据库表结构信息
+- sql_reflection: 评估SQL质量，分析问题特征
+- sequential_thinking: 深度分析复杂问题
+"""
+
+# ❌ 错误：指定使用时机
+"""
+工具使用规则：
+- 必须先调用 schema_extraction
+- SQL执行失败时必须调用 sql_reflection
+- 发现问题时必须调用 sequential_thinking
+"""
+```
+
+3. **鼓励自主思考，不提供决策树**：
+```python
+# ✅ 正确：鼓励自主推理
+"""
+根据当前情况自主决策：
+- 我需要什么信息？
+- 哪个工具能帮助我？
+- 现在最重要的是什么？
+"""
+
+# ❌ 错误：提供决策树
+"""
+决策规则：
+if 缺少schema信息:
+    调用 schema_extraction
+elif 需要生成问题:
+    调用 question_generation
+"""
+```
+
+#### **🧠 思考流程指导的最佳实践**
+
+提示词中的思考流程指导应该：
+
+1. **启发式而非指令式**：
+   - ✅ "你可能需要考虑..."
+   - ❌ "你必须执行..."
+
+2. **示例式而非规则式**：
+   - ✅ "典型的思考路径可能是..."
+   - ❌ "执行规则是..."
+
+3. **建议式而非强制式**：
+   - ✅ "建议的工作流程（可自主调整）"
+   - ❌ "标准工作流程（必须遵循）"
+
+这样的提示词设计既能给Agent提供有用的指导，又完全符合ReAct的自主决策原则。
+
+### **❌ 错误的反思决策流程 vs ✅ 正确的ReAct推理**
+
+#### **❌ 错误示例：外部控制的决策树**
+```python
+# 这是错误的设计 - 违背ReAct原则
+def handle_reflection_result(reflection_result):
+    if reflection_result["needs_revision"]:
+        if reflection_result["problem_type"] == "sql_error":
+            return call_tool("sql_generation")  # 硬编码的决策
+        elif reflection_result["problem_type"] == "question_unclear":
+            return call_tool("question_generation")  # 硬编码的决策
+    else:
+        return save_sample()  # 硬编码的流程
+```
+
+#### **✅ 正确示例：Agent自主推理**
+```
+Agent完全自主的推理过程：
+
+Thought: 我刚执行了SQL，现在评估一下质量。
+Action: sql_reflection
+Action Input: {"sql": "SELECT * FROM users", "execution_result": {...}}
+Observation: {"quality_score": 0.3, "issues": ["查询过于简单，缺乏业务价值"]}
+
+Thought: 质量分数很低，问题确实太简单了。我需要重新思考这个业务场景。
+Action: sequential_thinking  
+Action Input: {"problem": "生成的查询缺乏业务价值", "context": {...}}
+Observation: {"analysis": "应该添加筛选条件和聚合分析，体现更复杂的业务需求"}
+
+Thought: 分析得对，我需要重新设计一个更有价值的问题。
+Action: question_generation
+Action Input: {"scenario": "用户分析", "operations": ["WHERE", "GROUP BY"], "complexity": "medium"}
+Observation: {"question": "统计不同城市的活跃用户数量"}
+
+Thought: 这个问题更好，现在生成对应的SQL。
+Action: sql_generation
+Action Input: {"question": "统计不同城市的活跃用户数量", "schema_info": {...}}
+Observation: {"sql": "SELECT city, COUNT(*) FROM users WHERE status='active' GROUP BY city"}
+
+Thought: 验证新的SQL。
+Action: sql_validation
+Action Input: {"sql": "SELECT city, COUNT(*) FROM users WHERE status='active' GROUP BY city"}
+Observation: {"valid": true}
+
+Thought: 执行SQL测试。
+Action: sql_execution
+Action Input: {"sql": "..."}
+Observation: {"success": true, "row_count": 25}
+
+Thought: 再次评估质量。
+Action: sql_reflection
+Action Input: {"sql": "...", "execution_result": {...}, "question": "统计不同城市的活跃用户数量"}
+Observation: {"quality_score": 0.87, "issues": [], "needs_revision": false}
+
+Thought: 现在质量很好，样本生成完成。
+Final Answer: {"question": "统计不同城市的活跃用户数量", "sql": "SELECT city, COUNT(*) FROM users WHERE status='active' GROUP BY city", "quality_score": 0.87}
+```
+
+#### **关键差异总结**
+
+| 方面 | ❌ 错误的流程控制 | ✅ 正确的ReAct推理 |
+|------|-----------------|------------------|
+| **决策主体** | 外部代码根据规则决策 | Agent根据思考自主决策 |
+| **工具选择** | 预设的问题类型→工具映射 | Agent根据实际需求选择工具 |
+| **执行流程** | 固定的"回到某步骤"逻辑 | 自然的"我现在需要做什么"推理 |
+| **错误处理** | 硬编码的if-else分支 | Agent自主分析和应对 |
+| **灵活性** | 受限于预设的决策规则 | 完全灵活，适应各种情况 |
 
 **简化的记忆机制实现**：
 ```python
