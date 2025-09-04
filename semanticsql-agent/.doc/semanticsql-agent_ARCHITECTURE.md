@@ -369,13 +369,13 @@ Thought: 我需要生成训练样本。首先检查是否了解数据库结构�
 Action: 检查记忆或调用schema_extraction
 Observation: [获得数据库结构信息]
 
-Thought: 现在选择一个业务场景。
-Action: scenario_tool
-Observation: [选择了"销售分析"场景]
-
-Thought: 根据场景选择SQL操作类型。
-Action: operation_selection  
-Observation: [选择了聚合查询操作]
+Thought: 现在需要获取场景和操作方案。
+Action: scenario_operation_generation
+Action Input: {"mode": "get_single_combination"}
+Observation: {
+    "scenario": {"name": "销售分析", "complexity": "moderate"},
+    "operations": ["SELECT", "GROUP BY", "HAVING"]
+}
 
 Thought: 生成自然语言问题。
 Action: question_generation

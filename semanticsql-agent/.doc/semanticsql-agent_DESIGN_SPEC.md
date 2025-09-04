@@ -231,13 +231,13 @@ Thought: 需要生成训练样本。先检查是否了解数据库。
 Action: 检查记忆状态，必要时调用schema_extraction
 Observation: 获得数据库结构信息
 
-Thought: 选择一个业务场景。  
-Action: scenario_tool
-Observation: 选择了"销售分析"场景
-
-Thought: 根据场景复杂度选择SQL操作。
-Action: operation_selection
-Observation: 选择了GROUP BY聚合操作
+Thought: 需要获取场景和操作方案
+Action: scenario_operation_generation
+Action Input: {"mode": "get_single_combination"}
+Observation: {
+    "scenario": {"name": "销售分析", "complexity": "moderate"},
+    "operations": ["SELECT", "GROUP BY", "HAVING"]
+}
 
 Thought: 基于场景和操作生成问题。
 Action: question_generation  
@@ -1632,13 +1632,13 @@ Thought: 最后分析表之间的关系
 Action: er_analysis
 Observation: orders.user_id关联users.id，一对多关系 → 保存到记忆
     ↓
-Thought: 现在我对数据库有了全面的理解，开始生成场景
-Action: scenario_tool
-Observation: 选择了"销售分析"场景
-    ↓
-Thought: 根据场景选择SQL操作类型
-Action: operation_selection
-Observation: 选择了聚合查询操作
+Thought: 现在我对数据库有了全面的理解，获取场景和操作方案
+Action: scenario_operation_generation
+Action Input: {"mode": "get_single_combination"}
+Observation: {
+    "scenario": {"name": "销售分析", "complexity": "moderate"},
+    "operations": ["SELECT", "GROUP BY", "HAVING"]
+}
     ↓
 Thought: 基于场景和操作生成问题
 Action: question_generation
@@ -1670,13 +1670,13 @@ Final Answer: {"question": "统计每月销售总额", "sql": "SELECT...", "qual
     ↓
 Thought: 我需要生成第2个样本，记忆中已有数据库分析信息
     ↓
-Thought: 直接选择业务场景
-Action: scenario_tool
-Observation: 选择了"用户分析"场景
-    ↓
-Thought: 根据场景选择操作
-Action: operation_selection
-Observation: 选择了基础查询操作
+Thought: 直接获取场景和操作方案
+Action: scenario_operation_generation
+Action Input: {"mode": "get_single_combination"}
+Observation: {
+    "scenario": {"name": "用户分析", "complexity": "simple"},
+    "operations": ["SELECT", "WHERE"]
+}
     ↓
 Thought: 生成自然语言问题
 Action: question_generation
@@ -1740,13 +1740,13 @@ Thought: 我需要生成第5个样本，先检查记忆状态
     ├─ table_analysis ✓
     └─ er_analysis ✓
     ↓
-Thought: 很好！我已经有了完整信息，直接开始生成场景
-Action: scenario_tool
-Observation: 选择了"库存管理"场景
-    ↓
-Thought: 根据场景选择操作类型
-Action: operation_selection
-Observation: 选择了JOIN和WHERE操作
+Thought: 很好！我已经有了完整信息，直接获取场景和操作方案
+Action: scenario_operation_generation
+Action Input: {"mode": "get_single_combination"}
+Observation: {
+    "scenario": {"name": "库存管理", "complexity": "moderate"},
+    "operations": ["SELECT", "JOIN", "WHERE"]
+}
     ↓
 Thought: 生成库存相关的业务问题
 Action: question_generation

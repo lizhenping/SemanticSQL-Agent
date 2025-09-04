@@ -287,40 +287,24 @@ Observation: ...
 ```
 用户任务: "生成第3个高质量NL2SQL训练样本"
     ↓
-Thought: 我需要生成第3个样本。为了保证质量和多样性，让我先生成多个候选场景
-Action: scenario_tool
-Action Input: {"iteration": 2, "mode": "generate_candidates", "count": 3}
-Observation: [
-    {"id": "sales_analysis", "complexity": "medium"},
-    {"id": "inventory_check", "complexity": "hard"}, 
-    {"id": "user_behavior", "complexity": "easy"}
-]
-    ↓
-Thought: 我有3个候选。前面已经做过销售分析，这次选择"inventory_check"增加多样性
-    ↓
-Thought: 为库存检查场景生成多个操作组合
-Action: operation_selection
-Action Input: {"scenario": "inventory_check", "mode": "generate_options"}
-Observation: [
-    ["SELECT", "WHERE", "ORDER BY"],           # 基础筛选
-    ["SELECT", "JOIN", "WHERE"],               # 关联查询  
-    ["SELECT", "JOIN", "GROUP BY", "HAVING"]   # 聚合统计
-]
-    ↓
-Thought: 库存管理通常需要关联商品和供应商信息，我选择第二个操作组合
-    ↓
-Thought: 基于选定的场景和操作生成具体问题
-Action: question_generation
-Action Input: {
-    "scenario": "inventory_check",
-    "operations": ["SELECT", "JOIN", "WHERE"],
-    "complexity": "hard"
+Thought: 我需要生成第3个样本。获取场景和操作方案
+Action: scenario_operation_generation
+Action Input: {"mode": "get_single_combination"}
+Observation: {
+    "scenario": {"name": "库存检查", "complexity": "hard"},
+    "operations": ["SELECT", "JOIN", "WHERE"]
 }
+    ↓
+Thought: 很好，我得到了库存检查场景和JOIN操作组合
+    ↓
+Thought: 基于场景方案生成具体问题
+Action: question_generation
+Action Input: {}  # 工具自动从记忆中读取场景和操作信息
 Observation: "查询库存不足的商品及其供应商联系方式"
     ↓
 Thought: 生成对应的SQL查询
 Action: sql_generation
-Action Input: {"question": "查询库存不足的商品及其供应商联系方式"}
+Action Input: {}  # 工具自动从记忆中读取问题和场景信息
 Observation: "SELECT p.name, p.stock, s.contact_phone 
              FROM products p JOIN suppliers s ON p.supplier_id = s.id 
              WHERE p.stock < p.min_stock"
