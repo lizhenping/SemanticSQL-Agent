@@ -417,21 +417,54 @@ Observation: 语法正确，修正成功
 Agent通过提示词指导，自主决策工具的使用时机和顺序：
 
 ```python
-# 简化的代码架构示例
+# 优化的代码架构示例（一次调用方案）
 class SQLAgent:
-    def generate_training_data(self, count: int):
-        """外部大循环 + 内部纯ReAct"""
-        results = []
+    def generate_training_data_by_scenarios(self):
+        """按场景组合生成训练数据（一次调用获取所有组合）"""
         
-        for i in range(count):
-            # 每个样本都是独立的ReAct任务
-            task = f"生成第{i+1}个高质量NL2SQL训练样本"
+        # 1. 一次性获取所有场景组合（工具内部三层for循环）
+        combinations_result = self.scenario_operation_tool.run(mode="get_all_combinations")
+        combinations = combinations_result["combinations"]  # 比如48个组合
+        
+        print(f"📊 获取到 {len(combinations)} 个场景组合，开始逐个生成样本...")
+        
+        # 2. 外部遍历每个组合，单条生成+立即反思
+        results = []
+        for i, combination in enumerate(combinations):
+            print(f"🎯 处理第 {i+1}/{len(combinations)} 个组合: {combination['combination_id']}")
+            
+            # 每个组合都是独立的ReAct任务
+            task = f"基于场景组合生成高质量训练样本：{combination['combination_id']}"
             
             # Agent完全自主决策执行流程
             result = self.agent_executor.invoke({
                 "input": task,
-                "iteration": i,                    # 上下文信息：当前样本编号
-                "target_count": count,             # 上下文信息：总目标数量
+                "scenario_combination": combination,  # 传入具体的场景组合
+                "sample_index": i,                   # 当前样本索引
+                "database_name": self.db_config.database
+            })
+            
+            sample = self._extract_sample(result)
+            if sample:
+                results.append(sample)
+                print(f"✅ 样本 {i+1} 生成成功")
+            else:
+                print(f"❌ 样本 {i+1} 生成失败")
+        
+        print(f"🎉 完成！成功生成 {len(results)} 个训练样本")
+        return results
+    
+    def generate_training_data_by_count(self, count: int):
+        """按数量生成训练数据（兼容模式）"""
+        results = []
+        
+        for i in range(count):
+            task = f"生成第{i+1}个高质量NL2SQL训练样本"
+            
+            result = self.agent_executor.invoke({
+                "input": task,
+                "iteration": i,
+                "target_count": count,
                 "database_name": self.db_config.database
             })
             
@@ -442,13 +475,34 @@ class SQLAgent:
         return results
 ```
 
-**Agent自主决策的典型流程**：
+**Agent使用新架构的典型流程**：
+
+#### **推荐模式：按场景组合生成**
+```
+用户调用: agent.generate_training_data_by_scenarios()
+    ↓
+1. 获取所有场景组合（48个）
+2. 外部遍历每个组合
+3. Agent为每个组合生成样本+立即反思
+4. 自然完成所有场景覆盖
+```
+
+#### **兼容模式：按数量生成**  
+```
+用户调用: agent.generate_training_data_by_count(100)
+    ↓
+1. 外部循环100次
+2. Agent每次自主选择场景
+3. 单条生成+立即反思
+4. 达到指定数量后结束
+```
+
+**Agent单条生成的流程**：
 1. **智能检查**：优先检查记忆中是否有所需信息
 2. **按需分析**：缺少信息时自主选择分析工具
-3. **场景选择**：根据iteration和数据库特点选择场景
-4. **内容生成**：依次生成问题和SQL
-5. **质量保证**：验证、执行、反思
-6. **自主修正**：发现问题时自主选择修正策略
+3. **内容生成**：基于给定的场景组合生成问题和SQL
+4. **质量保证**：验证、执行、反思
+5. **自主修正**：发现问题时自主选择修正策略
 
 **关键优势**：
 - **架构简单**：只有一个Agent类，一个大循环
