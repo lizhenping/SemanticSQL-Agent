@@ -1066,12 +1066,13 @@ class BaseAgent(ABC):
 ### 4.3 命令行接口
 
 ```bash
-# 基础生成命令
+# 基础生成命令（支持两种模式）
 semanticsql-agent generate [OPTIONS]
 
 Options:
   --config PATH           配置文件路径
-  --count INTEGER        生成数据条数 [default: 100]
+  --mode TEXT            生成模式 [scenarios|count] [default: scenarios]
+  --count INTEGER        生成数据条数（仅count模式使用） [default: 100]
   --db-type TEXT         数据库类型 [mysql]
   --host TEXT            数据库主机
   --port INTEGER         数据库端口
@@ -1082,6 +1083,10 @@ Options:
   --format TEXT          输出格式 [json|jsonl|csv]
   --verbose              详细输出
   --help                 显示帮助信息
+
+生成模式说明：
+  scenarios: 按场景批次生成，自动遍历所有场景组合（推荐）
+  count: 按数量生成，需指定--count参数
 
 # 其他命令
 semanticsql-agent test-connection  # 测试数据库连接
@@ -1920,4 +1925,140 @@ Observation: "查询库存不足的商品及其供应商联系方式"
    - 可以选择不同的生成模式
    - 工具只是提供服务，不控制Agent行为
 
-**结论**：通过将三层for循环封装在合并的`scenario_operation_tool`内部，我们既简化了Agent的调用复杂度，又保持了ReAct的完全自主性。这种设计完美平衡了工具的强大功能和Agent的自主决策权。
+## 🎯 更优的批次生成设计
+
+### **💭 数量控制 vs 批次生成的思考**
+
+**❌ 当前设计（严格数量控制）**：
+```python
+# 外部强制控制数量
+for i in range(100):  # 必须生成100个
+    sample = agent.generate_single_sample(i)
+    # 复杂的数量控制逻辑
+```
+
+**✅ 更好的设计（自然批次生成）**：
+```python
+# 按场景批次自然生成
+def generate_by_scenarios():
+    # 工具内部遍历所有场景组合
+    # 每个组合生成一批样本
+    # 有多少场景组合就生成多少批
+    # 自然结束，不强制控制总数
+```
+
+### **🔄 重新设计的批次生成架构**
+
+```python
+class SQLAgent:
+    def generate_training_data_by_scenarios(self) -> List[Dict]:
+        """按场景批次生成训练数据（更自然的方式）"""
+        
+        # 一次性任务：遍历所有场景组合
+        task = "遍历所有场景组合，为每个组合生成高质量的NL2SQL训练样本"
+        
+        result = self.agent_executor.invoke({
+            "input": task,
+            "database_name": self.db_config.database,
+            "mode": "exhaustive_generation"
+        })
+        
+        return self._extract_all_samples(result)
+```
+
+### **🛠️ 工具内部的完整批次处理**
+
+```python
+class ScenarioOperationTool(BaseTool):
+    """场景-操作批次生成工具（内部封装完整遍历逻辑）"""
+    
+    def _run(self, mode: str = "single", **kwargs):
+        if mode == "exhaustive_generation":
+            return self._generate_all_scenario_batches()
+        elif mode == "single":
+            return self._generate_single_combination(kwargs.get("iteration", 0))
+    
+    def _generate_all_scenario_batches(self):
+        """内部遍历所有场景组合，返回批次信息"""
+        
+        scenarios = self._load_scenarios()
+        scenario_mapping = self._load_scenario_mapping()
+        
+        all_batches = []
+        batch_index = 0
+        
+        # 内部三层for循环（完全封装）
+        for main_key, main_data in scenarios.items():
+            if main_key in ['scenario_types', 'total_scenarios']:
+                continue
+                
+            for sub_key, sub_data in main_data['sub_scenarios'].items():
+                for complexity in ['simple', 'moderate', 'complex', 'expert']:
+                    
+                    if self._has_operation_mapping(main_key, sub_key, complexity):
+                        operations = self._get_operations_for_combination(main_key, sub_key, complexity)
+                        
+                        batch = {
+                            "batch_id": batch_index,
+                            "combination_id": f"{main_key}_{sub_key}_{complexity}",
+                            "scenario": {
+                                "main_name": main_data['name'],
+                                "sub_name": sub_data['name'],
+                                "complexity": complexity,
+                                "focus_areas": sub_data['focus_areas']
+                            },
+                            "operations": operations
+                        }
+                        all_batches.append(batch)
+                        batch_index += 1
+        
+        return {
+            "total_batches": len(all_batches),
+            "batches": all_batches,
+            "strategy": "每个场景组合生成一个样本，自然覆盖所有场景"
+        }
+```
+
+### **🎯 Agent使用批次生成的新流程**
+
+```
+用户任务: "遍历所有场景组合，生成完整的训练数据集"
+    ↓
+Thought: 我需要生成完整的训练数据集，先获取所有场景组合批次
+Action: scenario_operation_generation
+Action Input: {"mode": "exhaustive_generation"}
+Observation: {
+    "total_batches": 48,
+    "batches": [
+        {"batch_id": 0, "scenario": "销售分析_销售统计_simple", "operations": ["SELECT", "WHERE"]},
+        {"batch_id": 1, "scenario": "销售分析_销售统计_moderate", "operations": ["SELECT", "GROUP BY"]},
+        {"batch_id": 2, "scenario": "库存管理_库存预警_moderate", "operations": ["SELECT", "JOIN", "WHERE"]},
+        ...
+    ]
+}
+    ↓
+Thought: 我得到了48个批次的场景组合。现在我需要为每个批次生成一个高质量样本
+    ↓
+[Agent内部处理每个批次...]
+    ↓
+Final Answer: 48个高质量训练样本（自然完整覆盖所有场景）
+```
+
+### **🔧 批次生成的关键优势**
+
+1. **逻辑更自然**：
+   - 有多少场景组合，就生成多少个样本
+   - 不需要人为设定"100个"这样的数量限制
+   - 自然保证完整的场景覆盖
+
+2. **代码更简单**：
+   - 不需要复杂的数量控制逻辑
+   - 不需要处理"数量不够"或"数量超了"的情况
+   - 工具内部处理所有遍历，Agent只需处理结果
+
+3. **质量更保证**：
+   - 每个场景组合都会被覆盖
+   - 自然的多样性分布
+   - 完整的复杂度梯度
+
+**结论**：批次生成模式比严格的数量控制更符合业务逻辑，代码更简洁，质量更有保障。
