@@ -143,6 +143,102 @@ semanticsql-agent/
 - **sql_generation_tool**: 基于问题和场景信息生成SQL查询
 - 特点：使用记忆模块中的数据库分析结果
 
+#### ScenarioOperationTool详细实现
+
+```python
+class ScenarioOperationTool(BaseTool):
+    """场景-操作组合生成工具（核心工具）"""
+    
+    name = "scenario_operation_generation"
+    description = "生成所有场景-操作组合，内部处理三层for循环遍历"
+    
+    def _run(self, mode: str = "get_all_combinations", **kwargs):
+        if mode == "get_all_combinations":
+            return self._generate_all_combinations()
+        elif mode == "get_single_combination":
+            return self._generate_single_combination(kwargs.get("iteration", 0))
+    
+    def _generate_all_combinations(self):
+        """内部三层for循环，生成所有场景组合"""
+        
+        # 加载配置文件
+        scenarios = self._load_scenarios()
+        operation_mapping = self._load_operation_mapping()
+        complexity_config = self._load_complexity_config()
+        
+        all_combinations = []
+        combination_index = 0
+        
+        # 三层for循环（参考pipeline设计）
+        for main_key, main_data in scenarios.items():
+            if main_key in ['scenario_types', 'total_scenarios']:
+                continue
+                
+            for sub_key, sub_data in main_data['sub_scenarios'].items():
+                for complexity in ['simple', 'moderate', 'complex', 'expert']:
+                    
+                    # 检查是否有对应的操作映射
+                    if self._has_operation_mapping(main_key, sub_key, complexity):
+                        
+                        # 获取操作组合
+                        operations = self._get_operations_for_combination(
+                            main_key, sub_key, complexity, operation_mapping
+                        )
+                        
+                        # 生成专门的提示词模板
+                        generated_prompt = self._generate_prompt_for_combination(
+                            main_data, sub_data, complexity, operations
+                        )
+                        
+                        combination = {
+                            "combination_id": f"{main_key}_{sub_key}_{complexity}",
+                            "index": combination_index,
+                            "scenario": {
+                                "main_key": main_key,
+                                "main_name": main_data['name'],
+                                "main_description": main_data['description'],
+                                "sub_key": sub_key,
+                                "sub_name": sub_data['name'],
+                                "focus_areas": sub_data['focus_areas'],
+                                "complexity": complexity
+                            },
+                            "operations": operations,
+                            "generated_prompt": generated_prompt,
+                            "complexity_config": complexity_config[complexity]
+                        }
+                        
+                        all_combinations.append(combination)
+                        combination_index += 1
+        
+        return {
+            "total_combinations": len(all_combinations),
+            "combinations": all_combinations,
+            "generation_strategy": "三层遍历：主场景×子场景×复杂度"
+        }
+    
+    def _generate_prompt_for_combination(self, main_data, sub_data, complexity, operations):
+        """为特定组合生成专门的提示词"""
+        
+        prompt_template = f"""
+基于{main_data['name']}场景的{sub_data['name']}任务，生成{complexity}级别的问题。
+
+## 场景描述
+{main_data['description']}
+
+## 任务焦点
+{', '.join(sub_data['focus_areas'])}
+
+## SQL操作要求
+必须使用以下操作: {', '.join(operations)}
+
+## 复杂度要求
+{self._get_complexity_description(complexity)}
+
+请生成一个符合上述要求的自然语言问题。
+"""
+        return prompt_template.strip()
+```
+
 **验证工具** (validation_tools/)
 - **sql_validation_tool**: 语法验证
 - **sql_execution_tool**: 安全执行SQL并返回结果

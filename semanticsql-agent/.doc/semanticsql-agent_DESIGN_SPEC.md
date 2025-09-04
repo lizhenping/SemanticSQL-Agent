@@ -298,74 +298,35 @@ Final Answer: [
 | 反思工具 | sql_reflection | 评估质量，提供修正建议 | 执行后自主决定是否反思 |
 | 思考工具 | sequential_thinking | 深度分析复杂问题 | 遇到复杂情况时自主调用 |
 
-## 4. 记忆管理系统
+## 4. 记忆管理系统概述
 
-### 4.1 DatabaseAnalysisMemory设计
+### 4.1 记忆管理原则
 
-基于 `utils/memory.py` 的实际实现：
+**基于 `utils/memory.py` 的DatabaseAnalysisMemory**：
+- 使用 `langchain_core.memory.BaseMemory` 基础类
+- 自动的工具名称到记忆键的映射
+- 支持工具间的自动协作
 
-```python
-from langchain_core.memory import BaseMemory
-
-class DatabaseAnalysisMemory(BaseMemory):
-    """数据库分析结果记忆管理"""
-    
-    def __init__(self):
-        self.memories = {}  # 存储所有分析结果
-        self.memory_key = "db_analysis"
-    
-    @property
-    def memory_variables(self) -> List[str]:
-        return [self.memory_key]
-    
-    def load_memory_variables(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """加载记忆变量"""
-        return {self.memory_key: self.memories}
-    
-    def save_context(self, inputs: Dict[str, Any], outputs: Dict[str, Any]) -> None:
-        """根据工具名称自动保存结果"""
-        tool_name = inputs.get("tool_name") or inputs.get("action", {}).get("tool")
-        
-        # 工具名称到记忆键的映射
-        memory_mapping = {
-            "schema_extraction": "schema_info",
-            "domain_analysis": "domain_info", 
-            "field_analysis": "field_classification",
-            "column_analysis": "column_meanings",
-            "table_analysis": "table_meanings",
-            "er_analysis": "er_relations",
-            "scenario_operation_generation": "all_scenario_combinations",
-            "question_generation": "current_question",
-            "sql_generation": "current_sql"
-        }
-        
-        if tool_name in memory_mapping:
-            memory_key = memory_mapping[tool_name]
-            data = outputs.get("output", outputs)
-            self.memories[memory_key] = data
-            logger.info(f"💾 Saved {tool_name} results to memory['{memory_key}']")
-```
+**核心特点**：
+- **自动保存**：工具调用结果自动保存到memories字典
+- **智能映射**：工具名称自动映射到语义化的记忆键
+- **工具协作**：后续工具自动从记忆中读取前置信息
 
 ### 4.2 记忆使用方式
 
-**Agent通过提示词访问记忆**：
-```jinja2
-## 当前可用信息
-{% if db_analysis.schema_info %}
-- ✅ 数据库结构: {{db_analysis.schema_info.table_count}} 个表
-{% endif %}
-{% if db_analysis.domain_info %}
-- ✅ 业务领域: {{db_analysis.domain_info.primary_domain}}
-{% endif %}
-{% if db_analysis.all_scenario_combinations %}
-- ✅ 场景组合: {{db_analysis.all_scenario_combinations.total_combinations}} 个
-{% endif %}
-```
+**记忆键映射规范**：
+- `schema_extraction` → `memories["schema_info"]`
+- `domain_analysis` → `memories["domain_info"]`
+- `scenario_operation_generation` → `memories["all_scenario_combinations"]`
+- `question_generation` → `memories["current_question"]`
+- `sql_generation` → `memories["current_sql"]`
 
-**工具自动从记忆读取信息**：
-- 工具在执行时自动检查记忆中的前置条件
-- 自动注入所需的信息到工具的提示词中
+**Agent访问记忆**：
+- Agent通过提示词中的 `{{db_analysis.xxx}}` 访问记忆内容
+- 工具自动检查前置条件并注入所需信息
 - 无需Agent手动传递参数
+
+*具体的记忆管理实现代码请参考 ARCHITECTURE.md*
 
 ## 5. ScenarioOperationTool详细设计
 
@@ -389,101 +350,21 @@ class DatabaseAnalysisMemory(BaseMemory):
    - complex: ["SELECT", "JOIN", "SUBQUERY"]
    - expert: ["SELECT", "WINDOW_FUNCTION", "CTE"]
 
-### 5.2 工具实现逻辑
+### 5.2 工具设计要求
 
-```python
-class ScenarioOperationTool(BaseTool):
-    """场景-操作组合生成工具"""
-    
-    name = "scenario_operation_generation"
-    description = "生成所有场景-操作组合，内部处理三层for循环遍历"
-    
-    def _run(self, mode: str = "get_all_combinations", **kwargs):
-        if mode == "get_all_combinations":
-            return self._generate_all_combinations()
-        elif mode == "get_single_combination":
-            return self._generate_single_combination(kwargs.get("iteration", 0))
-    
-    def _generate_all_combinations(self):
-        """内部三层for循环，生成所有场景组合"""
-        
-        # 加载配置
-        scenarios = self._load_scenarios()
-        operation_mapping = self._load_operation_mapping()
-        complexity_config = self._load_complexity_config()
-        
-        all_combinations = []
-        combination_index = 0
-        
-        # 三层for循环（参考pipeline设计）
-        for main_key, main_data in scenarios.items():
-            if main_key in ['scenario_types', 'total_scenarios']:
-                continue
-                
-            for sub_key, sub_data in main_data['sub_scenarios'].items():
-                for complexity in ['simple', 'moderate', 'complex', 'expert']:
-                    
-                    # 检查是否有对应的操作映射
-                    if self._has_operation_mapping(main_key, sub_key, complexity):
-                        
-                        # 获取操作组合
-                        operations = self._get_operations_for_combination(
-                            main_key, sub_key, complexity, operation_mapping
-                        )
-                        
-                        # 生成专门的提示词模板
-                        generated_prompt = self._generate_prompt_for_combination(
-                            main_data, sub_data, complexity, operations
-                        )
-                        
-                        combination = {
-                            "combination_id": f"{main_key}_{sub_key}_{complexity}",
-                            "index": combination_index,
-                            "scenario": {
-                                "main_key": main_key,
-                                "main_name": main_data['name'],
-                                "main_description": main_data['description'],
-                                "sub_key": sub_key,
-                                "sub_name": sub_data['name'],
-                                "focus_areas": sub_data['focus_areas'],
-                                "complexity": complexity
-                            },
-                            "operations": operations,
-                            "generated_prompt": generated_prompt,
-                            "complexity_config": complexity_config[complexity]
-                        }
-                        
-                        all_combinations.append(combination)
-                        combination_index += 1
-        
-        return {
-            "total_combinations": len(all_combinations),
-            "combinations": all_combinations,
-            "generation_strategy": "三层遍历：主场景×子场景×复杂度"
-        }
-    
-    def _generate_prompt_for_combination(self, main_data, sub_data, complexity, operations):
-        """为特定组合生成专门的提示词"""
-        
-        prompt_template = f"""
-基于{main_data['name']}场景的{sub_data['name']}任务，生成{complexity}级别的问题。
+**ScenarioOperationTool核心要求**：
+- 内部封装三层for循环遍历所有场景组合
+- 为每个组合生成专门的问题生成提示词
+- 支持get_all_combinations模式返回所有组合
+- 输出格式包含combination_id、scenario、operations、generated_prompt
 
-## 场景描述
-{main_data['description']}
+**关键功能**：
+1. **三层遍历**：主场景×子场景×复杂度级别
+2. **操作映射**：根据复杂度自动选择SQL操作组合
+3. **提示词生成**：为每个组合创建专门的问题生成指导
+4. **配置驱动**：基于scenarios.yaml和operation_mapping.yaml
 
-## 任务焦点
-{', '.join(sub_data['focus_areas'])}
-
-## SQL操作要求
-必须使用以下操作: {', '.join(operations)}
-
-## 复杂度要求
-{self._get_complexity_description(complexity)}
-
-请生成一个符合上述要求的自然语言问题。
-"""
-        return prompt_template.strip()
-```
+*具体的实现代码请参考 ARCHITECTURE.md*
 
 ### 5.3 问题生成的逐个处理机制
 
@@ -748,41 +629,32 @@ semanticsql-agent generate --database shop_db --output data.jsonl
 ]
 ```
 
-## 10. 实现细节
+## 10. 质量保证机制
 
-### 10.1 关键类设计
+### 10.1 验证流程
 
-#### SQLAgent类
-- 继承BaseAgent
-- 初始化所有工具和记忆
-- 提供generate_training_data()方法
-- 处理Agent执行结果的提取
+**每个生成的样本都要经过**：
+1. **语法验证**：确保SQL语法正确
+2. **执行测试**：实际执行SQL验证可行性
+3. **反思评估**：评估问题-SQL的语义匹配度
+4. **自主修正**：Agent根据反思建议自主选择修正策略
 
-#### ScenarioOperationTool类
-- 最重要的工具，内部封装三层for循环
-- 支持get_all_combinations模式
-- 为每个组合生成专门的提示词
-- 参考pipeline的遍历逻辑
+### 10.2 质量标准
 
-#### DatabaseAnalysisMemory类
-- 基于langchain_core.memory.BaseMemory
-- 自动的工具名称到记忆键映射
-- 支持Agent通过提示词访问记忆
+**样本质量要求**：
+- SQL语法必须正确
+- 问题表述自然流畅
+- SQL与问题语义匹配
+- 执行结果合理有效
+- 符合场景复杂度要求
 
-### 10.2 工具间协作机制
+### 10.3 Agent自主修正
 
-1. **分析工具**：按需执行，结果保存到记忆
-2. **场景工具**：一次性生成所有组合，保存到记忆
-3. **生成工具**：逐个处理组合，自动从记忆读取信息
-4. **验证工具**：对每个生成的SQL进行验证
-5. **反思工具**：评估质量，提供简单的修正建议
-
-### 10.3 质量保证机制
-
-- **语法验证**：确保SQL语法正确
-- **执行测试**：实际执行SQL验证可行性
-- **反思评估**：评估问题-SQL的语义匹配度
-- **自主修正**：Agent根据反思建议自主选择修正策略
+当发现质量问题时，Agent会：
+- 调用sql_reflection分析问题
+- 根据建议自主选择修正工具
+- 重新生成或修正有问题的部分
+- 确保最终质量达标
 
 ## 11. 架构优势
 
