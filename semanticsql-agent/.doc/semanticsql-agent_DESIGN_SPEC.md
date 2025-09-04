@@ -489,9 +489,9 @@ difficulty_distribution:
    - 利用 LangChain 的工具调用机制
 
 2. **记忆管理**：
-   - 基于 `langchain.memory.BaseMemory` 实现自定义记忆
-   - 可选使用 `ConversationSummaryMemory` 存储摘要
-   - 支持 `VectorStoreMemory` 进行相似性检索
+   - 使用最简单的 `langchain_core.memory.BaseMemory` 
+   - 只负责存储和加载工具调用结果
+   - 无需复杂的摘要或向量检索功能
 
 3. **LLM 调用**：
    - 使用 `langchain.chat_models.ChatOpenAI` 连接 Qwen
@@ -859,40 +859,69 @@ Final Answer: {"question": "统计不同城市的活跃用户数量", "sql": "SE
 | **错误处理** | 硬编码的if-else分支 | Agent自主分析和应对 |
 | **灵活性** | 受限于预设的决策规则 | 完全灵活，适应各种情况 |
 
-**简化的记忆机制实现**：
+**极简的记忆机制实现**：
 ```python
-from langchain.memory import BaseMemory
+from langchain_core.memory import BaseMemory
 
 class DatabaseAnalysisMemory(BaseMemory):
-    """简化的数据库分析记忆管理"""
+    """极简的工具调用结果存储"""
     
     def __init__(self):
-        self.analysis_data = {}  # 存储所有分析结果
-        self.generation_count = 0  # 跟踪生成进度
+        self.tool_results = {}  # 存储工具调用结果
     
     @property
     def memory_variables(self) -> List[str]:
-        return ["memory_summary", "analysis_data"]
+        return ["tool_results", "memory_summary"]
     
     def load_memory_variables(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """自动加载所有分析结果供Agent使用"""
+        """加载所有工具调用结果"""
         return {
-            "memory_summary": self._get_summary(),
-            **self.analysis_data  # 直接提供所有分析数据
+            "tool_results": self.tool_results,
+            "memory_summary": self._get_summary()
         }
     
     def save_context(self, inputs: Dict[str, Any], outputs: Dict[str, Any]) -> None:
-        """自动识别和保存工具执行结果"""
-        # 自动识别分析工具的输出并保存
-        self._auto_save_analysis_results(outputs)
+        """保存工具调用结果"""
+        # 简单存储：工具名 -> 工具输出
+        if "tool_name" in inputs and "tool_output" in outputs:
+            self.tool_results[inputs["tool_name"]] = outputs["tool_output"]
     
     def _get_summary(self) -> str:
-        """生成记忆状态摘要"""
-        if not self.analysis_data:
-            return "初始状态，无分析数据"
-        
-        available_info = list(self.analysis_data.keys())
-        return f"已有分析: {', '.join(available_info)}"
+        """生成简单摘要"""
+        tools = list(self.tool_results.keys())
+        return f"已执行工具: {', '.join(tools)}" if tools else "无工具执行记录"
+```
+
+### **🎯 记忆管理的设计原则**
+
+1. **极简设计**：
+   - 只使用 `langchain_core.memory.BaseMemory` 基础类
+   - 不使用复杂的 `ConversationSummaryMemory` 或 `VectorStoreMemory`
+   - 简单的字典存储：`tool_name -> tool_output`
+
+2. **功能专注**：
+   - 只负责工具调用结果的存储和加载
+   - 不做摘要、不做向量检索、不做复杂分析
+   - Agent需要什么信息，直接从 `tool_results` 中获取
+
+3. **与Agent的交互**：
+   - Agent通过提示词中的 `{{tool_results}}` 获取所有工具输出
+   - Agent自主判断需要哪些信息
+   - 无需复杂的记忆检索逻辑
+
+```python
+# Agent在提示词中这样使用记忆：
+"""
+## 当前可用信息
+{% if tool_results.schema_extraction %}
+- 数据库结构: {{tool_results.schema_extraction}}
+{% endif %}
+{% if tool_results.domain_analysis %}  
+- 业务领域: {{tool_results.domain_analysis}}
+{% endif %}
+
+根据已有信息，决定下一步行动...
+"""
 ```
 
 #### 3.2.3 Agent自主的反思-修正机制

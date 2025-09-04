@@ -168,34 +168,48 @@ semanticsql-agent/
 - Agent 根据工具输出和反思结果决定下一步行动
 - 集成 LangChain 的错误处理机制
 
-### 3.5 记忆管理（基于 LangChain Memory）
+### 3.5 记忆管理（简化设计）
 
-#### 使用 LangChain 的记忆组件
-- **ConversationSummaryMemory**: 存储数据库分析摘要
-- **VectorStoreMemory**: 存储和检索相关的表结构信息
-- **自定义 AnalysisMemory**: 继承 `BaseMemory`，专门管理分析结果
+#### 使用最简单的记忆组件
+- **DatabaseAnalysisMemory**: 继承 `langchain_core.memory.BaseMemory`，专门管理分析结果
+- **功能极简**: 只负责工具调用结果的存储和加载
+- **无复杂功能**: 不需要摘要、向量检索等复杂特性
 
 ```python
-from langchain.memory import BaseMemory
+from langchain_core.memory import BaseMemory
 
 class DatabaseAnalysisMemory(BaseMemory):
-    """专门用于存储数据库分析结果的记忆"""
-    memory_variables = ["schema_info", "domain_analysis", 
-                       "field_classification", "column_meanings",
-                       "table_meanings", "er_analysis"]
+    """极简的数据库分析结果存储"""
+    
+    def __init__(self):
+        self.tool_results = {}  # 存储工具调用结果
+    
+    @property
+    def memory_variables(self) -> List[str]:
+        return ["tool_results", "memory_summary"]
     
     def load_memory_variables(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """加载相关的分析结果"""
-        # 返回与当前任务相关的记忆内容
+        """加载所有工具调用结果"""
+        return {
+            "tool_results": self.tool_results,
+            "memory_summary": self._get_summary()
+        }
     
     def save_context(self, inputs: Dict[str, Any], outputs: Dict[str, Any]) -> None:
-        """保存或更新分析结果"""
-        # 更新记忆中的分析内容
+        """自动保存工具调用结果"""
+        # 简单的工具结果存储
+        if "tool_name" in inputs and "tool_output" in outputs:
+            self.tool_results[inputs["tool_name"]] = outputs["tool_output"]
+    
+    def _get_summary(self) -> str:
+        """生成简单的记忆摘要"""
+        available_tools = list(self.tool_results.keys())
+        return f"已执行工具: {', '.join(available_tools)}" if available_tools else "无工具执行记录"
 ```
 
 - 与 LangChain Agent 自动集成
-- 支持持久化到文件或数据库
-- 可以使用 LangChain 的记忆链功能
+- 简单的字典存储，无需持久化
+- 专注于工具结果的临时存储和共享
 
 ### 3.6 提示词管理（集成 LangChain）
 
