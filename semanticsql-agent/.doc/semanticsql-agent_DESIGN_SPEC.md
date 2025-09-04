@@ -1662,4 +1662,113 @@ else:
 - 不用iteration进行工具过滤或流程控制
 - iteration帮助Agent做出更好的多样性决策
 
+## 🔄 Agent内部的批量处理机制
+
+### **🤔 场景和操作的多样性问题**
+
+在实际生成过程中，Agent可能需要：
+1. **从多个候选场景中选择**最适合的一个
+2. **从多个操作组合中选择**最符合场景的组合
+3. **评估多个选项**以确保生成质量
+
+### **💡 推荐的Agent内部处理方式**
+
+```
+Thought: 我需要生成训练样本，为了保证质量，让我先生成多个候选场景
+Action: scenario_tool
+Action Input: {"iteration": 4, "mode": "generate_candidates", "count": 3}
+Observation: [
+    {"id": "sales_analysis", "complexity": "medium", "description": "销售数据分析"},
+    {"id": "inventory_check", "complexity": "hard", "description": "库存状态检查"},
+    {"id": "user_behavior", "complexity": "easy", "description": "用户行为分析"}
+]
+    ↓
+Thought: 我有3个候选场景。考虑到需要多样性和适当复杂度，我选择"inventory_check"
+    ↓
+Thought: 为这个场景生成多个操作组合选项
+Action: operation_selection  
+Action Input: {"scenario": "inventory_check", "mode": "generate_options"}
+Observation: [
+    ["SELECT", "WHERE", "ORDER BY"],           # 基础查询
+    ["SELECT", "JOIN", "WHERE"],               # 关联查询  
+    ["SELECT", "JOIN", "GROUP BY", "HAVING"]   # 聚合分析
+]
+    ↓
+Thought: 库存管理通常涉及商品和供应商表的关联，我选择第二个操作组合
+    ↓
+Thought: 现在基于选定的场景和操作生成问题
+Action: question_generation
+Action Input: {
+    "scenario": "inventory_check",
+    "operations": ["SELECT", "JOIN", "WHERE"],
+    "focus": "库存不足预警"
+}
+Observation: "查询库存不足的商品及其供应商联系方式"
+    ↓
+[继续生成SQL、验证、执行、反思...]
+```
+
+### **🛠️ 工具设计的增强**
+
+#### **ScenarioTool的批量支持**：
+```python
+class ScenarioTool(BaseTool):
+    def _run(self, iteration: int, mode: str = "single", count: int = 1, **kwargs):
+        if mode == "generate_candidates":
+            # Agent请求多个候选场景
+            return self._generate_scenario_candidates(count, iteration)
+        else:
+            # 传统模式：直接选择一个场景
+            return self._select_single_scenario(iteration)
+    
+    def _generate_scenario_candidates(self, count: int, iteration: int):
+        """生成多个候选场景供Agent选择"""
+        candidates = []
+        scenario_pool = self._get_scenario_pool()
+        
+        # 基于iteration确保多样性，但生成多个选项
+        base_index = iteration % len(scenario_pool)
+        for i in range(count):
+            idx = (base_index + i) % len(scenario_pool)
+            candidates.append(scenario_pool[idx])
+        
+        return candidates
+```
+
+#### **OperationSelectionTool的批量支持**：
+```python
+class OperationSelectionTool(BaseTool):
+    def _run(self, scenario: dict, mode: str = "single", **kwargs):
+        if mode == "generate_options":
+            # Agent请求多个操作组合选项
+            return self._generate_operation_options(scenario)
+        else:
+            # 传统模式：直接选择一个操作组合
+            return self._select_single_operation(scenario)
+    
+    def _generate_operation_options(self, scenario: dict):
+        """为场景生成多个操作组合选项"""
+        complexity = scenario.get("complexity", "medium")
+        
+        options = {
+            "easy": [
+                ["SELECT", "WHERE"],
+                ["SELECT", "WHERE", "ORDER BY"],
+                ["SELECT", "WHERE", "LIMIT"]
+            ],
+            "medium": [
+                ["SELECT", "JOIN", "WHERE"],
+                ["SELECT", "GROUP BY", "HAVING"],
+                ["SELECT", "WHERE", "ORDER BY"]
+            ],
+            "hard": [
+                ["SELECT", "JOIN", "WHERE", "GROUP BY"],
+                ["SELECT", "JOIN", "SUBQUERY"],
+                ["SELECT", "WINDOW_FUNCTION", "ORDER BY"]
+            ]
+        }
+        
+        return options.get(complexity, options["medium"])
+```
+
 **结论**：通过简洁的符号表示和完全的Agent自主推理，我们实现了真正符合ReAct原则的架构设计，既简化了复杂度，又保持了完整的功能性。iteration参数作为有用的上下文信息保留，但不用于控制Agent行为。

@@ -279,4 +279,57 @@ Observation: ...
 根据实际情况灵活选择工具和执行顺序。
 ```
 
-**结论**：这样的设计既给Agent提供了有用的指导，又完全保持了ReAct的自主决策特性。通过提示词中的思考流程建议，我们可以引导Agent更好地工作，而不违背ReAct的核心原则。
+### **🔄 Agent内部批量处理的详细流程**
+
+```
+用户任务: "生成第3个高质量NL2SQL训练样本"
+    ↓
+Thought: 我需要生成第3个样本。为了保证质量和多样性，让我先生成多个候选场景
+Action: scenario_tool
+Action Input: {"iteration": 2, "mode": "generate_candidates", "count": 3}
+Observation: [
+    {"id": "sales_analysis", "complexity": "medium"},
+    {"id": "inventory_check", "complexity": "hard"}, 
+    {"id": "user_behavior", "complexity": "easy"}
+]
+    ↓
+Thought: 我有3个候选。前面已经做过销售分析，这次选择"inventory_check"增加多样性
+    ↓
+Thought: 为库存检查场景生成多个操作组合
+Action: operation_selection
+Action Input: {"scenario": "inventory_check", "mode": "generate_options"}
+Observation: [
+    ["SELECT", "WHERE", "ORDER BY"],           # 基础筛选
+    ["SELECT", "JOIN", "WHERE"],               # 关联查询  
+    ["SELECT", "JOIN", "GROUP BY", "HAVING"]   # 聚合统计
+]
+    ↓
+Thought: 库存管理通常需要关联商品和供应商信息，我选择第二个操作组合
+    ↓
+Thought: 基于选定的场景和操作生成具体问题
+Action: question_generation
+Action Input: {
+    "scenario": "inventory_check",
+    "operations": ["SELECT", "JOIN", "WHERE"],
+    "complexity": "hard"
+}
+Observation: "查询库存不足的商品及其供应商联系方式"
+    ↓
+Thought: 生成对应的SQL查询
+Action: sql_generation
+Action Input: {"question": "查询库存不足的商品及其供应商联系方式"}
+Observation: "SELECT p.name, p.stock, s.contact_phone 
+             FROM products p JOIN suppliers s ON p.supplier_id = s.id 
+             WHERE p.stock < p.min_stock"
+    ↓
+[验证、执行、反思...]
+```
+
+### **🎯 关键设计优势**
+
+1. **Agent完全自主**：Agent自己决定是否需要多个选项
+2. **质量优先**：通过多选项比较提升生成质量
+3. **多样性保证**：Agent自主选择不同的场景和操作组合
+4. **灵活高效**：Agent可以选择单个模式（快速）或候选模式（高质量）
+
+**结论**：通过Agent内部的智能批量处理机制，我们既保持了ReAct的完全自主性，又解决了场景和操作多样性的问题。Agent可以根据需要自主决定是否生成多个候选选项进行比较选择。
