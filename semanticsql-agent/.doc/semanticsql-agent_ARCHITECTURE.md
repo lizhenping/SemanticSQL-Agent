@@ -182,29 +182,35 @@ class DatabaseAnalysisMemory(BaseMemory):
     """极简的数据库分析结果存储"""
     
     def __init__(self):
-        self.tool_results = {}  # 存储工具调用结果
+        self.memories = {}  # 存储分析结果（与实际实现一致）
+        self.memory_key = "db_analysis"
     
     @property
     def memory_variables(self) -> List[str]:
-        return ["tool_results", "memory_summary"]
+        return [self.memory_key]
     
     def load_memory_variables(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """加载所有工具调用结果"""
-        return {
-            "tool_results": self.tool_results,
-            "memory_summary": self._get_summary()
-        }
+        """加载记忆变量（与实际实现一致）"""
+        return {self.memory_key: self.memories}
     
     def save_context(self, inputs: Dict[str, Any], outputs: Dict[str, Any]) -> None:
-        """自动保存工具调用结果"""
-        # 简单的工具结果存储
-        if "tool_name" in inputs and "tool_output" in outputs:
-            self.tool_results[inputs["tool_name"]] = outputs["tool_output"]
-    
-    def _get_summary(self) -> str:
-        """生成简单的记忆摘要"""
-        available_tools = list(self.tool_results.keys())
-        return f"已执行工具: {', '.join(available_tools)}" if available_tools else "无工具执行记录"
+        """根据工具名称自动保存结果（与实际实现一致）"""
+        tool_name = inputs.get("tool_name") or inputs.get("action", {}).get("tool")
+        
+        # 工具名称到记忆键的映射（参考实际实现）
+        memory_mapping = {
+            "schema_extraction": "schema_info",
+            "domain_analysis": "domain_info", 
+            "field_analysis": "field_classification",
+            "column_analysis": "column_meanings",
+            "table_analysis": "table_meanings",
+            "er_analysis": "er_relations"
+        }
+        
+        if tool_name in memory_mapping:
+            memory_key = memory_mapping[tool_name]
+            data = outputs.get("output", outputs)
+            self.memories[memory_key] = data
 ```
 
 - 与 LangChain Agent 自动集成

@@ -121,9 +121,16 @@ Agent接收到"请生成高质量的NL2SQL训练问题"的任务后，完全自�
 - **质量导向**：专注于单个样本的高质量生成，包含完整的反思修正机制
 
 **记忆驱动机制**：
-- **工具结果自动记忆**：每个工具的调用结果自动保存到 `tool_results` 中
-- **工具间自动协作**：后续工具自动从记忆中读取所需的前置信息
-- **Agent无需传参**：Agent只需调用工具，工具间的数据传递完全通过记忆自动完成
+- **工具结果自动保存**：每个工具的调用结果通过 `save_context()` 自动保存到 `utils/memory.py` 的 `DatabaseAnalysisMemory.memories` 字典中
+- **智能键映射**：工具名称自动映射到记忆键，参考实际实现：
+  - `schema_extraction` → `memories["schema_info"]`
+  - `domain_analysis` → `memories["domain_info"]`
+  - `field_analysis` → `memories["field_classification"]`
+  - `column_analysis` → `memories["column_meanings"]`
+  - `table_analysis` → `memories["table_meanings"]`
+  - `er_analysis` → `memories["er_relations"]`
+- **工具间自动协作**：后续工具通过 `load_memory_variables()` 自动从 `memories` 字典中读取所需信息
+- **Agent无需传参**：Agent只需调用工具，工具间的数据传递完全通过 `DatabaseAnalysisMemory` 自动完成
 
 ### **完整的Agent自主执行示例**
 
@@ -132,11 +139,11 @@ Agent接收到"请生成高质量的NL2SQL训练问题"的任务后，完全自�
     ↓
 Thought: 我需要生成训练问题，先检查是否了解数据库
 Action: schema_extraction
-Observation: 数据库结构信息 → 自动保存到 tool_results["schema_extraction"]
+Observation: 数据库结构信息 → 自动保存到 memories["schema_info"]
     ↓
 Thought: 需要理解业务领域
 Action: domain_analysis  
-Observation: 电商领域信息 → 自动保存到 tool_results["domain_analysis"]
+Observation: 电商领域信息 → 自动保存到 memories["domain_info"]
     ↓
 Thought: 现在获取场景和操作方案
 Action: scenario_operation_generation
@@ -144,16 +151,16 @@ Action Input: {"mode": "get_single_combination"}
 Observation: {
     "scenario": {"name": "销售分析", "complexity": "moderate"},
     "operations": ["SELECT", "GROUP BY", "HAVING"]
-} → 自动保存到 tool_results["scenario_operation_generation"]
+} → 自动保存到 memories["scenario_operation"]
     ↓
 Thought: 我有了场景方案，现在生成具体问题
 Action: question_generation
-Action Input: {}  # 工具自动从记忆中读取场景信息
-Observation: "统计每月销售总额" → 自动保存到 tool_results["question_generation"]
+Action Input: {}  # 工具自动从 memories["scenario_operation"] 读取场景信息
+Observation: "统计每月销售总额" → 自动保存到 memories["question"]
     ↓
 Thought: 生成对应的SQL
 Action: sql_generation
-Action Input: {}  # 工具自动从记忆中读取问题和场景信息
+Action Input: {}  # 工具自动从 memories["question"] 和 memories["schema_info"] 读取信息
 Observation: "SELECT MONTH(order_date), SUM(amount) FROM orders GROUP BY MONTH(order_date)"
     ↓
 Thought: 验证SQL语法
