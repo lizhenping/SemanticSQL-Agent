@@ -339,7 +339,7 @@ new_sql = sql_generation(
 | 工具类别 | 工具名称 | 主要特点 | Agent使用策略 |
 |---------|---------|---------|-------------|
 | 分析工具 | schema_extraction<br>domain_analysis<br>field_analysis<br>column_analysis<br>table_analysis<br>er_analysis | 结果保存在记忆中<br>可重复执行更新记忆 | 按需调用，优先检查记忆 |
-| 生成工具 | scenario_tool<br>operation_selection<br>question_generation<br>sql_generation | 基于记忆和上下文生成内容 | 每个样本都需要调用 |
+| 生成工具 | scenario_operation_generation<br>question_generation<br>sql_generation | 基于记忆和上下文生成内容 | 每个样本都需要调用 |
 | 验证工具 | sql_validation<br>sql_execution | 确保SQL正确性和可执行性 | 生成SQL后必须验证 |
 | 反思工具 | sql_reflection | 评估质量，提供修正建议 | 执行后自主决定是否反思 |
 | 思考工具 | sequential_thinking | 深度分析复杂问题 | 遇到复杂情况时自主调用 |
@@ -1771,4 +1771,153 @@ class OperationSelectionTool(BaseTool):
         return options.get(complexity, options["medium"])
 ```
 
-**结论**：通过简洁的符号表示和完全的Agent自主推理，我们实现了真正符合ReAct原则的架构设计，既简化了复杂度，又保持了完整的功能性。iteration参数作为有用的上下文信息保留，但不用于控制Agent行为。
+## 🔄 工具内部批量处理的重新设计
+
+### **💡 参考pipeline的设计思路**
+
+基于`scenario_driven_pipeline.py`的三层for循环设计，我们应该将场景和操作的批量生成封装在工具内部：
+
+```python
+# 参考代码的三层循环结构：
+for main_scenario_key, main_scenario_data in scenarios.items():      # 主场景
+    for sub_scenario_key, sub_scenario_data in main_scenario_data['sub_scenarios'].items():  # 子场景
+        for complexity in ['simple', 'moderate', 'complex', 'expert']:  # 复杂度
+            # 生成场景-操作组合
+```
+
+### **🛠️ 重新设计：合并的scenario_operation_tool**
+
+```python
+class ScenarioOperationTool(BaseTool):
+    """合并的场景-操作生成工具（内部封装三层for循环）"""
+    
+    name = "scenario_operation_generation"
+    description = "生成场景和对应的操作组合，内部处理所有的遍历逻辑"
+    
+    def _run(self, iteration: int, mode: str = "single", **kwargs):
+        """
+        Args:
+            iteration: 当前样本编号，用于确定选择策略
+            mode: 生成模式
+                - "single": 生成单个场景-操作组合
+                - "candidates": 生成多个候选组合供Agent选择
+        """
+        
+        if mode == "single":
+            return self._generate_single_combination(iteration)
+        elif mode == "candidates":
+            return self._generate_candidate_combinations(iteration, kwargs.get("count", 3))
+    
+    def _generate_single_combination(self, iteration: int):
+        """生成单个场景-操作组合（内部三层for循环）"""
+        
+        # 内部封装的三层循环逻辑
+        scenarios = self._load_scenarios()
+        scenario_mapping = self._load_scenario_mapping()
+        operation_mapping = self._load_operation_mapping()
+        
+        all_combinations = []
+        
+        # 三层for循环生成所有可能的组合（内部处理）
+        for main_key, main_data in scenarios.items():
+            if main_key in ['scenario_types', 'total_scenarios']:
+                continue
+                
+            for sub_key, sub_data in main_data['sub_scenarios'].items():
+                for complexity in ['simple', 'moderate', 'complex', 'expert']:
+                    
+                    # 检查是否有对应的操作映射
+                    if self._has_operation_mapping(main_key, sub_key, complexity):
+                        operations = self._get_operations_for_combination(
+                            main_key, sub_key, complexity
+                        )
+                        
+                        combination = {
+                            "scenario": {
+                                "main_key": main_key,
+                                "main_name": main_data['name'],
+                                "main_description": main_data['description'],
+                                "sub_key": sub_key,
+                                "sub_name": sub_data['name'],
+                                "focus_areas": sub_data['focus_areas'],
+                                "complexity": complexity
+                            },
+                            "operations": operations,
+                            "combination_id": f"{main_key}_{sub_key}_{complexity}"
+                        }
+                        all_combinations.append(combination)
+        
+        # 基于iteration智能选择一个组合（确保多样性）
+        selected_index = iteration % len(all_combinations)
+        return all_combinations[selected_index]
+    
+    def _generate_candidate_combinations(self, iteration: int, count: int):
+        """生成多个候选组合供Agent选择"""
+        
+        all_combinations = self._generate_all_combinations()
+        
+        # 基于iteration选择起始位置，生成count个不重复的候选
+        start_index = iteration % len(all_combinations)
+        candidates = []
+        
+        for i in range(count):
+            idx = (start_index + i) % len(all_combinations)
+            candidates.append(all_combinations[idx])
+        
+        return {
+            "candidates": candidates,
+            "total_available": len(all_combinations),
+            "selection_strategy": "基于iteration的智能选择"
+        }
+```
+
+### **🎯 Agent使用合并工具的新流程**
+
+```
+Thought: 我需要生成第5个训练样本，获取场景和操作组合
+Action: scenario_operation_generation
+Action Input: {"iteration": 4, "mode": "single"}
+Observation: {
+    "scenario": {
+        "main_name": "库存管理",
+        "sub_name": "库存预警", 
+        "complexity": "moderate",
+        "focus_areas": ["库存不足", "补货提醒"]
+    },
+    "operations": ["SELECT", "JOIN", "WHERE"],
+    "combination_id": "inventory_warning_moderate"
+}
+    ↓
+Thought: 很好！我得到了库存预警场景和JOIN操作组合。现在生成具体问题
+Action: question_generation
+Action Input: {
+    "scenario": "库存预警",
+    "operations": ["SELECT", "JOIN", "WHERE"],
+    "focus": "库存不足的商品和供应商信息"
+}
+Observation: "查询库存不足的商品及其供应商联系方式"
+    ↓
+[继续生成SQL...]
+```
+
+### **🔧 工具合并的关键优势**
+
+1. **简化Agent调用**：
+   - ❌ 原来：需要分别调用`scenario_tool`和`operation_selection`
+   - ✅ 现在：一次调用获得完整的场景-操作组合
+
+2. **封装复杂逻辑**：
+   - 三层for循环完全封装在工具内部
+   - Agent无需了解场景遍历的复杂性
+   - 基于iteration的智能选择逻辑内部处理
+
+3. **保证多样性**：
+   - 工具内部确保不同iteration选择不同组合
+   - Agent仍可以通过`mode="candidates"`获得多个选项
+
+4. **符合ReAct原则**：
+   - Agent仍然完全自主决策
+   - 可以选择不同的生成模式
+   - 工具只是提供服务，不控制Agent行为
+
+**结论**：通过将三层for循环封装在合并的`scenario_operation_tool`内部，我们既简化了Agent的调用复杂度，又保持了ReAct的完全自主性。这种设计完美平衡了工具的强大功能和Agent的自主决策权。

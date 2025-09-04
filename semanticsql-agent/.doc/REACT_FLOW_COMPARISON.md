@@ -35,13 +35,14 @@ Thought: 最后分析表之间的关系
 Action: er_analysis
 Observation: orders.user_id关联users.id，一对多关系 → 保存到记忆
     ↓
-Thought: 现在我对数据库有了全面的理解，开始生成场景
-Action: scenario_tool
-Observation: 选择了"销售分析"场景
-    ↓
-Thought: 根据场景选择SQL操作类型
-Action: operation_selection
-Observation: 选择了聚合查询操作
+Thought: 现在我对数据库有了全面的理解，开始生成场景和操作组合
+Action: scenario_operation_generation
+Action Input: {"iteration": 0, "mode": "single"}
+Observation: {
+    "scenario": {"main_name": "销售分析", "sub_name": "销售统计", "complexity": "moderate"},
+    "operations": ["SELECT", "GROUP BY", "HAVING"],
+    "combination_id": "sales_statistics_moderate"
+}
     ↓
 Thought: 基于场景和操作生成问题
 Action: question_generation
@@ -74,13 +75,14 @@ Final Answer: {"question": "统计每月销售总额", "sql": "SELECT...", "qual
     ↓
 Thought: 我需要生成第2个样本，记忆中已有数据库分析信息
     ↓
-Thought: 直接选择业务场景
-Action: scenario_tool
-Observation: 选择了"用户分析"场景
-    ↓
-Thought: 根据场景选择操作
-Action: operation_selection
-Observation: 选择了基础查询操作
+Thought: 直接获取场景和操作组合
+Action: scenario_operation_generation
+Action Input: {"iteration": 1, "mode": "single"}
+Observation: {
+    "scenario": {"main_name": "用户分析", "sub_name": "用户查询", "complexity": "simple"},
+    "operations": ["SELECT", "WHERE"],
+    "combination_id": "user_query_simple"
+}
     ↓
 Thought: 生成自然语言问题
 Action: question_generation
@@ -145,13 +147,14 @@ Thought: 我需要生成第5个样本，先检查记忆状态
     ├─ table_meanings ✓
     └─ er_analysis ✓
     ↓
-Thought: 很好！我已经有了完整信息，直接开始生成场景
-Action: scenario_tool
-Observation: 选择了"库存管理"场景
-    ↓
-Thought: 根据场景选择操作类型
-Action: operation_selection
-Observation: 选择了JOIN和WHERE操作
+Thought: 很好！我已经有了完整信息，直接获取场景和操作组合
+Action: scenario_operation_generation
+Action Input: {"iteration": 4, "mode": "single"}
+Observation: {
+    "scenario": {"main_name": "库存管理", "sub_name": "库存预警", "complexity": "moderate"},
+    "operations": ["SELECT", "JOIN", "WHERE"],
+    "combination_id": "inventory_warning_moderate"
+}
     ↓
 Thought: 生成库存相关的业务问题
 Action: question_generation

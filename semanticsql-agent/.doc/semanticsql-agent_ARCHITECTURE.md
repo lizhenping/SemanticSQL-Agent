@@ -138,8 +138,7 @@ semanticsql-agent/
 - 特点：可重新执行，结果更新到记忆模块
 
 **生成工具** (generation_tools/)
-- **scenario_tool**: 基于预定义模板生成查询场景
-- **operation_selection_tool**: 根据场景复杂度选择SQL操作
+- **scenario_operation_tool**: 合并的场景-操作生成工具（内部封装三层for循环遍历）
 - **question_generation_tool**: 生成自然语言问题
 - **sql_generation_tool**: 将问题转换为SQL
 - 特点：使用记忆模块中的数据库分析结果
