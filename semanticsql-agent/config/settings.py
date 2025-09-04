@@ -61,9 +61,8 @@ class Settings(BaseModel):
         "sequential_thinking",
     ]
 
-    # Generation settings
-    scenarios_per_batch: int = 10
-    questions_per_scenario: int = 5
+    # Agent settings  
+    max_steps: int = 100  # 足够处理所有场景组合
 
     # Output settings
     output_directory: str = "./output"

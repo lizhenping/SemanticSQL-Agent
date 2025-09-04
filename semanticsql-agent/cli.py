@@ -225,10 +225,9 @@ def config_template():
             "password": "",
             "database": "test_db"
         },
-        "generation": {
-            "scenarios_per_batch": 5,
-            "max_retries": 3,
-            "validation_enabled": True
+        "agent": {
+            "max_steps": 100,
+            "verbose": True
         }
     }
     

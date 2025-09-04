@@ -17,11 +17,8 @@ from prompts.manager import PromptManager
 
 
 class SQLGenerationInput(BaseModel):
-    """SQL生成输入"""
-    question: str = Field(description="自然语言问题")
-    scenario: Optional[Dict[str, Any]] = Field(default=None, description="场景信息")
-    memory: Optional[Dict[str, Any]] = Field(default=None, description="包含数据库分析结果的记忆")
-    operations: Optional[List[str]] = Field(default=None, description="建议的SQL操作")
+    """SQL生成输入（新设计：从记忆中自动读取）"""
+    combination_index: int = Field(default=0, description="要处理的场景组合索引")
     
     @model_validator(mode='before')
     @classmethod
@@ -67,6 +64,11 @@ class SQLGenerationTool(BaseTool):
         self.llm = llm
         self.db_manager = db_manager
         self.prompt_manager = PromptManager()
+        self.memory = None  # 将由Agent设置
+    
+    def set_memory(self, memory):
+        """设置记忆引用"""
+        self.memory = memory
     
     def _run(
         self,

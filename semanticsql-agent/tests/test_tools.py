@@ -8,7 +8,7 @@ from typing import Dict, Any
 
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
-from tools.generation_tools.scenario_tool import ScenarioTool
+from tools.generation_tools.scenario_operation_tool import ScenarioOperationTool
 from tools.generation_tools.sql_generation_tool import SQLGenerationTool
 from tools.validation_tools.sql_validation_tool import SQLValidationTool
 from tools.validation_tools.sql_execution_tool import SQLExecutionTool
@@ -27,18 +27,17 @@ class TestBaseTool:
             BaseTool()
 
 
-class TestScenarioTool:
-    """测试场景生成工具"""
+class TestScenarioOperationTool:
+    """测试场景-操作生成工具"""
     
     @pytest.fixture
     def tool(self):
         """创建测试工具"""
-        settings = Settings()
-        return ScenarioTool(settings)
+        return ScenarioOperationTool()
     
     def test_initialization(self, tool):
         """测试初始化"""
-        assert tool.name == "generate_scenario"
+        assert tool.name == "scenario_operation_generation"
         assert tool.description is not None
         assert len(tool.parameters) > 0
     

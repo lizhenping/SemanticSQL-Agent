@@ -124,7 +124,7 @@ class TestDataGenerationAgent:
                     }
                 }
                 
-                result = agent.analyze_database("test_db")
+                result = agent.run("请分析数据库结构和业务特征")
                 
                 # 验证任务调用结构
                 assert mock_run.called

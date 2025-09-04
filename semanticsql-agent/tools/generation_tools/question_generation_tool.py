@@ -14,11 +14,8 @@ from prompts.manager import PromptManager
 
 
 class QuestionGenerationInput(BaseModel):
-    """问题生成输入"""
-    scenario_id: str = Field(default="", description="场景ID")
-    operations: List[str] = Field(default_factory=list, description="SQL操作列表")
-    scenario: Optional[Dict[str, Any]] = Field(default=None, description="完整场景信息")
-    memory: Optional[Dict[str, Any]] = Field(default=None, description="包含数据库分析结果的记忆")
+    """问题生成输入（新设计：从记忆中自动读取）"""
+    combination_index: int = Field(default=0, description="要处理的场景组合索引")
     
     @model_validator(mode='before')
     @classmethod
@@ -45,7 +42,7 @@ class QuestionGenerationTool(BaseTool):
     """生成自然语言问题"""
     
     name: str = "question_generation"
-    description: str = "根据场景和数据库结构生成自然语言问题"
+    description: str = "基于记忆中的场景组合生成自然语言问题，自动注入场景信息和专用提示词"
     args_schema: Type[BaseModel] = QuestionGenerationInput
     
     # 定义必需的字段
@@ -59,42 +56,68 @@ class QuestionGenerationTool(BaseTool):
         super().__init__()
         self.llm = llm
         self.prompt_manager = PromptManager()
+        self.memory = None  # 将由Agent设置
+    
+    def set_memory(self, memory):
+        """设置记忆引用"""
+        self.memory = memory
     
     def _run(
         self,
-        scenario_id: str = "",
-        operations: List[str] = None,
-        scenario: Optional[Dict[str, Any]] = None,
-        memory: Optional[Dict[str, Any]] = None
-    ,
-        **kwargs  # 接受额外的参数如 verbose
+        combination_index: int = 0,
+        **kwargs
     ) -> Dict[str, Any]:
-        """生成问题"""
+        """生成问题（新设计：基于记忆中的场景组合）"""
         try:
-            # 处理默认值
-            if operations is None:
-                operations = []
-            if scenario is None:
-                scenario = {}
-            if memory is None:
-                memory = {}
+            # 从记忆中获取场景组合信息
+            if not self.memory:
+                raise ToolExecutionError(
+                    tool_name=self.name,
+                    reason="记忆系统未初始化"
+                )
             
-            # QuestionGenerationTool基于场景和操作生成问题，不强制依赖数据库分析
-            category = scenario.get("category", "通用查询")
-            business_purpose = scenario.get("business_purpose", "数据查询")
-            complexity = scenario.get("complexity", "easy")
+            # 获取记忆数据
+            memory_data = self.memory.load_memory_variables({})
+            db_analysis = memory_data.get("db_analysis", {})
             
-            # 构建简化的上下文（不依赖数据库分析）
-            context = self._build_context(scenario, operations)
+            # 检查是否有场景组合信息
+            all_combinations = db_analysis.get("all_scenario_combinations")
+            if not all_combinations:
+                raise ToolExecutionError(
+                    tool_name=self.name,
+                    reason="记忆中缺少场景组合信息，请先调用 scenario_operation_generation"
+                )
+            
+            # 获取指定的组合
+            combinations = all_combinations.get("combinations", [])
+            if combination_index >= len(combinations):
+                raise ToolExecutionError(
+                    tool_name=self.name,
+                    reason=f"组合索引 {combination_index} 超出范围，总共有 {len(combinations)} 个组合"
+                )
+            
+            current_combination = combinations[combination_index]
+            
+            # 使用组合中的专用提示词生成问题
+            generated_prompt = current_combination.get("generated_prompt", "")
+            scenario_info = current_combination.get("scenario", {})
+            
+            # 构建上下文
+            context = {
+                "combination": current_combination,
+                "generated_prompt": generated_prompt,
+                "scenario": scenario_info,
+                "db_analysis": db_analysis
+            }
             
             # 使用LLM生成问题
             question = self._generate_question_with_llm(context)
             
             return {
                 "question": question,
-                "scenario_id": scenario.get("scenario_id"),
-                "complexity": scenario.get("complexity"),
-                "category": scenario.get("category")
+                "combination_id": current_combination.get("combination_id"),
+                "scenario_info": scenario_info,
+                "combination_index": combination_index
             }
             
         except Exception as e:
