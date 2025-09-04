@@ -264,7 +264,9 @@ Agent 根据 recommended_action 决定：
     
     3. 数据库记忆的使用情况：
        - schema_info：是否使用了正确的表名和字段名
-       - field_classification：是否理解了字段的实际含义和类型
+       - field_analysis：是否理解了字段的实际含义和类型
+       - column_analysis：是否正确理解了列的业务含义
+       - table_analysis：是否正确理解了表的业务职责
        - er_analysis：是否正确处理了表之间的关系
        - domain_analysis：是否符合业务领域的惯例
     ↓
@@ -336,7 +338,7 @@ new_sql = sql_generation(
 
 | 工具类别 | 工具名称 | 主要特点 | Agent使用策略 |
 |---------|---------|---------|-------------|
-| 分析工具 | schema_extraction<br>domain_analysis<br>field_classification<br>column_meaning<br>table_meaning<br>er_analysis | 结果保存在记忆中<br>可重复执行更新记忆 | 按需调用，优先检查记忆 |
+| 分析工具 | schema_extraction<br>domain_analysis<br>field_analysis<br>column_analysis<br>table_analysis<br>er_analysis | 结果保存在记忆中<br>可重复执行更新记忆 | 按需调用，优先检查记忆 |
 | 生成工具 | scenario_tool<br>operation_selection<br>question_generation<br>sql_generation | 基于记忆和上下文生成内容 | 每个样本都需要调用 |
 | 验证工具 | sql_validation<br>sql_execution | 确保SQL正确性和可执行性 | 生成SQL后必须验证 |
 | 反思工具 | sql_reflection | 评估质量，提供修正建议 | 执行后自主决定是否反思 |
@@ -366,7 +368,8 @@ class SQLAgent:
             # Agent完全自主决策执行流程
             result = self.agent_executor.invoke({
                 "input": task,
-                "iteration": i,
+                "iteration": i,                    # 上下文信息：当前样本编号
+                "target_count": count,             # 上下文信息：总目标数量
                 "database_name": self.db_config.database
             })
             
@@ -1403,15 +1406,15 @@ Action: domain_analysis
 Observation: 识别出电商领域 → 保存到记忆
     ↓
 Thought: 需要理解字段的语义类型
-Action: field_classification
+Action: field_analysis
 Observation: 识别出ID、时间、金额、状态等字段类型 → 保存到记忆
     ↓
 Thought: 需要深入理解每个列的业务含义
-Action: column_meaning_analysis
+Action: column_analysis
 Observation: 理解了order_amount表示订单总金额等 → 保存到记忆
     ↓
 Thought: 需要理解每个表的业务职责
-Action: table_meaning_analysis
+Action: table_analysis
 Observation: orders表负责交易记录，users表管理用户信息 → 保存到记忆
     ↓
 Thought: 最后分析表之间的关系
@@ -1521,9 +1524,9 @@ Thought: 我需要生成第5个样本，先检查记忆状态
 记忆检查: 已有完整的数据库分析信息 ✓
     ├─ schema_info ✓
     ├─ domain_analysis ✓ 
-    ├─ field_classification ✓
-    ├─ column_meanings ✓
-    ├─ table_meanings ✓
+    ├─ field_analysis ✓
+    ├─ column_analysis ✓
+    ├─ table_analysis ✓
     └─ er_analysis ✓
     ↓
 Thought: 很好！我已经有了完整信息，直接开始生成场景
@@ -1616,4 +1619,47 @@ Observation: 生成了新的SQL                             ← 获得改进结�
 | **控制主体** | 外部代码控制 | Agent完全自主 |
 | **流程描述** | "根据X决定调用Y" | "Thought: 我需要..." |
 
-**结论**：通过简洁的符号表示和完全的Agent自主推理，我们实现了真正符合ReAct原则的架构设计，既简化了复杂度，又保持了完整的功能性。
+## 💭 关于iteration参数的设计思考
+
+### **🤔 iteration参数是否必要？**
+
+**保留iteration的理由**：
+1. **场景多样性保证**：帮助scenario_tool避免总是选择相同场景
+2. **进度上下文**：让Agent了解当前生成进度，有助于决策
+3. **调试追踪**：便于追踪特定样本的生成过程
+4. **质量控制**：Agent可以根据进度调整生成策略
+
+**正确的使用方式**：
+```python
+# ✅ 正确：iteration作为上下文信息，不控制Agent行为
+result = self.agent_executor.invoke({
+    "input": task,
+    "iteration": i,                    # 上下文：当前样本编号
+    "target_count": count,             # 上下文：总目标数量  
+    "database_name": self.db_config.database
+})
+
+# Agent可以自主决定如何使用这些信息：
+Thought: 我正在生成第5个样本，总共要生成100个。
+         为了保证多样性，我应该选择一个不同的场景。
+Action: scenario_tool
+```
+
+**❌ 错误的使用方式**：
+```python
+# 不要用iteration控制工具过滤或强制执行顺序
+if iteration == 0:
+    tools = analysis_tools  # 硬编码控制
+else:
+    tools = generation_tools  # 硬编码控制
+```
+
+### **🎯 推荐设计**
+
+**保留iteration参数**，但明确其作用是**提供上下文信息**，而不是**控制Agent行为**：
+
+- Agent完全自主决定如何使用iteration信息
+- 不用iteration进行工具过滤或流程控制
+- iteration帮助Agent做出更好的多样性决策
+
+**结论**：通过简洁的符号表示和完全的Agent自主推理，我们实现了真正符合ReAct原则的架构设计，既简化了复杂度，又保持了完整的功能性。iteration参数作为有用的上下文信息保留，但不用于控制Agent行为。

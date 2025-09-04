@@ -40,9 +40,9 @@ semanticsql-agent/
 │   │   ├── __init__.py
 │   │   ├── schema_extraction_tool.py    # 数据库结构提取
 │   │   ├── domain_analysis_tool.py      # 业务领域分析
-│   │   ├── field_classification_tool.py # 字段语义分类
-│   │   ├── column_meaning_tool.py       # 列业务含义分析
-│   │   ├── table_meaning_tool.py        # 表业务含义分析
+│   │   ├── field_analysis_tool.py       # 字段语义分类
+│   │   ├── column_analysis_tool.py      # 列业务含义分析
+│   │   ├── table_analysis_tool.py       # 表业务含义分析
 │   │   └── er_analysis_tool.py          # 实体关系分析
 │   │
 │   ├── generation_tools/        # 生成工具
@@ -131,9 +131,9 @@ semanticsql-agent/
 **分析工具** (analysis_tools/)
 - **schema_extraction_tool**: 提取表结构、列信息、约束
 - **domain_analysis_tool**: 识别业务领域特征
-- **field_classification_tool**: 字段语义分类（ID、时间、金额、状态等）
-- **column_meaning_tool**: 分析列的业务含义和用途
-- **table_meaning_tool**: 分析表的业务含义和职责
+- **field_analysis_tool**: 字段语义分类（ID、时间、金额、状态等）
+- **column_analysis_tool**: 分析列的业务含义和用途
+- **table_analysis_tool**: 分析表的业务含义和职责
 - **er_analysis_tool**: 分析表关系（主外键、隐式关联）
 - 特点：可重新执行，结果更新到记忆模块
 
