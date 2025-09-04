@@ -417,98 +417,94 @@ Observation: 语法正确，修正成功
 Agent通过提示词指导，自主决策工具的使用时机和顺序：
 
 ```python
-# 优化的代码架构示例（一次调用方案）
+# 极简的Agent架构（完全自主驱动）
 class SQLAgent:
-    def generate_training_data_by_scenarios(self):
-        """按场景组合生成训练数据（一次调用获取所有组合）"""
+    def generate_training_data(self):
+        """完全由Agent自主驱动的训练数据生成"""
         
-        # 1. 一次性获取所有场景组合（工具内部三层for循环）
-        combinations_result = self.scenario_operation_tool.run(mode="get_all_combinations")
-        combinations = combinations_result["combinations"]  # 比如48个组合
+        # 极简的任务输入，无任何循环控制
+        task = "请生成高质量的NL2SQL训练问题"
         
-        print(f"📊 获取到 {len(combinations)} 个场景组合，开始逐个生成样本...")
+        # 完全交给Agent自主决策
+        result = self.agent_executor.invoke({
+            "input": task,
+            "database_name": self.db_config.database
+        })
         
-        # 2. 外部遍历每个组合，单条生成+立即反思
-        results = []
-        for i, combination in enumerate(combinations):
-            print(f"🎯 处理第 {i+1}/{len(combinations)} 个组合: {combination['combination_id']}")
-            
-            # 每个组合都是独立的ReAct任务
-            task = f"基于场景组合生成高质量训练样本：{combination['combination_id']}"
-            
-            # Agent完全自主决策执行流程
-            result = self.agent_executor.invoke({
-                "input": task,
-                "scenario_combination": combination,  # 传入具体的场景组合
-                "sample_index": i,                   # 当前样本索引
-                "database_name": self.db_config.database
-            })
-            
-            sample = self._extract_sample(result)
-            if sample:
-                results.append(sample)
-                print(f"✅ 样本 {i+1} 生成成功")
-            else:
-                print(f"❌ 样本 {i+1} 生成失败")
-        
-        print(f"🎉 完成！成功生成 {len(results)} 个训练样本")
-        return results
-    
-    def generate_training_data_by_count(self, count: int):
-        """按数量生成训练数据（兼容模式）"""
-        results = []
-        
-        for i in range(count):
-            task = f"生成第{i+1}个高质量NL2SQL训练样本"
-            
-            result = self.agent_executor.invoke({
-                "input": task,
-                "iteration": i,
-                "target_count": count,
-                "database_name": self.db_config.database
-            })
-            
-            sample = self._extract_sample(result)
-            if sample:
-                results.append(sample)
-        
-        return results
+        return self._extract_samples(result)
 ```
 
-**Agent使用新架构的典型流程**：
-
-#### **推荐模式：按场景组合生成**
+**Agent内部的完全自主流程**：
 ```
-用户调用: agent.generate_training_data_by_scenarios()
+用户: "请生成高质量的NL2SQL训练问题"
     ↓
-1. 获取所有场景组合（48个）
-2. 外部遍历每个组合
-3. Agent为每个组合生成样本+立即反思
-4. 自然完成所有场景覆盖
-```
-
-#### **兼容模式：按数量生成**  
-```
-用户调用: agent.generate_training_data_by_count(100)
+Thought: 我需要生成训练问题，先获取场景和操作方案
+Action: scenario_operation_generation
+Action Input: {"mode": "get_scenario_and_operations"}
+Observation: {
+    "scenario": {"name": "销售分析", "complexity": "moderate"},
+    "operations": ["SELECT", "GROUP BY", "HAVING"]
+} → 自动保存到记忆 tool_results["scenario_operation_generation"]
     ↓
-1. 外部循环100次
-2. Agent每次自主选择场景
-3. 单条生成+立即反思
-4. 达到指定数量后结束
+Thought: 我有了场景方案，现在生成具体问题
+Action: question_generation  
+Action Input: {}  # 工具自动从记忆中读取场景信息
+Observation: "统计每月销售总额"
+    ↓
+Thought: 生成对应的SQL
+Action: sql_generation
+Action Input: {}  # 工具自动从记忆中读取问题和场景信息
+Observation: "SELECT MONTH(order_date), SUM(amount) FROM orders GROUP BY MONTH(order_date)"
+    ↓
+Thought: 验证SQL
+Action: sql_validation
+Observation: 语法正确
+    ↓
+Thought: 执行SQL测试
+Action: sql_execution
+Observation: 成功返回12条记录
+    ↓
+Thought: 反思质量
+Action: sql_reflection
+Observation: {"quality_score": 0.85, "needs_revision": false}
+    ↓
+Thought: 质量良好，任务完成
+Final Answer: {"question": "统计每月销售总额", "sql": "SELECT...", "quality_score": 0.85}
 ```
 
-**Agent单条生成的流程**：
-1. **智能检查**：优先检查记忆中是否有所需信息
-2. **按需分析**：缺少信息时自主选择分析工具
-3. **内容生成**：基于给定的场景组合生成问题和SQL
-4. **质量保证**：验证、执行、反思
-5. **自主修正**：发现问题时自主选择修正策略
+### **🎯 Agent完全自主的工作流程**
 
-**关键优势**：
-- **架构简单**：只有一个Agent类，一个大循环
-- **完全自主**：Agent根据提示词自主决策，无外部控制
-- **高效记忆**：分析结果跨样本自动共享
-- **智能修正**：基于反思结果自主选择修正工具
+1. **用户简单输入**：`"请生成高质量的NL2SQL训练问题"`
+
+2. **Agent自主决策**：
+   - 自主调用 `scenario_operation_generation` 获取场景方案
+   - 场景方案自动保存到记忆中
+   - 自主调用 `question_generation`，工具从记忆中读取场景信息
+   - 自主调用 `sql_generation`，工具从记忆中读取问题和场景信息
+   - 自主进行验证、执行、反思
+
+3. **记忆驱动**：
+   - 所有工具调用结果自动保存到记忆
+   - 后续工具自动从记忆中获取所需信息
+   - 无需外部传参，完全依赖记忆机制
+
+### **🔧 关键优势**
+
+1. **极简架构**：
+   - 无外部循环控制
+   - 无数量限制逻辑
+   - 完全由Agent自主驱动
+
+2. **记忆驱动**：
+   - 工具调用结果自动保存到记忆
+   - 后续工具自动从记忆中读取信息
+   - Agent无需手动传递参数
+
+3. **完全ReAct**：
+   - Agent根据任务自主选择工具调用顺序
+   - 工具之间通过记忆自动协作
+   - 用户只需要给出简单的任务描述
+   - 基于反思结果自主选择修正策略
 
 ### 2.2 分析工具详细说明
 
