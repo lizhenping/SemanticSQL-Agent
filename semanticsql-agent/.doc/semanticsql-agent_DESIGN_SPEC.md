@@ -1422,36 +1422,31 @@ class BaseAgent(ABC):
         pass
 ```
 
-### 4.3 命令行接口
+### 4.3 命令行接口（极简设计）
 
 ```bash
-# 基础生成命令（支持两种模式）
+# 基础生成命令
 semanticsql-agent generate [OPTIONS]
 
 Options:
   --config PATH           配置文件路径
-  --mode TEXT            生成模式 [scenarios|count] [default: scenarios]
-  --count INTEGER        生成数据条数（仅count模式使用） [default: 100]
-  --db-type TEXT         数据库类型 [mysql]
-  --host TEXT            数据库主机
-  --port INTEGER         数据库端口
   --database TEXT        数据库名称
-  --username TEXT        用户名
-  --password TEXT        密码
-  --output PATH          输出文件路径
-  --format TEXT          输出格式 [json|jsonl|csv]
+  --output PATH          输出文件路径 [default: training_data.jsonl]
   --verbose              详细输出
   --help                 显示帮助信息
 
-生成模式说明：
-  scenarios: 按场景批次生成，自动遍历所有场景组合（推荐）
-  count: 按数量生成，需指定--count参数
+# 使用示例
+semanticsql-agent generate --database shop_db --output data.jsonl
 
 # 其他命令
-semanticsql-agent test-connection  # 测试数据库连接
-semanticsql-agent init            # 初始化配置
+semanticsql-agent init            # 初始化配置文件
 semanticsql-agent version         # 显示版本信息
 ```
+
+**设计原则**：
+- **极简参数**：只保留最必要的参数
+- **智能默认**：大部分配置通过配置文件管理
+- **Agent自主**：生成逻辑完全由Agent自主决策，无需外部控制参数
 
 ## 4. 数据模型规范
 
@@ -1509,35 +1504,23 @@ class GeneratedExample:
 ### 4.2 配置规范
 
 ```yaml
-# 完整配置示例
+# 极简配置示例
 database:
-  type: mysql              # 数据库类型
   host: localhost         
   port: 3306              
   username: root          
-  password: ${DB_PASSWORD}  # 支持环境变量
+  password: ${DB_PASSWORD}
   database: shop_db       
   
 llm:
-  model: Qwen3-14B        # 模型名称
-  base_url: http://192.168.200.216:9991/v1
-  api_key: ${DASHSCOPE_API_KEY}
-  temperature: 0.7        # 生成温度
-  max_tokens: 4096        # 最大token数
+  model: Qwen3-14B
+  base_url: http://localhost:9991/v1
+  api_key: ${LLM_API_KEY}
+  temperature: 0.7
   
 agent:
-  max_steps: 30           # 最大执行步骤
-  enable_reflection: true # 启用反思
-  verbose: true           # 详细日志
-  
-generation:
-  default_count: 100           # 默认生成数量
-  output_format: "jsonl"       # 输出格式
-    
-output:
-  directory: ./output     # 输出目录
-  format: json           # 默认格式
-  save_intermediate: false  # 是否保存中间结果
+  max_steps: 30
+  verbose: true
 ```
 
 ## 5. 错误处理规范
