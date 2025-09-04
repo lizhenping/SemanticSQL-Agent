@@ -68,91 +68,61 @@ SemanticSQL Agent 是一个基于 ReAct 智能体架构的 **NL2SQL 训练数据
    - 关系类型（一对一、一对多、多对多）
    - 实体重要性评估
 
-#### 2.1.2 智能体驱动的数据生成流程
+#### 2.1.2 基于纯ReAct模式的数据生成流程
 
-**关键设计原则**：
-- **❌ 错误**：流程步骤硬编码在代码中
-- **✅ 正确**：流程完全由提示词引导，Agent自主决策
+**核心设计原则**：
+- **外部大循环**：简单的数量控制，负责迭代生成多个样本
+- **内部纯ReAct**：Agent完全自主决策，拥有所有工具访问权限
+- **提示词引导**：通过提示词提供思考流程指导，不强制执行顺序
+- **记忆驱动**：自动管理和共享数据库分析结果
 
-**ReAct 自主决策模式**：Agent通过思考-行动-观察循环，自主决定执行策略
+**真正的ReAct自主决策模式**：Agent通过思考-行动-观察循环，完全自主决定执行策略
 
-**完整执行流程图**：
+**简化的执行架构图**：
 ```mermaid
 graph TB
-    Start[开始任务] --> Think1[sequential_thinking<br/>思考整体策略]
-    Think1 --> Analyze[数据库分析阶段<br/>只执行一次]
+    Start[开始任务] --> Loop[外部大循环: for i in range(count)]
+    Loop --> Task[任务: 生成第i+1个样本]
+    Task --> Agent[Agent完全自主决策]
     
-    Analyze --> Schema[extract_schema<br/>提取数据库结构]
-    Schema --> Domain[domain_analysis<br/>识别业务领域]
-    Domain --> Field[field_classification<br/>字段语义分类]
-    Field --> ColMean[column_meaning<br/>分析列业务含义]
-    ColMean --> TabMean[table_meaning<br/>分析表业务职责]
-    TabMean --> ER[er_analysis<br/>分析表关系]
-    ER --> Memory[(记忆存储<br/>分析结果)]
+    Agent --> React[ReAct推理循环]
+    React --> Thought[Thought: 分析当前状态]
+    Thought --> Action[Action: 选择合适工具]
+    Action --> Input[Action Input: 准备参数]
+    Input --> Execute[执行工具]
+    Execute --> Observe[Observation: 观察结果]
     
-    Memory --> ScenarioLoop[问题生成循环<br/>根据数量N循环<br/>每次选择一个预定义场景]
+    Observe --> Complete{任务完成?}
+    Complete -->|否| Thought
+    Complete -->|是| Answer[Final Answer: 训练样本]
     
-    ScenarioLoop --> Scenario[scenario_tool<br/>从预定义模板选择场景]
-    Scenario --> Operation[operation_selection<br/>为当前场景选择SQL操作]
-    Operation --> Question[question_generation<br/>基于场景生成问题]
-    Question --> SQL[sql_generation<br/>生成SQL查询]
-    SQL --> Validate[sql_validation<br/>验证SQL语法]
-    Validate --> Execute[sql_execution<br/>执行SQL]
-    Execute --> Reflect[sql_reflection<br/>反思执行结果]
+    Answer --> Save[保存样本]
+    Save --> Next{继续下一个?}
+    Next -->|是| Loop
+    Next -->|否| End[完成所有生成]
     
-    Reflect --> Judge{需要修正?}
-    Judge -->|否| Save[保存训练数据]
-    Judge -->|是| ThinkFix[sequential_thinking<br/>分析问题源头]
-    
-    ThinkFix --> Analyze[分析每个步骤的执行结果<br/>定位问题出在哪一步]
-    
-    Analyze --> ReDo{重新执行出问题的步骤}
-    ReDo -->|数据库分析有误| ReAnalysis[重新执行相应的分析工具]
-    ReDo -->|问题生成有误| ReQuestion[重新执行question_generation]
-    ReDo -->|SQL生成有误| ReSQL[重新执行sql_generation]
-    
-    ReAnalysis --> UpdateMemory[更新记忆模块]
-    UpdateMemory --> Continue[继续当前场景的处理]
-    ReQuestion --> SQL[使用新问题生成SQL]
-    ReSQL --> Validate[验证新SQL]
-    
-    Save --> NextQuestion{还需生成更多问题?}
-    NextQuestion -->|是| ScenarioLoop
-    NextQuestion -->|否| End[完成生成]
+    style Agent fill:#e1f5fe
+    style React fill:#f3e5f5
+    style Loop fill:#e8f5e8
 ```
 
-**Agent的智能决策过程**：
+**简化的Agent决策模式**：
 
-1. **初始思考**：使用sequential_thinking规划整体执行策略
+Agent接收到"生成第N个训练样本"的任务后，完全自主决策执行流程：
 
-2. **一次性数据库分析**：
-   - 执行四个分析工具，获取完整的数据库理解
-   - 分析结果保存在记忆中，供全程使用
-   - 这些记忆是后续所有生成步骤的基础
+1. **状态检查**：检查记忆中是否有足够的数据库分析信息
+2. **按需分析**：如果缺少信息，自主选择需要的分析工具
+3. **场景生成**：选择合适的业务场景
+4. **问题构建**：生成自然语言问题
+5. **SQL实现**：将问题转换为SQL查询
+6. **验证测试**：确保SQL正确可执行
+7. **质量评估**：反思生成质量，必要时自主修正
 
-3. **问题生成循环**（基于设定数量N）：
-   - 使用 for 循环，每次迭代生成一个问题
-   - scenario_tool 从预定义模板中选择一个场景
-   - 每个场景都有预定义的类型和复杂度
-
-4. **循环处理每个场景**：
-   - **操作选择**：基于预定义规则，根据场景复杂度选择SQL操作组合
-   - **问题生成**：使用场景、操作和数据库记忆生成自然语言问题
-   - **SQL生成**：基于问题和数据库记忆生成SQL查询
-   - **验证执行**：确保SQL语法正确且可执行
-   - **综合反思**：评估整个生成链的质量
-
-5. **反思的多层次评估**：
-   - **执行层**：SQL是否成功执行，结果是否合理
-   - **语义层**：SQL是否准确实现了问题意图
-   - **质量层**：问题和SQL的质量是否达标
-   - **记忆层**：是否充分利用了数据库分析信息
-
-6. **智能修正机制**：
-   - 反思发现问题时，先用sequential_thinking深度分析
-   - 根据问题根源，精准回退到相应步骤
-   - 修正时仍然基于预定义规则和记忆信息
-   - 每个场景独立处理，互不影响
+**关键特点**：
+- **完全自主**：没有外部预设的执行步骤
+- **智能记忆**：自动利用和更新数据库分析结果
+- **按需执行**：根据实际需求选择工具，避免不必要的分析
+- **自我修正**：基于反思结果自主选择修正策略
 
 **记忆机制**：
 - **数据库分析结果必须完整记忆**：一次性分析数据库，结果贯穿整个过程
@@ -163,63 +133,72 @@ graph TB
 - **思考工具（sequential_thinking）**：用于深度分析和推理，在需要复杂决策时调用
 - **反思工具（sql_reflection）**：SQL执行后的质量评估和问题诊断
 
-**反思-修正循环机制**：
-```
-数据库分析（初始执行，结果保存到记忆模块）
-    ├─ extract_schema → 表结构信息 → 记忆模块
-    ├─ domain_analysis → 业务领域理解 → 记忆模块
-    ├─ field_classification → 字段语义分类 → 记忆模块
-    ├─ column_meaning → 列业务含义 → 记忆模块
-    ├─ table_meaning → 表业务职责 → 记忆模块
-    └─ er_analysis → 表关系信息 → 记忆模块
-            ↓
-问题生成循环（基于设定数量N）
-    ↓
-对每次循环（从预定义场景模板中选择）：
-    ↓
-操作选择（基于预定义规则）
-    ↓
-问题生成（使用场景+操作+记忆模块）
-    ↓
-SQL生成（使用问题+记忆模块）
-    ↓
-SQL验证执行
-    ↓
-SQL反思分析
-    ├─ 评估内容：
-    │  1. SQL执行是否成功
-    │  2. 执行结果是否合理
-    │  3. SQL是否准确实现了问题意图
-    │  4. 问题描述是否清晰准确
-    │  5. 数据库分析是否有误或不足
-    ↓
-需要修正？
-    ├─ 否 → 保存训练数据，继续下一个场景
-    └─ 是 → 调用sequential_thinking分析问题根源
-            ↓
-      分析问题出在哪里：
-            ├─ 数据库分析有误？
-            │  ├─ schema理解错误 → 重新执行extract_schema
-            │  ├─ 领域理解偏差 → 重新执行domain_analysis
-            │  ├─ 字段分类错误 → 重新执行field_classification
-            │  ├─ 列含义理解错误 → 重新执行column_meaning
-            │  ├─ 表职责理解错误 → 重新执行table_meaning
-            │  └─ 关系分析不足 → 重新执行er_analysis
-            │           ↓
-            │      更新记忆模块中对应的分析结果
-            │
-            ├─ 问题生成有误？
-            │  └─ 重新执行question_generation（使用更新后的记忆）
-            │
-            └─ SQL生成有误？
-               └─ 重新执行sql_generation（使用更新后的记忆）
+**简化的执行机制**：
+
+```python
+# 外部：简单的大循环
+def generate_training_data(self, count: int):
+    results = []
+    
+    for i in range(count):
+        # 每次迭代都是独立的ReAct任务
+        task = f"生成第{i+1}个高质量NL2SQL训练样本"
+        
+        # 完全交给Agent自主决策
+        result = self.agent_executor.invoke({
+            "input": task,
+            "iteration": i,
+            "database_name": self.db_config.database
+        })
+        
+        sample = self._extract_sample(result)
+        if sample:
+            results.append(sample)
+    
+    return results
 ```
 
-**重要原则**：
-1. **分析工具初始执行一次**：数据库分析工具在开始时执行，结果保存在记忆模块中
-2. **分析工具可按需重新执行**：如果反思发现分析有误，可以重新执行特定的分析工具并更新记忆
-3. **记忆模块动态更新**：重新执行分析工具后，记忆模块中相应的内容会被更新
-4. **生成工具使用最新记忆**：问题生成和SQL生成始终使用记忆模块中的最新数据
+**Agent内部的自主推理示例**：
+```
+用户: "生成第1个高质量NL2SQL训练样本"
+
+Thought: 需要生成训练样本。先检查是否了解数据库。
+Action: 检查记忆状态，必要时调用schema_extraction
+Observation: 获得数据库结构信息
+
+Thought: 选择一个业务场景。  
+Action: scenario_tool
+Observation: 选择了"销售分析"场景
+
+Thought: 根据场景复杂度选择SQL操作。
+Action: operation_selection
+Observation: 选择了GROUP BY聚合操作
+
+Thought: 基于场景和操作生成问题。
+Action: question_generation  
+Observation: "统计每月销售总额"
+
+Thought: 将问题转换为SQL。
+Action: sql_generation
+Observation: "SELECT MONTH(order_date), SUM(amount) FROM orders GROUP BY MONTH(order_date)"
+
+Thought: 验证SQL并执行测试。
+Action: sql_validation -> sql_execution
+Observation: 执行成功，返回12行数据
+
+Thought: 评估生成质量。
+Action: sql_reflection
+Observation: 质量良好，无需修正
+
+Thought: 样本生成完成。
+Final Answer: {"question": "统计每月销售总额", "sql": "SELECT...", "quality_score": 0.85}
+```
+
+**新的设计原则**：
+1. **Agent完全自主**：没有外部的阶段控制，Agent根据需求自主选择工具
+2. **记忆自动管理**：分析结果自动保存和加载，跨样本共享
+3. **按需分析**：只有缺少必要信息时才执行分析工具
+4. **提示词引导**：通过提示词提供思考流程建议，但不强制执行
 
 **思考工具（sequential_thinking）调用时机**：
 - **初始规划**：开始任务时，思考整体执行策略
@@ -346,25 +325,28 @@ new_sql = sql_generation(
 - **执行测试**：实际执行 SQL 验证可行性
 - **反思优化**：分析执行结果，提供优化建议
 
-#### 2.1.4 工具使用总结
+#### 2.1.4 简化的工具使用规范
 
-**工具分类及使用原则**：
+**统一的工具访问原则**：
+- Agent拥有所有工具的访问权限，无外部限制
+- 根据任务需求和当前状态自主选择工具
+- 记忆系统自动管理分析结果的保存和加载
 
-| 工具类别 | 工具名称 | 执行次数 | 使用时机 | 说明 |
-|---------|---------|---------|---------|------|
-| 分析工具 | extract_schema<br>domain_analysis<br>field_classification<br>column_meaning<br>table_meaning<br>er_analysis | 初始一次 | 任务开始时 | 结果保存在记忆中，必要时可重新执行 |
-| 生成工具 | scenario_tool | 每个问题一次 | 从预定义模板选择场景 | 基于问题数量循环调用 |
-| 生成工具 | operation_selection | 每场景一次 | 为每个场景选择SQL操作 | 根据场景复杂度选择 |
-| 生成工具 | question_generation<br>sql_generation | 每场景多次 | 基于场景和操作生成 | 可能因反思而重新生成 |
-| 验证工具 | sql_validation<br>sql_execution | 每SQL一次 | 每个SQL必须验证执行 | 确保SQL正确可执行 |
-| 反思工具 | sql_reflection | 每次执行后 | SQL执行后立即反思 | 评估质量、定位问题、推荐修正工具 |
-| 思考工具 | sequential_thinking | 按需 | 初始规划/修正决策 | 复杂问题深度分析 |
+**工具分类及特点**：
 
-**记忆机制核心要点**：
-1. 分析工具的输出必须保存在记忆中
-2. 生成工具自动从记忆中获取所需的分析结果
-3. 反思工具不会触发重新分析整个数据库
-4. 只有在反思发现需要时，才会局部重新分析特定内容
+| 工具类别 | 工具名称 | 主要特点 | Agent使用策略 |
+|---------|---------|---------|-------------|
+| 分析工具 | schema_extraction<br>domain_analysis<br>field_classification<br>column_meaning<br>table_meaning<br>er_analysis | 结果保存在记忆中<br>可重复执行更新记忆 | 按需调用，优先检查记忆 |
+| 生成工具 | scenario_tool<br>operation_selection<br>question_generation<br>sql_generation | 基于记忆和上下文生成内容 | 每个样本都需要调用 |
+| 验证工具 | sql_validation<br>sql_execution | 确保SQL正确性和可执行性 | 生成SQL后必须验证 |
+| 反思工具 | sql_reflection | 评估质量，提供修正建议 | 执行后自主决定是否反思 |
+| 思考工具 | sequential_thinking | 深度分析复杂问题 | 遇到复杂情况时自主调用 |
+
+**记忆机制简化要点**：
+1. 所有分析结果自动保存在记忆中
+2. Agent自动从记忆中获取所需信息
+3. 记忆内容可以动态更新
+4. 跨样本自动共享分析结果
 
 **问题生成的详细流程**：
 

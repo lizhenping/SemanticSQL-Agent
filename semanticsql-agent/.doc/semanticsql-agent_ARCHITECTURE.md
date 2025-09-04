@@ -261,150 +261,184 @@ llm = ChatOpenAI(
 - 支持自定义的进度通知
 ```
 
-## 4. 执行流程
+## 4. 执行流程（基于真正的ReAct模式）
 
-### 4.1 初始化流程（LangChain 集成）
+### 4.1 初始化流程（简化的LangChain集成）
 ```
 1. 加载配置 (Settings)
-2. 初始化数据库连接 (DatabaseManager)
+2. 初始化数据库连接 (DatabaseManager)  
 3. 创建 LangChain LLM 实例 (ChatOpenAI)
 4. 初始化 LangChain Memory (DatabaseAnalysisMemory)
-5. 创建 LangChain Tools 列表
-6. 使用 create_react_agent 创建 Agent
-7. 配置 AgentExecutor 与 Callbacks
+5. 创建完整的 LangChain Tools 列表（所有工具，不分类）
+6. 使用 create_react_agent 创建统一的 Agent
+7. 配置 AgentExecutor
 ```
 
 ```python
-# 示例代码
+# 简化的初始化代码
 from langchain.agents import create_react_agent, AgentExecutor
 from langchain.chat_models import ChatOpenAI
 
-# 初始化 LLM
-llm = ChatOpenAI(openai_api_base=config.llm_base_url)
-
-# 初始化记忆
-memory = DatabaseAnalysisMemory()
-
-# 创建工具列表
-tools = [SchemaExtractionTool(), DomainAnalysisTool(), ...]
-
-# 创建 Agent
-agent = create_react_agent(llm, tools, prompt)
-agent_executor = AgentExecutor(
-    agent=agent,
-    tools=tools,
-    memory=memory,
-    callbacks=[TrajectoryCallback()]
-)
+class SQLAgent:
+    def __init__(self, settings, db_config):
+        # 初始化 LLM
+        self.llm = ChatOpenAI(openai_api_base=config.llm_base_url)
+        
+        # 初始化记忆
+        self.memory = DatabaseAnalysisMemory()
+        
+        # 创建所有工具（不分类，不过滤）
+        self.tools = self._initialize_all_tools()
+        
+        # 创建统一的 Agent（拥有所有工具的访问权限）
+        agent = create_react_agent(self.llm, self.tools, self._get_prompt())
+        self.agent_executor = AgentExecutor(
+            agent=agent,
+            tools=self.tools,
+            memory=self.memory,
+            verbose=True,
+            callbacks=[TrajectoryCallback()]
+        )
 ```
 
-### 4.2 数据库分析阶段（只执行一次）
-```
-开始任务
-    ↓
-sequential_thinking（规划执行策略）
-    ↓
-按顺序执行分析工具：
-1. extract_schema → 记忆模块（提取基础结构）
-2. domain_analysis → 记忆模块（识别业务领域）
-3. field_classification → 记忆模块（字段语义分类）
-4. column_meaning → 记忆模块（分析列业务含义）
-5. table_meaning → 记忆模块（分析表业务职责）
-6. er_analysis → 记忆模块（分析表间关系）
+### 4.2 统一的执行流程（外部大循环 + 内部纯ReAct）
+
+```python
+def generate_training_data(self, count: int) -> List[Dict]:
+    """外部大循环控制数量，内部完全由Agent自主决策"""
+    results = []
+    
+    # 🔄 外部大循环：简单的数量控制
+    for i in range(count):
+        print(f"🎯 生成第 {i+1}/{count} 个样本...")
+        
+        # 每次迭代都是独立的ReAct任务
+        sample = self._generate_single_sample(i)
+        
+        if sample:
+            results.append(sample)
+        
+    return results
+
+def _generate_single_sample(self, iteration: int) -> Optional[Dict]:
+    """生成单个样本 - 完全由Agent自主决策执行流程"""
+    
+    task = f"生成第{iteration + 1}个高质量NL2SQL训练样本"
+    
+    # 完全交给Agent自主决策，不预设任何执行步骤
+    result = self.agent_executor.invoke({
+        "input": task,
+        "iteration": iteration,
+        "database_name": self.db_config.database
+    })
+    
+    return self._extract_sample_from_result(result)
 ```
 
-### 4.3 问题生成流程
-```
-根据设定的问题生成数量N，循环遍历预定义场景模板：
-    ↓
-for i in range(N):  # 生成N个问题
-    ├─ scenario_tool（从预定义模板中选择一个场景）【不可修正】
-    ├─ operation_selection（基于场景选择SQL操作）【不可修正】
-    ├─ question_generation（生成自然语言问题）【可修正】
-    ├─ sql_generation（生成SQL语句）【可修正】
-    ├─ sql_validation（验证语法）
-    ├─ sql_execution（执行测试）
-    └─ sql_reflection（基于执行结果反思，定位问题）
-         ↓
-    需要修正？
-    ├─ 否 → 保存生成的问题和SQL，继续下一个
-    └─ 是 → Agent根据recommended_action决定：
-            ├─ 直接调用建议的工具（如sql_generation）
-            └─ 调用sequential_thinking深度分析
-                    ↓
-       基于分析结果执行修正：
-       ├─ 数据库分析有误 → 重新执行相应分析工具 → 更新记忆
-       │   ├─ 领域理解错误 → 重新执行 domain_analysis
-       │   ├─ 字段分类错误 → 重新执行 field_classification
-       │   ├─ 列含义错误 → 重新执行 column_meaning
-       │   ├─ 表含义错误 → 重新执行 table_meaning
-       │   └─ 关系理解错误 → 重新执行 er_analysis
-       ├─ 问题生成有误 → 重新执行 question_generation
-       └─ SQL生成有误 → 重新执行 sql_generation
-```
-
-### 4.4 Agent 自主决策机制
+### 4.3 Agent内部的完全自主决策
 
 **核心原则**：
-- Agent 通过系统提示词引导，自主决定执行流程
-- 不是硬编码的步骤，而是基于工具输出的智能决策
-- 反思工具提供建议，Agent 决定是否采纳
+- Agent通过提示词引导，完全自主决定执行流程
+- 没有外部的阶段控制或工具过滤
+- 基于当前状态和任务需求动态选择工具
 
-**决策示例**：
-1. **反思后的决策**：
-   - sql_reflection 返回 `recommended_action.tool_to_call = "sql_generation"`
-   - Agent 可以：
-     - 直接调用 sql_generation 重新生成SQL
-     - 先调用 sequential_thinking 深入分析
-     - 如果是数据库分析问题，重新执行相应分析工具
-
-2. **不可修改的内容**：
-   - 场景选择（scenario_tool的结果固定）
-   - 操作选择（operation_selection的结果固定）
-   - 这两个是预定义的，确保生成的多样性和覆盖性
-
-3. **可修正的内容**：
-   - 数据库分析结果（如果理解有误）
-   - 问题生成（如果不够清晰）
-   - SQL生成（如果有错误）
-
-### 4.5 ReAct 执行模式
+**典型的Agent推理流程**：
 ```
-用户输入/工具结果
-    ↓
-Thought（分析当前状态，决定下一步）
-    ↓
-Action（选择工具）
-    ↓
-Action Input（准备参数，可能使用记忆）
-    ↓
-执行工具
-    ↓
-Observation（观察结果）
-    ↓
-[判断是否完成]
-├─ 否 → 继续 Thought
-└─ 是 → Final Result
+用户: "生成第1个高质量NL2SQL训练样本"
+
+Thought: 我需要生成训练样本。首先检查是否了解数据库结构。
+Action: 检查记忆或调用schema_extraction
+Observation: [获得数据库结构信息]
+
+Thought: 现在选择一个业务场景。
+Action: scenario_tool
+Observation: [选择了"销售分析"场景]
+
+Thought: 根据场景选择SQL操作类型。
+Action: operation_selection  
+Observation: [选择了聚合查询操作]
+
+Thought: 生成自然语言问题。
+Action: question_generation
+Observation: [生成了问题]
+
+Thought: 生成对应的SQL查询。
+Action: sql_generation
+Observation: [生成了SQL]
+
+Thought: 验证并执行SQL。
+Action: sql_validation -> sql_execution
+Observation: [执行结果]
+
+Thought: 评估生成质量。
+Action: sql_reflection
+Observation: [质量评估结果]
+
+Thought: 质量良好，任务完成。
+Final Answer: {"question": "...", "sql": "...", "quality_score": 0.85}
 ```
 
-### 4.5 反思-修正机制
+### 4.4 ReAct执行模式的关键特征
+
+1. **完全自主**：Agent拥有所有工具的访问权限
+2. **按需分析**：只有当缺少信息时才调用分析工具
+3. **记忆驱动**：充分利用已有的分析结果
+4. **错误自愈**：执行失败时自主选择修正策略
+
+### 4.5 记忆管理的简化
+
+```python
+class DatabaseAnalysisMemory(BaseMemory):
+    """简化的记忆管理 - 自动保存和加载分析结果"""
+    
+    def __init__(self):
+        self.analysis_data = {}  # 存储所有分析结果
+    
+    def load_memory_variables(self, inputs: Dict) -> Dict:
+        """自动加载相关分析结果"""
+        return {
+            "memory_summary": self._get_summary(),
+            **self.analysis_data  # 直接提供所有分析数据
+        }
+    
+    def save_context(self, inputs: Dict, outputs: Dict) -> None:
+        """自动保存工具执行结果"""
+        # 自动识别和保存分析工具的输出
+        self._auto_save_analysis_results(outputs)
 ```
-SQL执行结果
-    ↓
-sql_reflection 评估：
-├─ 执行成功性
-├─ 结果合理性
-├─ 语义匹配度
-├─ 问题清晰度
-└─ 记忆使用情况
-    ↓
-发现问题？
-├─ 否 → 继续
-└─ 是 → sequential_thinking 分析
-        ├─ 确定问题步骤
-        ├─ 制定修正策略
-        └─ 执行修正（只修正出问题的步骤）
+
+### 4.6 Agent自主的反思-修正机制
+
+**完全由Agent根据提示词指导自主执行**：
+
 ```
+Agent内部推理：
+
+Thought: SQL执行完成，我需要评估质量。
+Action: sql_reflection
+Observation: 发现问题 - SQL语法错误
+
+Thought: 有语法错误，我需要重新生成SQL。
+Action: sql_generation  
+Observation: 生成了新的SQL
+
+Thought: 重新验证和执行。
+Action: sql_validation -> sql_execution
+Observation: 执行成功
+
+Thought: 再次评估质量。
+Action: sql_reflection
+Observation: 质量良好，无需进一步修正
+
+Thought: 样本生成完成。
+Final Answer: 完整的训练样本
+```
+
+**关键特点**：
+- 没有外部控制的修正逻辑
+- Agent根据工具输出自主决定下一步
+- 提示词提供指导，但不强制执行顺序
+- 记忆系统自动管理分析结果的更新
 
 
 
@@ -433,8 +467,9 @@ sql_reflection 评估：
 虽然使用 LangChain，但我们仍需要自定义：
 - **DatabaseAnalysisMemory**: 专门管理数据库分析结果
 - **SQL 专用工具**: 针对 SQL 生成的特定工具
-- **批量生成 Chain**: 处理大规模数据生成的流程
 - **质量评估组件**: SQL 质量评分和优化建议
+
+**注意**：不再需要复杂的"批量生成Chain"，而是使用简单的外部循环 + 内部ReAct模式。
 
 ## 6. 核心特性
 
