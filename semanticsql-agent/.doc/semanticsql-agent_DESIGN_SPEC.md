@@ -275,51 +275,149 @@ Agent 根据 recommended_action 决定：
 只重新执行该步骤，保持其他步骤结果不变
 ```
 
-**问题源头分析示例**：
+**反思工具返回格式示例**：
 
 示例1 - SQL生成错误：
 ```python
 reflection_analysis = {
-    "执行错误": "Table 'orders' doesn't exist",
-    "步骤分析": {
-        "SQL生成": "使用了orders表，但schema中只有order_info表",
-        "问题生成": "问题中提到'订单'，正确",
-        "记忆检查": "memory['schema_info']中确实只有order_info表"
+    "quality_score": 0.3,  # 质量分数
+    "needs_revision": True,  # 是否需要修正
+    
+    # 问题分析
+    "issue_analysis": {
+        "execution_error": "Table 'orders' doesn't exist",
+        "error_type": "schema_mismatch",
+        "step_analysis": {
+            "sql_generation": "使用了orders表，但schema中只有order_info表",
+            "question_generation": "问题中提到'订单'，正确",
+            "memory_usage": "tool_results['schema_extraction']中确实只有order_info表"
+        },
+        "root_cause": "SQL生成步骤没有正确使用schema信息"
     },
-    "问题源头": "SQL生成步骤 - 没有正确使用schema_info",
-    "修正方案": "重新执行sql_generation，确保使用memory['schema_info']中的正确表名"
+    
+    # 推荐的修正行动（关键部分）
+    "recommended_action": {
+        "tool_to_call": "sql_generation",  # 具体要调用的工具
+        "action_type": "regenerate",       # 行动类型
+        "priority": "high",                # 优先级
+        "parameters": {                    # 推荐的工具调用参数
+            "question": "查询所有订单信息",
+            "schema_info": "{{tool_results.schema_extraction}}",
+            "focus": "确保使用正确的表名 order_info"
+        }
+    },
+    
+    # 备选方案
+    "alternative_actions": [
+        {
+            "tool_to_call": "sequential_thinking",
+            "reason": "如果简单重新生成仍失败，进行深度分析",
+            "parameters": {
+                "problem": "SQL表名使用错误",
+                "context": "{{current_context}}"
+            }
+        }
+    ]
 }
 ```
 
 示例2 - 记忆使用不当：
 ```python
 reflection_analysis = {
-    "执行结果": "SQL执行成功但结果不合理",
-    "步骤分析": {
-        "SQL": "SELECT * FROM users WHERE status = 'active'",
-        "问题": "查询所有有效用户",
-        "记忆检查": {
-            "field_classification": "status字段被分类为'状态码'，值为0/1",
-            "domain_analysis": "该系统使用数字表示状态"
+    "quality_score": 0.4,
+    "needs_revision": True,
+    
+    "issue_analysis": {
+        "execution_result": "SQL执行成功但结果不合理",
+        "error_type": "semantic_mismatch",
+        "step_analysis": {
+            "sql_generation": "生成了 WHERE status = 'active'，但字段实际是数字类型",
+            "question_generation": "问题'查询所有有效用户'正确",
+            "memory_usage": "没有正确使用 tool_results['field_analysis'] 中的字段类型信息"
+        },
+        "root_cause": "SQL生成时没有参考字段分析结果"
+    },
+    
+    "recommended_action": {
+        "tool_to_call": "sql_generation",
+        "action_type": "regenerate",
+        "priority": "medium",
+        "parameters": {
+            "question": "查询所有有效用户",
+            "schema_info": "{{tool_results.schema_extraction}}",
+            "field_info": "{{tool_results.field_analysis}}",  # 明确使用字段分析
+            "focus": "status字段是数字类型，使用1表示active状态"
         }
     },
-    "问题源头": "SQL生成时没有参考field_classification的字段类型信息",
-    "修正方案": "重新执行sql_generation，使用field_classification理解status字段"
+    
+    "alternative_actions": [
+        {
+            "tool_to_call": "field_analysis",
+            "reason": "如果字段类型信息不准确，重新分析字段",
+            "parameters": {
+                "focus_fields": ["users.status"],
+                "analysis_type": "data_type_validation"
+            }
+        }
+    ]
 }
-
-# 修正执行
-new_sql = sql_generation(
-    question="查询所有有效用户",
-    schema_info=memory["schema_info"],
-    field_info=memory["field_classification"]  # 确保使用字段分类信息
-)
-# 结果：SELECT * FROM users WHERE status = 1
 ```
+
+### **🎯 Agent使用新反思格式的流程**
+
+```
+Thought: SQL执行失败了，我需要反思分析原因
+Action: sql_reflection
+Action Input: {"sql": "SELECT * FROM orders", "execution_result": {...}}
+Observation: {
+    "needs_revision": True,
+    "recommended_action": {
+        "tool_to_call": "sql_generation",
+        "parameters": {
+            "question": "查询所有订单信息",
+            "schema_info": "{{tool_results.schema_extraction}}",
+            "focus": "确保使用正确的表名 order_info"
+        }
+    }
+}
+    ↓
+Thought: 反思建议我重新调用sql_generation，并使用正确的schema信息。这很合理。
+Action: sql_generation
+Action Input: {
+    "question": "查询所有订单信息",
+    "schema_info": "{{tool_results.schema_extraction}}",
+    "focus": "确保使用正确的表名 order_info"
+}
+Observation: "SELECT * FROM order_info"  # 修正后的SQL
+    ↓
+Thought: 现在重新验证修正后的SQL
+Action: sql_validation
+Observation: 语法正确，修正成功
+```
+
+### **🔧 新反思格式的关键优势**
+
+1. **可操作性强**：
+   - 明确指定要调用的工具名称
+   - 提供具体的调用参数
+   - Agent可以直接按建议执行
+
+2. **信息完整**：
+   - 质量评分：量化评估
+   - 问题分析：详细的错误诊断
+   - 修正建议：具体的行动指导
+   - 备选方案：多种修正策略
+
+3. **Agent友好**：
+   - Agent可以选择接受建议或自主决策
+   - 提供了明确的工具调用指导
+   - 保持了Agent的完全自主性
 
 **核心特点**：
 - **动态适应**：Agent根据数据库特征调整生成策略
 - **智能反思**：执行SQL后主动反思结果质量
 - **自主优化**：根据反思结果自动优化或重新生成
+- **可操作建议**：反思工具提供具体的修正行动指导
 - **完全自主**：所有决策由Agent基于提示词引导做出，无硬编码步骤
 
 #### 2.1.3 验证与优化
