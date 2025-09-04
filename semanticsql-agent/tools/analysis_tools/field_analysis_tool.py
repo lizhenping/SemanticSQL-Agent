@@ -22,10 +22,10 @@ class FieldClassificationInput(BaseModel):
     pass
 
 
-class FieldClassificationTool(BaseAnalysisTool):
+class FieldAnalysisTool(BaseAnalysisTool):
     """字段语义分类工具 - 使用LLM进行智能分类"""
     
-    name: str = "field_classification"
+    name: str = "field_analysis"
     description: str = "使用LLM对数据库字段进行语义分类，识别字段的业务含义和用途。无需参数，自动从记忆中获取数据"
     args_schema: Type[BaseModel] = FieldClassificationInput
     

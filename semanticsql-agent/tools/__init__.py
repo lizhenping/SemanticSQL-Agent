@@ -6,16 +6,15 @@
 from .analysis_tools import (
     SchemaExtractionTool,
     DomainAnalysisTool,
-    FieldClassificationTool,
-    ColumnMeaningTool,
-    TableMeaningTool,
+    FieldAnalysisTool,
+    ColumnAnalysisTool,
+    TableAnalysisTool,
     ERAnalysisTool
 )
 
 # 生成工具
 from .generation_tools import (
-    ScenarioTool,
-    OperationSelectionTool,
+    ScenarioOperationTool,
     QuestionGenerationTool,
     SQLGenerationTool
 )
@@ -36,13 +35,12 @@ __all__ = [
     # 分析工具
     "SchemaExtractionTool",
     "DomainAnalysisTool",
-    "FieldClassificationTool",
-    "ColumnMeaningTool",
-    "TableMeaningTool",
+    "FieldAnalysisTool",
+    "ColumnAnalysisTool", 
+    "TableAnalysisTool",
     "ERAnalysisTool",
     # 生成工具
-    "ScenarioTool",
-    "OperationSelectionTool",
+    "ScenarioOperationTool",
     "QuestionGenerationTool",
     "SQLGenerationTool",
     # 验证工具

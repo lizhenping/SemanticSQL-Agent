@@ -21,10 +21,10 @@ class TableMeaningInput(BaseModel):
     pass
 
 
-class TableMeaningTool(BaseAnalysisTool):
+class TableAnalysisTool(BaseAnalysisTool):
     """表业务含义分析工具"""
     
-    name: str = "table_meaning_analysis"
+    name: str = "table_analysis"
     description: str = "使用LLM分析每个表的业务职责和含义。无需参数，自动从记忆中获取数据"
     args_schema: Type[BaseModel] = TableMeaningInput
     

@@ -24,9 +24,9 @@ from prompts.manager import PromptManager
 # 导入所有工具
 from tools.analysis_tools.schema_extraction_tool import SchemaExtractionTool
 from tools.analysis_tools.domain_analysis_tool import DomainAnalysisTool
-from tools.analysis_tools.field_classification_tool import FieldClassificationTool
-from tools.analysis_tools.column_meaning_tool import ColumnMeaningTool
-from tools.analysis_tools.table_meaning_tool import TableMeaningTool
+from tools.analysis_tools.field_analysis_tool import FieldAnalysisTool
+from tools.analysis_tools.column_analysis_tool import ColumnAnalysisTool
+from tools.analysis_tools.table_analysis_tool import TableAnalysisTool
 from tools.analysis_tools.er_analysis_tool import ERAnalysisTool
 
 from tools.generation_tools.scenario_operation_tool import ScenarioOperationTool
@@ -81,9 +81,9 @@ class SQLAgent(BaseAgent):
             [
                 SchemaExtractionTool(db_manager=self.db_manager),
                 DomainAnalysisTool(llm=self.llm),
-                FieldClassificationTool(llm=self.llm, db_manager=self.db_manager),
-                ColumnMeaningTool(llm=self.llm),
-                TableMeaningTool(llm=self.llm),
+                FieldAnalysisTool(llm=self.llm, db_manager=self.db_manager),
+                ColumnAnalysisTool(llm=self.llm),
+                TableAnalysisTool(llm=self.llm),
                 ERAnalysisTool(llm=self.llm, db_manager=self.db_manager),
             ]
         )

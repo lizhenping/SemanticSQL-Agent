@@ -21,10 +21,10 @@ class ColumnMeaningInput(BaseModel):
     pass
 
 
-class ColumnMeaningTool(BaseAnalysisTool):
+class ColumnAnalysisTool(BaseAnalysisTool):
     """列业务含义分析工具"""
     
-    name: str = "column_meaning_analysis"
+    name: str = "column_analysis"
     description: str = "使用LLM为数据库每个列生成业务含义描述。无需参数，自动从记忆中获取数据"
     args_schema: Type[BaseModel] = ColumnMeaningInput
     

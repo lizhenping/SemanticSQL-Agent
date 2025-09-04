@@ -171,30 +171,40 @@ def analyze(ctx, database: str, output: Optional[str], config: Optional[str]):
     # 创建Agent
     agent = SQLAgent(settings, db_config)
     
-    # 执行分析
-    click.echo("执行数据库分析...")
-    result = agent.analyze_database(database)
+    # 执行分析（使用Agent自主分析）
+    click.echo("Agent开始自主分析数据库...")
     
-    if result["success"]:
-        click.echo("分析完成！")
+    try:
+        # 让Agent自主完成数据库分析
+        analysis_task = "请分析数据库结构和业务特征"
+        result = agent.run(analysis_task)
         
-        # 显示分析结果摘要
-        analysis = result["analysis"]
-        if "schema_info" in analysis:
-            schema = analysis["schema_info"]
-            click.echo(f"\n表数量: {schema.get('table_count', 0)}")
-        
-        if "domain_info" in analysis:
-            domain = analysis["domain_info"]
-            click.echo(f"主要领域: {domain.get('primary_domain', 'Unknown')}")
-        
-        # 保存结果
-        if output:
-            with open(output, 'w', encoding='utf-8') as f:
-                json.dump(analysis, f, ensure_ascii=False, indent=2)
-            click.echo(f"\n分析结果已保存到: {output}")
-    else:
-        click.echo(f"分析失败: {result['error']}", err=True)
+        if result["success"]:
+            click.echo("分析完成！")
+            
+            # 获取记忆状态
+            memory_state = agent.get_memory_state()
+            analysis = memory_state.get("db_analysis", {})
+            
+            # 显示分析结果摘要
+            if "schema_info" in analysis:
+                schema = analysis["schema_info"]
+                click.echo(f"\n表数量: {schema.get('table_count', 0)}")
+            
+            if "domain_info" in analysis:
+                domain = analysis["domain_info"]
+                click.echo(f"主要领域: {domain.get('primary_domain', 'Unknown')}")
+            
+            # 保存结果
+            if output:
+                with open(output, 'w', encoding='utf-8') as f:
+                    json.dump(analysis, f, ensure_ascii=False, indent=2)
+                click.echo(f"\n分析结果已保存到: {output}")
+        else:
+            click.echo(f"分析失败: {result.get('error', '未知错误')}", err=True)
+            
+    except Exception as e:
+        click.echo(f"分析过程出错: {e}", err=True)
 
 
 @cli.command()
