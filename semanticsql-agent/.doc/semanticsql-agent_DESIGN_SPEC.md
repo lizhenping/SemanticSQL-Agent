@@ -348,242 +348,48 @@ new_sql = sql_generation(
 3. 记忆内容可以动态更新
 4. 跨样本自动共享分析结果
 
-**问题生成的详细流程**：
+**工具使用的核心原则**：
 
-1. **基于数量的循环生成**：
+Agent通过提示词指导，自主决策工具的使用时机和顺序：
+
 ```python
-# 根据设定的问题数量进行循环
-for i in range(question_count):
-    # scenario_tool 从预定义模板中选择一个场景
-    # 每次调用返回一个场景，不是批量返回
-    scenario = scenario_tool.run({
-        "memory": memory,  # 传入完整的数据库分析记忆
-        "iteration": i     # 当前迭代次数，用于场景轮转
-    })
-    
-    # 预定义场景模板示例：
-    # - 销售分析：统计销售额、订单量等
-    # - 库存查询：查询库存状态、补货需求等
-    # - 客户分析：客户分布、购买行为等
-    # - 财务报表：收入、成本、利润等
-```
-
-2. **每个循环的完整处理流程**：
-```python
-    # 在循环内，对当前场景进行完整处理
-    # operation_selection_tool 根据场景的复杂度选择SQL操作
-    operations = operation_selection_tool.run({
-        "scenario": scenario,
-        "memory": memory
-    })
-    
-    # 预定义的操作选择规则（基于场景复杂度）：
-    # - 简单场景 → 基础查询操作：SELECT, WHERE, ORDER BY
-    # - 中等场景 → 聚合分析操作：GROUP BY, HAVING, 聚合函数
-    # - 复杂场景 → 多表关联操作：多表JOIN, 子查询, 窗口函数
-```
-
-3. **基于记忆的生成过程**：
-```python
-# 问题生成：结合场景、操作和数据库记忆
-question = question_generation(
-    scenario=scenario,
-    operations=operations,
-    schema_info=memory["schema_info"],      # 表结构
-    domain_info=memory["domain_analysis"],   # 业务领域理解
-    field_info=memory["field_classification"] # 字段语义
-)
-
-# SQL生成：使用问题和完整的数据库记忆
-sql = sql_generation(
-    question=question["text"],
-    schema_info=memory["schema_info"],
-    er_info=memory["er_analysis"]  # 表关系信息
-)
-```
-
-4. **综合反思评估**：
-```python
-# 反思不仅看执行结果，还要评估整个生成链
-reflection = sql_reflection(
-    sql=sql,
-    execution_result=execution,
-    question=question,
-    scenario=scenario,
-    operations=operations,
-    memory_usage={  # 评估是否正确使用了记忆
-        "schema": memory["schema_info"],
-        "domain": memory["domain_analysis"]
-    }
-)
-
-# 反思可能发现的问题类型：
-# - 执行错误：SQL语法错误或执行失败
-# - 语义不匹配：SQL没有正确实现问题意图
-# - 问题质量：问题描述不清或有歧义
-# - 操作不当：选择的操作不适合场景
-# - 记忆利用不足：没有充分使用数据库分析信息
-```
-
-5. **智能修正策略**：
-```python
-if reflection["needs_revision"]:
-    # 使用思考工具深度分析
-    fix_strategy = sequential_thinking(
-        problem=reflection["issues"],
-        context={
-            "scenario": scenario,
-            "operations": operations,
-            "question": question,
-            "sql": sql,
-            "execution": execution,
-            "memory": memory
-        }
-    )
-    
-    # 只修正出问题的步骤
-    if fix_strategy["problem_step"] == "operations":
-        # 只重新选择操作，保留场景
-        new_operations = operation_selection(scenario, schema_info=memory["schema_info"])
-        operations = new_operations  # 更新操作
-        # 继续使用新操作执行后续步骤
+# 简化的代码架构示例
+class SQLAgent:
+    def generate_training_data(self, count: int):
+        """外部大循环 + 内部纯ReAct"""
+        results = []
         
-    elif fix_strategy["problem_step"] == "question":
-        # 只重新生成问题，保留场景和操作
-        new_question = question_generation(
-            scenario=scenario,
-            operations=operations,
-            schema_info=memory["schema_info"]
-        )
-        question = new_question  # 更新问题
-        # 继续使用新问题执行后续步骤
+        for i in range(count):
+            # 每个样本都是独立的ReAct任务
+            task = f"生成第{i+1}个高质量NL2SQL训练样本"
+            
+            # Agent完全自主决策执行流程
+            result = self.agent_executor.invoke({
+                "input": task,
+                "iteration": i,
+                "database_name": self.db_config.database
+            })
+            
+            sample = self._extract_sample(result)
+            if sample:
+                results.append(sample)
         
-    elif fix_strategy["problem_step"] == "sql":
-        # 只重新生成SQL，保留前面所有步骤
-        new_sql = sql_generation(
-            question=question["text"],
-            schema_info=memory["schema_info"]
-        )
-        sql = new_sql  # 更新SQL
-        # 重新验证和执行新SQL
-        
-    elif fix_strategy["problem_step"] == "database_analysis":
-        # 某个数据库分析有误，需要重新执行
-        if fix_strategy["analysis_type"] == "field_classification":
-            # 例如：字段分类有误导致SQL错误
-            new_field_analysis = field_classification_tool.run(
-                schema_info=memory["schema_info"],
-                tables=fix_strategy["target_tables"]
-            )
-            # 更新记忆模块
-            memory["field_classification"] = new_field_analysis["data"]
-            
-        elif fix_strategy["analysis_type"] == "column_meaning":
-            # 例如：列业务含义理解错误
-            new_column_meaning = column_meaning_tool.run(
-                schema_info=memory["schema_info"],
-                domain_info=memory["domain_analysis"],
-                focus_columns=fix_strategy["target_columns"]
-            )
-            # 更新记忆模块
-            memory["column_meanings"] = new_column_meaning["data"]
-            
-        elif fix_strategy["analysis_type"] == "table_meaning":
-            # 例如：表业务职责理解错误
-            new_table_meaning = table_meaning_tool.run(
-                schema_info=memory["schema_info"],
-                domain_info=memory["domain_analysis"],
-                column_meanings=memory["column_meanings"],
-                focus_tables=fix_strategy["target_tables"]
-            )
-            # 更新记忆模块
-            memory["table_meanings"] = new_table_meaning["data"]
-            
-        elif fix_strategy["analysis_type"] == "er_analysis":
-            # 例如：表关系分析不完整
-            new_er_analysis = er_analysis_tool.run(
-                schema_info=memory["schema_info"],
-                table_meanings=memory["table_meanings"],
-                focus_tables=fix_strategy["target_tables"]
-            )
-            # 更新记忆模块
-            memory["er_analysis"] = new_er_analysis["data"]
-            
-        # 使用更新后的记忆重新执行后续步骤
+        return results
 ```
 
-**修正原则**：
-- 精准定位问题源头，只修正出问题的部分
-- 如果是数据库分析有误，重新执行特定的分析工具并更新记忆
-- 如果是生成步骤有误，重新执行该步骤（使用最新的记忆）
-- 记忆模块是动态的，可以被更新和改进
-- 所有后续步骤都使用记忆模块中的最新数据
+**Agent自主决策的典型流程**：
+1. **智能检查**：优先检查记忆中是否有所需信息
+2. **按需分析**：缺少信息时自主选择分析工具
+3. **场景选择**：根据iteration和数据库特点选择场景
+4. **内容生成**：依次生成问题和SQL
+5. **质量保证**：验证、执行、反思
+6. **自主修正**：发现问题时自主选择修正策略
 
-**完整的问题生成循环示例**：
-```python
-# 设定要生成的问题数量
-question_count = 100
-generated_data = []
-
-# 主循环：生成N个问题
-for i in range(question_count):
-    # 1. 选择场景（从预定义模板）
-    scenario = scenario_tool.run({
-        "memory": memory,
-        "iteration": i  # 传入当前迭代次数
-    })
-    
-    # 2. 为场景选择操作
-    operations = operation_selection_tool.run({
-        "scenario": scenario,
-        "memory": memory
-    })
-    
-    # 3. 生成问题
-    question = question_generation_tool.run({
-        "scenario": scenario,
-        "operations": operations,
-        "memory": memory  # 使用所有分析结果
-    })
-    
-    # 4. 生成SQL
-    sql = sql_generation_tool.run({
-        "question": question,
-        "memory": memory
-    })
-    
-    # 5. 验证和执行
-    validation = sql_validation_tool.run({"sql": sql})
-    execution = sql_execution_tool.run({"sql": sql})
-    
-    # 6. 反思评估
-    reflection = sql_reflection_tool.run({
-        "sql": sql,
-        "execution": execution,
-        "question": question,
-        "scenario": scenario,
-        "memory_usage": memory
-    })
-    
-    # 7. 如果需要修正，执行修正流程
-    if reflection["needs_revision"]:
-        # 使用 sequential_thinking 分析并修正
-        # ... 修正逻辑 ...
-        pass
-    
-    # 8. 保存生成的数据
-    generated_data.append({
-        "question": question,
-        "sql": sql,
-        "scenario": scenario,
-        "validated": True
-    })
-    
-    print(f"Progress: {i+1}/{question_count}")
-
-# 生成完成
-print(f"Successfully generated {len(generated_data)} questions")
-```
+**关键优势**：
+- **架构简单**：只有一个Agent类，一个大循环
+- **完全自主**：Agent根据提示词自主决策，无外部控制
+- **高效记忆**：分析结果跨样本自动共享
+- **智能修正**：基于反思结果自主选择修正工具
 
 ### 2.2 分析工具详细说明
 
@@ -706,283 +512,292 @@ difficulty_distribution:
 
 ### 3.2 Agent实现规范
 
-#### 3.2.1 DataGenerationAgent设计要求
+#### 3.2.1 简化的SQLAgent设计
 
 **核心实现原则**：
 ```python
-# ✅ 正确实现：基于 LangChain 的提示词驱动 Agent
+# ✅ 简化的ReAct Agent实现
 from langchain.agents import create_react_agent, AgentExecutor
-from langchain.memory import BaseMemory
 from langchain.chat_models import ChatOpenAI
 
-class DataGenerationAgent(BaseAgent):
-    """
-    基于 LangChain 的训练数据生成 Agent
-    - 使用 LangChain AgentExecutor 管理执行流程
-    - 自定义 DatabaseAnalysisMemory 存储分析结果
-    - 所有工具继承自 langchain.tools.BaseTool
-    - 利用 LangChain 回调系统记录轨迹
-    """
+class SQLAgent:
+    """简化的SQL Agent - 真正的ReAct模式"""
     
-    def _initialize_langchain_tools(self):
-        """创建 LangChain 工具列表"""
-        # 所有工具都继承自 langchain.tools.BaseTool
-        tools = [
-            # 分析工具
-            SchemaExtractionTool(),
-            DomainAnalysisTool(),
-            FieldClassificationTool(),
-            ColumnMeaningTool(),      # 新增
-            TableMeaningTool(),       # 新增
-            ERAnalysisTool(),
-            
-            # 生成工具
-            ScenarioGenerationTool(),
-            OperationSelectionTool(),
-            QuestionGenerationTool(),
-            SQLGenerationTool(),
-            
-            # 验证和反思工具
-            SQLValidationTool(),
-            SQLExecutionTool(),
-            SQLReflectionTool(),
-            SequentialThinkingTool()
-        ]
-        return tools
-    
-    def __init__(self, config):
-        """初始化 LangChain 组件"""
-        # LLM
+    def __init__(self, settings, db_config):
+        # 初始化LLM
         self.llm = ChatOpenAI(
-            openai_api_base=config.llm_base_url,
-            model_name=config.llm_model,
+            openai_api_base=settings.llm_base_url,
+            model=settings.llm_model,
             temperature=0.7
         )
         
-        # Memory
+        # 初始化记忆
         self.memory = DatabaseAnalysisMemory()
         
-        # Tools
-        self.tools = self._initialize_langchain_tools()
+        # 创建所有工具（不分类，不过滤）
+        self.tools = self._initialize_all_tools()
         
-        # Agent
-        prompt = self._get_react_prompt()
-        self.agent = create_react_agent(self.llm, self.tools, prompt)
+        # 创建统一的Agent（拥有所有工具访问权限）
+        prompt = self._get_simple_prompt()
+        agent = create_react_agent(self.llm, self.tools, prompt)
         
-        # Executor
         self.agent_executor = AgentExecutor(
-            agent=self.agent,
+            agent=agent,
             tools=self.tools,
             memory=self.memory,
             verbose=True,
+            max_iterations=30,
             callbacks=[TrajectoryCallback()]
         )
     
-    def generate_training_data(self, count: int, output_file: str):
-        """
-        ✅ 正确：使用 LangChain AgentExecutor 执行任务
-        """
-        task = f"生成{count}条高质量NL2SQL训练数据"
+    def generate_training_data(self, count: int) -> List[Dict]:
+        """外部大循环 + 内部纯ReAct"""
+        results = []
         
-        # 通过 AgentExecutor 运行
-        result = self.agent_executor.run(input=task)
-        return self._extract_results(result)
+        # 🔄 统一的大循环
+        for i in range(count):
+            print(f"🎯 生成第 {i+1}/{count} 个样本...")
+            
+            # 每次迭代都是独立的ReAct任务
+            sample = self._generate_single_sample(i)
+            
+            if sample:
+                results.append(sample)
+                print(f"✅ 成功生成样本 {i+1}")
+            else:
+                print(f"❌ 样本 {i+1} 生成失败")
+        
+        return results
     
-    def get_system_prompt(self) -> str:
-        """
-        关键：提示词必须引导Agent执行完整流程
-        包含：
-        1. 数据库完整分析并记忆
-        2. SQL执行后反思
-        3. 反思发现问题时回退修正
-        4. 思考工具使用时机
-        """
-        return comprehensive_prompt_template()
+    def _generate_single_sample(self, iteration: int) -> Optional[Dict]:
+        """生成单个样本 - 完全由Agent自主决策"""
+        
+        task = f"""生成一个高质量的NL2SQL训练样本（第{iteration + 1}个）。
+        
+要求：
+1. 确保对数据库有充分理解
+2. 选择合适的业务场景  
+3. 生成清晰的自然语言问题
+4. 生成正确的SQL查询
+5. 验证SQL可执行性
+6. 确保问题与SQL语义匹配
+
+请完全自主决策执行流程。"""
+
+        try:
+            # 完全交给Agent自主决策
+            result = self.agent_executor.invoke({
+                "input": task,
+                "iteration": iteration,
+                "database_name": self.db_config.database
+            })
+            
+            return self._extract_sample_from_result(result)
+            
+        except Exception as e:
+            self.logger.error(f"Sample {iteration + 1} generation failed: {e}")
+            return None
 ```
 
-**❌ 错误实现：硬编码流程**
+**关键简化点**：
+- **去除阶段管理**：删除所有`_determine_execution_stage()`等复杂逻辑
+- **统一工具访问**：Agent拥有所有工具，无外部过滤
+- **简单循环控制**：外部只负责数量控制，内部完全自主
+- **提示词驱动**：通过提示词引导，而非硬编码流程
+
+#### 3.2.2 简化的提示词系统设计
+
+**关键原则**：在提示词中提供思考流程指导，但不强制执行顺序
+
+**简化的系统提示词模板**：
 ```python
-# 不要这样做 - 违反Agent自主决策原则
-def generate_training_data(self):
-    schema = self.call_tool('extract_schema')    # 硬编码顺序
-    domain = self.call_tool('domain_analysis')   # 硬编码顺序
-    # ... 更多硬编码步骤
-```
+from langchain.prompts import ChatPromptTemplate
 
-#### 3.2.2 提示词系统设计（LangChain PromptTemplate）
+# 简化的系统提示词 - 提供指导但不强制流程
+system_prompt = """你是专业的NL2SQL训练数据生成专家。
 
-**完整系统提示词必须包含**：
-1. **数据库分析指导**：如何完整分析并记忆数据库结构
-2. **生成流程指导**：如何基于分析结果生成数据
-3. **执行验证指导**：如何执行SQL并获取反馈
-4. **反思修正指导**：如何根据执行结果决定是否回退
-5. **思考工具指导**：何时调用sequential_thinking进行深度分析
+## 当前任务  
+{{input}}
 
-**使用 LangChain PromptTemplate**：
-```python
-from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate
+## 环境信息
+- 数据库: {{database_name}}
+- 样本编号: {{iteration + 1}}
+- 记忆状态: {{memory_summary}}
 
-# 系统提示词模板
-system_prompt = SystemMessagePromptTemplate.from_template("""
-你是一个专业的SQL训练数据生成专家。你的任务是生成高质量的NL2SQL训练数据。
+## 可用工具
+{{tools}}
 
-工作流程：
-1. 首先分析数据库（按顺序）：
-   - extract_schema：提取表结构
-   - domain_analysis：识别业务领域
-   - field_classification：字段分类
-   - column_meaning：分析列含义
-   - table_meaning：分析表职责
-   - er_analysis：分析表关系
-   
-2. 基于分析结果生成数据（循环N次）：
-   for i in range(N):  # N是要生成的问题数量
-     - scenario_tool：选择场景（从预定义模板选一个，基于iteration轮转）
-     - operation_selection：根据场景复杂度选择SQL操作
-     - question_generation：生成自然语言问题
-     - sql_generation：生成对应的SQL
-     - sql_validation：验证SQL语法
-     - sql_execution：执行SQL测试
-     - sql_reflection：评估结果质量
+## 思考流程建议（仅供参考，可自主调整）
 
-3. 反思后的处理：
-   - 如果质量不达标，使用sequential_thinking分析问题
-   - 精确定位问题步骤并重新执行
+### 🧠 生成单个样本的常见思考路径：
 
-记住：数据库分析结果要保存在记忆中，后续步骤直接使用记忆！
+1. **状态检查**：
+   - 我是否已经了解数据库结构？
+   - 记忆中有哪些可用的分析信息？
 
-当前数据库：{database_name}
-已分析的信息：{memory_summary}
-""")
+2. **按需分析**（如果记忆中信息不足）：
+   - schema_extraction: 了解表结构
+   - domain_analysis: 识别业务领域
+   - field_classification: 理解字段类型
+   - column_meaning/table_meaning: 理解业务含义
+   - er_analysis: 分析表关系
 
-# 创建完整的提示词
+3. **场景构建**：
+   - scenario_tool: 选择合适的业务场景
+   - operation_selection: 根据场景选择SQL操作类型
+
+4. **内容生成**：
+   - question_generation: 生成自然语言问题
+   - sql_generation: 将问题转换为SQL
+
+5. **质量保证**：
+   - sql_validation: 验证SQL语法
+   - sql_execution: 执行SQL测试
+   - sql_reflection: 评估质量，决定是否需要修正
+
+6. **智能修正**（如果质量不达标）：
+   - sequential_thinking: 深度分析问题根源
+   - 重新调用相应工具进行修正
+
+### 🎯 决策原则
+- **记忆优先**: 优先使用已有的分析结果
+- **按需执行**: 只调用真正需要的工具
+- **质量导向**: 确保每个样本都是高质量的
+- **自主决策**: 根据实际情况灵活调整执行策略
+
+## ReAct格式
+Thought: 分析当前情况，决定下一步
+Action: 工具名称
+Action Input: {{"参数": "值"}}  
+Observation: 工具返回结果
+... (重复直到完成)
+Final Answer: 最终的训练样本
+
+**记住**: 这些建议只是参考，你有完全的自主决策权！根据实际需求灵活选择工具和执行顺序。
+"""
+
+# 创建简化的提示词模板
 prompt = ChatPromptTemplate.from_messages([
-    system_prompt,
-    ("user", "{input}"),
+    ("system", system_prompt),
+    ("human", "{input}"),
     ("assistant", "{agent_scratchpad}")
 ])
 ```
 
-**记忆机制实现（LangChain Memory）**：
+**简化的记忆机制实现**：
 ```python
 from langchain.memory import BaseMemory
 
 class DatabaseAnalysisMemory(BaseMemory):
-    """专门管理数据库分析结果的记忆"""
+    """简化的数据库分析记忆管理"""
     
     def __init__(self):
-        self.analysis_results = {
-            "schema_info": None,
-            "domain_analysis": None,
-            "field_classification": None,
-            "column_meanings": None,
-            "table_meanings": None,
-            "er_analysis": None
-        }
+        self.analysis_data = {}  # 存储所有分析结果
+        self.generation_count = 0  # 跟踪生成进度
     
     @property
     def memory_variables(self) -> List[str]:
-        return ["memory_summary", "schema_info", "domain_info"]
+        return ["memory_summary", "analysis_data"]
     
     def load_memory_variables(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """加载相关的分析结果供Agent使用"""
+        """自动加载所有分析结果供Agent使用"""
         return {
             "memory_summary": self._get_summary(),
-            "schema_info": self.analysis_results.get("schema_info", {}),
-            "domain_info": self.analysis_results.get("domain_analysis", {})
+            **self.analysis_data  # 直接提供所有分析数据
         }
     
     def save_context(self, inputs: Dict[str, Any], outputs: Dict[str, Any]) -> None:
-        """保存工具执行结果到记忆"""
-        # 识别是哪个分析工具的输出
-        if "schema_extraction" in str(outputs):
-            self.analysis_results["schema_info"] = outputs
-        # ... 其他工具的保存逻辑
-```
-
-#### 3.2.3 反思-修正循环实现（基于 LangChain）
-
-**记忆管理策略**：
-```python
-class AgentMemory:
-    """Agent记忆管理"""
-    def __init__(self):
-        self.analysis_memory = {  # 分析结果记忆（只保存一份）
-            "schema_info": None,
-            "domain_analysis": None,
-            "field_classification": None,
-            "er_analysis": None
-        }
-        self.generation_memory = []  # 生成历史（可多份）
-        self.current_context = {}    # 当前执行上下文
-```
-
-**执行后反思决策流程**：
-```
-SQL执行完成
-    ↓
-sql_reflection工具分析
-    ├─ 评估维度：
-    │  ├─ SQL语法正确性
-    │  ├─ 执行时间合理性
-    │  ├─ 返回结果数量
-    │  ├─ 数据逻辑合理性
-    │  └─ 问题与SQL匹配度
-    ↓
-生成反思报告
-    ├─ quality_score: 0-100分
-    ├─ issues: [问题列表]
-    ├─ suggestions: [改进建议]
-    └─ needs_revision: true/false
-    ↓
-Agent根据反思报告决策
-    ├─ needs_revision = false → 保存数据，继续下一个
-    └─ needs_revision = true → 调用sequential_thinking分析修正策略
-                                    ↓
-                              确定修正目标
-                                    ├─ 场景设计问题 → 回到scenario_generation
-                                    ├─ 问题表述不清 → 回到question_generation  
-                                    ├─ SQL生成错误 → 回到sql_generation
-                                    └─ 需要调整分析 → 重新分析特定表（局部）
-```
-
-**关键实现细节**：
-
-1. **分析工具的记忆保持**：
-```python
-# 第一次执行分析工具时
-if tool_name == "extract_schema" and result["success"]:
-    self.memory.analysis_memory["schema_info"] = result["data"]
+        """自动识别和保存工具执行结果"""
+        # 自动识别分析工具的输出并保存
+        self._auto_save_analysis_results(outputs)
     
-# 后续工具自动注入记忆
-if tool_name == "sql_generation":
-    tool_input["schema_info"] = self.memory.analysis_memory["schema_info"]
+    def _get_summary(self) -> str:
+        """生成记忆状态摘要"""
+        if not self.analysis_data:
+            return "初始状态，无分析数据"
+        
+        available_info = list(self.analysis_data.keys())
+        return f"已有分析: {', '.join(available_info)}"
 ```
 
-2. **反思工具的精准分析**：
-```python
-# sql_reflection只分析当前SQL
-reflection_input = {
-    "sql": current_sql,
-    "execution_result": execution_result,
-    "question": current_question,
-    "schema_context": self.memory.analysis_memory["schema_info"]
-}
+#### 3.2.3 Agent自主的反思-修正机制
+
+**完全由Agent自主执行的反思流程**：
+
+Agent在生成样本过程中，会自主决定何时进行反思和修正：
+
+```
+Agent内部推理（无外部控制）：
+
+Thought: SQL执行完成，我需要评估质量。
+Action: sql_reflection
+Action Input: {"sql": "...", "execution_result": "...", "question": "..."}
+Observation: {"quality_score": 0.6, "needs_revision": true, "issues": ["SQL语法错误"]}
+
+Thought: 质量不达标，有语法错误。我需要重新生成SQL。
+Action: sql_generation
+Action Input: {"question": "...", "schema_info": "..."}
+Observation: 生成了修正后的SQL
+
+Thought: 重新验证和执行修正后的SQL。
+Action: sql_validation
+Action Input: {"sql": "..."}
+Observation: 语法正确
+
+Action: sql_execution  
+Action Input: {"sql": "..."}
+Observation: 执行成功
+
+Thought: 再次评估质量。
+Action: sql_reflection
+Action Input: {"sql": "...", "execution_result": "..."}
+Observation: {"quality_score": 0.85, "needs_revision": false}
+
+Thought: 质量达标，样本生成完成。
+Final Answer: {"question": "...", "sql": "...", "quality_score": 0.85}
 ```
 
-3. **思考工具的决策支持**：
+**关键特点**：
+- **完全自主**：没有外部的修正控制逻辑
+- **智能反思**：Agent自主决定何时反思和如何修正
+- **记忆驱动**：自动利用记忆中的分析结果
+- **提示词引导**：通过提示词建议，但不强制执行
+
+**简化的实现要点**：
+
+1. **自动记忆管理**：
 ```python
-# sequential_thinking用于复杂决策
-thinking_input = {
-    "problem": "SQL执行失败，需要分析原因",
-    "context": {
-        "error": execution_error,
-        "sql": failed_sql,
-        "schema": relevant_schema,
-        "history": recent_attempts
-    },
-    "thinking_steps": ["分析错误类型", "定位问题根源", "制定修正方案"]
-}
+# 记忆系统自动识别和保存分析结果
+class DatabaseAnalysisMemory(BaseMemory):
+    def save_context(self, inputs, outputs):
+        # 自动识别工具类型并保存结果
+        self._auto_save_tool_results(outputs)
+    
+    def load_memory_variables(self, inputs):
+        # 自动加载所有可用的分析数据
+        return {"memory_summary": "...", **self.analysis_data}
+```
+
+2. **Agent自主的工具选择**：
+```python
+# Agent完全根据提示词和当前状态自主选择工具
+# 无外部的工具过滤或流程控制
+```
+
+3. **提示词中的流程建议**：
+```python
+# 在提示词中提供思考建议（不强制执行）
+system_prompt = """
+## 思考流程建议：
+1. 检查记忆中是否有足够信息
+2. 按需调用分析工具
+3. 选择场景和操作
+4. 生成问题和SQL
+5. 验证和反思
+6. 必要时自主修正
+
+**记住**：这只是建议，你可以根据实际情况灵活调整！
+"""
 ```
 
 ## 4. 接口规范
