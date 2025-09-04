@@ -521,317 +521,117 @@ Action Input: {
 
 ## 6. Agent实现规范
 
-### 6.1 SQLAgent核心实现
+### 6.1 SQLAgent接口规范
 
+**核心接口**：
 ```python
-class SQLAgent(BaseAgent):
-    """SQL生成智能体 - 基于ReAct模式"""
-    
-    def __init__(self, settings: Settings, db_config: DatabaseConfig):
-        # 初始化LLM
-        self.llm = ChatOpenAI(
-            openai_api_base=settings.llm_base_url,
-            model=settings.llm_model,
-            temperature=0.7
-        )
-        
-        # 初始化记忆
-        self.memory = DatabaseAnalysisMemory()
-        
-        # 创建所有工具（不分类，不过滤）
-        self.tools = self._initialize_all_tools()
-        
-        # 创建统一的Agent（拥有所有工具访问权限）
-        prompt = self._get_system_prompt()
-        agent = create_react_agent(self.llm, self.tools, prompt)
-        
-        self.agent_executor = AgentExecutor(
-            agent=agent,
-            tools=self.tools,
-            memory=self.memory,
-            verbose=True,
-            max_iterations=100,  # 需要足够的迭代次数处理48个组合
-            callbacks=[TrajectoryCallback()]
-        )
-    
+class SQLAgent:
     def generate_training_data(self) -> List[Dict]:
-        """完全由Agent自主驱动的训练数据生成"""
-        
-        task = "请生成高质量的NL2SQL训练数据集，覆盖所有场景组合"
-        
-        result = self.agent_executor.invoke({
-            "input": task,
-            "database_name": self.db_config.database
-        })
-        
-        return self._extract_all_samples(result)
-    
-    def _extract_all_samples(self, agent_result) -> List[Dict]:
-        """从Agent执行结果中提取所有生成的样本"""
-        # 从执行轨迹或最终答案中提取48个样本
-        # 实现逻辑根据实际的Agent输出格式
+        """生成训练数据的主接口"""
+        # 详细实现见ARCHITECTURE.md
         pass
 ```
 
-## 7. 提示词系统设计
-
-### 7.1 完整的Jinja2模板架构（基于实际实现）
-
-```
-prompts/
-├── templates/
-│   ├── system/                        # 系统级提示词
-│   │   ├── main.j2                    # Agent主系统提示词（3.3KB, 82行）
-│   │   └── analysis_main.j2           # 数据库分析专用系统提示词（2.5KB, 81行）
-│   │
-│   ├── tools/                         # 工具通用提示词
-│   │   ├── tool_system.j2             # 工具系统通用提示词（698B, 35行）
-│   │   ├── question_generation.j2     # 问题生成工具提示词（450B, 15行）
-│   │   └── sql_generation.j2          # SQL生成工具提示词（582B, 23行）
-│   │
-│   ├── analysis/                      # 数据库分析专用提示词
-│   │   ├── database_analysis.j2       # 数据库分析入口（130B, 3行）
-│   │   ├── initial_domain_analysis.j2 # 初始领域分析（1.0KB, 40行）
-│   │   ├── field_classification.j2    # 字段分类分析（1.7KB, 62行）
-│   │   ├── column_description.j2      # 列描述分析（1.2KB, 52行）
-│   │   ├── table_description.j2       # 表描述分析（1.0KB, 38行）
-│   │   ├── er_analysis_logical.j2     # 逻辑关系分析（879B, 30行）
-│   │   └── er_analysis_conceptual.j2  # 概念关系分析（920B, 35行）
-│   │
-│   ├── generation/                    # 生成专用提示词
-│   │   └── training_data_generation.j2 # 训练数据生成（55B, 1行）
-│   │
-│   ├── reflection/                    # 反思专用提示词
-│   │   ├── reflection_guide.j2        # 反思指导（2.5KB, 87行）
-│   │   ├── evaluate_result_quality.j2 # 结果质量评估（375B, 15行）
-│   │   └── analyze_empty_result.j2    # 空结果分析（238B, 12行）
-│   │
-│   ├── thinking/                      # 深度思考提示词
-│   │   ├── sequential_thinking.j2     # 顺序思考（243B, 11行）
-│   │   └── sequential_thinking_guide.j2 # 思考指导（3.4KB, 121行）
-│   │
-│   └── README.md                      # 提示词使用说明（3.7KB, 115行）
-│
-└── manager.py                         # 提示词管理器
-```
-
-### 7.2 系统提示词设计
-
-#### 7.2.1 主系统提示词（system/main.j2）
-
-```jinja2
-你是专业的NL2SQL训练数据生成专家，基于ReAct模式工作。
-
-## 当前任务
-{{input}}
-
-## 环境信息
-- 数据库: {{database_name}}
-{% if db_analysis %}
-- 记忆状态: 已有数据库分析信息
-{% else %}
-- 记忆状态: 需要先分析数据库
-{% endif %}
-
-## 工作流程指导
-
-### 🧠 智能工作策略：
-
-1. **记忆检查优先**：
-   - 检查 {{db_analysis}} 中是否有完整的数据库分析
-   - 如果缺少关键分析，先调用相应的分析工具
-
-2. **获取所有场景组合**：
-   - 调用 scenario_operation_generation 获取所有场景-操作组合
-   - 工具内部会完成三层for循环遍历
-
-3. **逐个处理组合**：
-   - 对每个组合调用 question_generation（工具自动注入对应的提示词）
-   - 对每个问题调用 sql_generation（工具自动注入问题和场景信息）
-   - 对每个SQL进行验证、执行、反思
-
-4. **质量保证**：
-   - 每个样本都要经过完整的验证和反思流程
-
-## 可用工具
-{{tools}}
-
-## ReAct执行格式
-Thought: 分析当前情况，决定下一步
-Action: 工具名称
-Action Input: 工具参数
-Observation: 工具结果
-...
-Final Answer: 最终的训练数据集
-
-**记住**：你有完全的自主决策权，根据实际需求灵活选择工具和执行顺序。
-```
-
-### 7.3 工具专用提示词
-
-#### 7.3.1 场景-操作生成工具（tools/scenario_operation.j2）
-
-```jinja2
-你需要生成所有的场景-操作组合用于NL2SQL训练数据生成。
-
-## 前置条件检查
-{% if db_analysis.schema_info %}
-- ✅ 数据库结构: {{db_analysis.schema_info.table_count}} 个表
-{% endif %}
-{% if db_analysis.domain_info %}
-- ✅ 业务领域: {{db_analysis.domain_info.primary_domain}}
-{% endif %}
-
-## 任务要求
-基于数据库分析结果，生成所有可能的场景-操作组合。
-
-内部需要完成三层for循环：
-1. 主场景遍历（sales_analysis、inventory_management等）
-2. 子场景遍历（每个主场景的具体子任务）
-3. 复杂度遍历（simple、moderate、complex、expert）
-
-## 输出格式
-返回包含所有组合的JSON：
-{
-    "total_combinations": 48,
-    "combinations": [
-        {
-            "combination_id": "场景标识",
-            "scenario": "场景详细信息",
-            "operations": "SQL操作列表",
-            "generated_prompt": "为该组合专门生成的问题提示词"
-        },
-        ...
-    ]
-}
-
-每个组合都要生成专门的问题生成提示词。
-```
-
-#### 7.3.2 问题生成工具（tools/question_generation.j2）
-
-```jinja2
-你需要基于特定的场景组合生成自然语言问题。
-
-## 前置条件检查
-{% if db_analysis.all_scenario_combinations %}
-- ✅ 场景组合: {{db_analysis.all_scenario_combinations.total_combinations}} 个可用
-{% else %}
-- ❌ 缺少场景组合，需要先调用 scenario_operation_generation
-{% endif %}
-
-## 当前处理的组合
-{% if combination_index is defined %}
-{% set current_combination = db_analysis.all_scenario_combinations.combinations[combination_index] %}
-- 组合ID: {{current_combination.combination_id}}
-- 场景: {{current_combination.scenario.main_name}} - {{current_combination.scenario.sub_name}}
-- 复杂度: {{current_combination.scenario.complexity}}
-- 操作: {{current_combination.operations}}
-
-## 专门的生成指导
-{{current_combination.generated_prompt}}
-{% endif %}
-
-## 数据库上下文
-{% if db_analysis.schema_info %}
-可用表: {{db_analysis.schema_info.tables | map(attribute='name') | join(', ')}}
-{% endif %}
-
-基于上述信息，生成一个清晰、具体的自然语言问题。
-```
-
-#### 7.3.3 SQL生成工具（tools/sql_generation.j2）
-
-```jinja2
-你需要将自然语言问题转换为SQL查询。
-
-## 前置条件检查
-{% if db_analysis.current_question %}
-- ✅ 当前问题: {{db_analysis.current_question}}
-{% else %}
-- ❌ 缺少问题，需要先调用 question_generation
-{% endif %}
-
-{% if db_analysis.all_scenario_combinations and combination_index is defined %}
-{% set current_combination = db_analysis.all_scenario_combinations.combinations[combination_index] %}
-- ✅ 场景: {{current_combination.scenario.main_name}}
-- ✅ 操作要求: {{current_combination.operations}}
-- ✅ 复杂度: {{current_combination.scenario.complexity}}
-{% endif %}
-
-## 数据库结构
-{% if db_analysis.schema_info %}
-{% for table in db_analysis.schema_info.tables %}
-表: {{table.name}}
-{% for column in table.columns %}
-  - {{column.name}} ({{column.type}}) {{column.comment or ''}}
-{% endfor %}
-{% endfor %}
-{% endif %}
-
-## 业务理解
-{% if db_analysis.domain_info %}
-业务领域: {{db_analysis.domain_info.primary_domain}}
-{% endif %}
-
-## 任务要求
-基于问题"{{db_analysis.current_question}}"生成SQL查询。
-
-必须满足：
-1. 使用正确的表名和字段名
-2. 包含要求的SQL操作: {{current_combination.operations}}
-3. 符合{{current_combination.scenario.complexity}}复杂度要求
-
-生成准确、高效的SQL查询。
-```
-
-### 7.4 提示词管理器设计
-
+**使用方式**：
 ```python
-from jinja2 import Environment, FileSystemLoader
-from pathlib import Path
+# 创建Agent
+agent = SQLAgent(settings, db_config)
 
-class PromptManager:
-    """Jinja2提示词管理器"""
-    
-    def __init__(self):
-        template_dir = Path(__file__).parent / 'templates'
-        self.env = Environment(loader=FileSystemLoader(str(template_dir)))
-    
-    def get_system_prompt(self, prompt_type: str = "main", **context):
-        """获取系统提示词"""
-        template = self.env.get_template(f'system/{prompt_type}.j2')
-        return template.render(**context)
-    
-    def get_analysis_prompt(self, analysis_type: str, **context):
-        """获取分析工具提示词"""
-        template = self.env.get_template(f'analysis/{analysis_type}.j2')
-        return template.render(**context)
-    
-    def get_tool_prompt(self, tool_name: str, **context):
-        """获取工具专用提示词"""
-        template = self.env.get_template(f'tools/{tool_name}.j2')
-        return template.render(**context)
-    
-    def get_reflection_prompt(self, reflection_type: str, **context):
-        """获取反思提示词"""
-        template = self.env.get_template(f'reflection/{reflection_type}.j2')
-        return template.render(**context)
-    
-    def get_thinking_prompt(self, thinking_type: str = "sequential_thinking", **context):
-        """获取思考提示词"""
-        template = self.env.get_template(f'thinking/{thinking_type}.j2')
-        return template.render(**context)
-    
-    def render_template(self, template_path: str, **context):
-        """通用模板渲染方法"""
-        template = self.env.get_template(template_path)
-        return template.render(**context)
+# 生成训练数据（完全自主）
+result = agent.generate_training_data()
+
+# 结果格式
+print(f"生成了 {len(result)} 个训练样本")
 ```
 
-## 8. 错误处理和反思机制
+**接口特点**：
+- **极简调用**：用户只需调用一个方法
+- **Agent自主**：内部完全由Agent自主决策
+- **质量保证**：每个样本都经过完整的验证流程
 
-### 8.1 反思工具设计
+## 7. 提示词系统概述
+
+### 7.1 提示词分层设计
+
+**系统采用分层的Jinja2模板管理**：
+- **系统级**：Agent的主要工作指导
+- **工具级**：每个工具的专用提示词
+- **分析级**：数据库分析的专业指导
+- **反思级**：质量评估和修正指导
+
+**核心特点**：
+- 每个工具都有专用的提示词模板
+- 提示词包含前置条件检查
+- 自动从记忆中注入所需信息
+- 支持Agent的完全自主决策
+
+*详细的提示词架构和实现请参考 ARCHITECTURE.md*
+
+### 7.2 提示词设计原则
+
+**核心原则**：
+- **记忆检查优先**：Agent优先检查已有的分析结果
+- **工具自主选择**：Agent根据需求自主选择调用哪个工具
+- **前置条件明确**：每个工具的提示词都明确说明需要的前置条件
+- **自动信息注入**：工具自动从记忆中获取所需信息
+
+**工作流程指导**：
+1. 智能检查数据库分析状态
+2. 按需调用分析工具补充信息
+3. 获取所有场景-操作组合
+4. 逐个处理每个组合生成高质量样本
+
+*具体的提示词模板和实现细节请参考 ARCHITECTURE.md*
+
+## 8. 配置和使用
+
+### 8.1 配置文件
+
+```yaml
+# config.yaml - 极简配置
+database:
+  host: localhost
+  port: 3306
+  username: root
+  password: ${DB_PASSWORD}
+  database: shop_db
+
+llm:
+  model: Qwen3-14B
+  base_url: http://localhost:9991/v1
+  api_key: ${LLM_API_KEY}
+  temperature: 0.7
+
+agent:
+  max_steps: 100  # 足够处理所有场景组合
+  verbose: true
+```
+
+### 8.2 CLI使用
+
+```bash
+# 基础使用
+semanticsql-agent generate --database shop_db
+
+# 指定输出文件
+semanticsql-agent generate --database shop_db --output my_data.jsonl
+
+# 详细输出
+semanticsql-agent generate --database shop_db --verbose
+```
+
+### 8.3 输出格式
+
+生成的训练数据包含：
+- **问题文本**：自然语言问题
+- **SQL查询**：对应的SQL语句
+- **场景信息**：场景类型、复杂度
+- **质量评分**：0-1的质量分数
+- **验证结果**：语法和执行验证信息
+
+## 9. 错误处理和反思机制
+
+### 9.1 反思工具设计
 
 **sql_reflection_tool** 的简化返回格式：
 
