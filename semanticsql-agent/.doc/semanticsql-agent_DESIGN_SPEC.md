@@ -137,7 +137,11 @@ Agent接收到"请生成高质量的NL2SQL训练问题"的任务后，完全自�
 ```
 用户输入: "请生成高质量的NL2SQL训练问题"
     ↓
-Thought: 我需要生成训练问题，先检查是否了解数据库
+Thought: 我需要生成训练问题，先检查记忆中是否有完整的数据库分析
+Action: 检查记忆状态
+Observation: memories 中缺少完整的数据库分析，需要先分析
+    ↓
+Thought: 缺少数据库分析，需要先了解数据库结构
 Action: schema_extraction
 Observation: 数据库结构信息 → 自动保存到 memories["schema_info"]
     ↓
@@ -145,22 +149,29 @@ Thought: 需要理解业务领域
 Action: domain_analysis  
 Observation: 电商领域信息 → 自动保存到 memories["domain_info"]
     ↓
-Thought: 现在获取场景和操作方案
+Thought: 需要分析字段类型
+Action: field_analysis
+Observation: 字段分类信息 → 自动保存到 memories["field_classification"]
+    ↓
+[继续完成所有必要的分析工具调用...]
+    ↓
+Thought: 现在我有了完整的数据库分析，获取场景和操作方案
 Action: scenario_operation_generation
 Action Input: {"mode": "get_single_combination"}
 Observation: {
-    "scenario": {"name": "销售分析", "complexity": "moderate"},
-    "operations": ["SELECT", "GROUP BY", "HAVING"]
+    "scenario": {"name": "销售分析", "complexity": "moderate", "focus": "销售统计"},
+    "operations": ["SELECT", "GROUP BY", "HAVING"],
+    "generated_prompt": "基于销售分析场景，使用聚合查询统计销售数据..."
 } → 自动保存到 memories["scenario_operation"]
     ↓
-Thought: 我有了场景方案，现在生成具体问题
+Thought: 我有了场景方案和匹配的提示词，现在调用问题生成工具
 Action: question_generation
-Action Input: {}  # 工具自动从 memories["scenario_operation"] 读取场景信息
+Action Input: {}  # 工具自动注入 memories["scenario_operation"] 中的提示词和场景信息
 Observation: "统计每月销售总额" → 自动保存到 memories["question"]
     ↓
-Thought: 生成对应的SQL
+Thought: 基于生成的问题调用SQL生成工具
 Action: sql_generation
-Action Input: {}  # 工具自动从 memories["question"] 和 memories["schema_info"] 读取信息
+Action Input: {}  # 工具自动从记忆中读取问题、场景、schema等所有信息
 Observation: "SELECT MONTH(order_date), SUM(amount) FROM orders GROUP BY MONTH(order_date)"
     ↓
 Thought: 验证SQL语法
@@ -503,25 +514,44 @@ class SQLAgent:
 ```
 用户: "请生成高质量的NL2SQL训练问题"
     ↓
-Thought: 我需要生成训练问题，先获取场景和操作方案
+Thought: 我需要生成训练问题，先检查是否有完整的数据库分析记忆
+Action: 检查记忆状态
+Observation: memories 中缺少 schema_info，需要先分析数据库
+    ↓
+Thought: 缺少数据库分析，需要先了解数据库结构
+Action: schema_extraction
+Observation: 数据库结构信息 → 自动保存到 memories["schema_info"]
+    ↓
+Thought: 需要理解业务领域
+Action: domain_analysis
+Observation: 电商领域信息 → 自动保存到 memories["domain_info"]
+    ↓
+Thought: 需要分析字段类型
+Action: field_analysis
+Observation: 字段分类信息 → 自动保存到 memories["field_classification"]
+    ↓
+[继续其他分析工具...]
+    ↓
+Thought: 现在我有了完整的数据库分析，获取场景和操作方案
 Action: scenario_operation_generation
-Action Input: {"mode": "get_scenario_and_operations"}
+Action Input: {"mode": "get_single_combination"}
 Observation: {
-    "scenario": {"name": "销售分析", "complexity": "moderate"},
-    "operations": ["SELECT", "GROUP BY", "HAVING"]
-} → 自动保存到记忆 tool_results["scenario_operation_generation"]
+    "scenario": {"name": "销售分析", "complexity": "moderate", "focus": "销售统计"},
+    "operations": ["SELECT", "GROUP BY", "HAVING"],
+    "generated_prompt": "基于销售分析场景，使用聚合查询..."
+} → 自动保存到 memories["scenario_operation"]
     ↓
-Thought: 我有了场景方案，现在生成具体问题
-Action: question_generation  
-Action Input: {}  # 工具自动从记忆中读取场景信息
-Observation: "统计每月销售总额"
+Thought: 我有了场景方案和生成的提示词，现在调用问题生成工具
+Action: question_generation
+Action Input: {}  # 工具自动注入 memories["scenario_operation"] 中的提示词和场景信息
+Observation: "统计每月销售总额" → 自动保存到 memories["question"]
     ↓
-Thought: 生成对应的SQL
+Thought: 基于问题生成SQL
 Action: sql_generation
-Action Input: {}  # 工具自动从记忆中读取问题和场景信息
+Action Input: {}  # 工具自动从记忆中读取问题、场景、schema等信息
 Observation: "SELECT MONTH(order_date), SUM(amount) FROM orders GROUP BY MONTH(order_date)"
     ↓
-Thought: 验证SQL
+Thought: 验证SQL语法
 Action: sql_validation
 Observation: 语法正确
     ↓
@@ -529,11 +559,11 @@ Thought: 执行SQL测试
 Action: sql_execution
 Observation: 成功返回12条记录
     ↓
-Thought: 反思质量
+Thought: 反思生成质量
 Action: sql_reflection
 Observation: {"quality_score": 0.85, "needs_revision": false}
     ↓
-Thought: 质量良好，任务完成
+Thought: 质量良好，训练样本生成完成
 Final Answer: {"question": "统计每月销售总额", "sql": "SELECT...", "quality_score": 0.85}
 ```
 
@@ -541,17 +571,24 @@ Final Answer: {"question": "统计每月销售总额", "sql": "SELECT...", "qual
 
 1. **用户简单输入**：`"请生成高质量的NL2SQL训练问题"`
 
-2. **Agent自主决策**：
-   - 自主调用 `scenario_operation_generation` 获取场景方案
-   - 场景方案自动保存到记忆中
-   - 自主调用 `question_generation`，工具从记忆中读取场景信息
-   - 自主调用 `sql_generation`，工具从记忆中读取问题和场景信息
-   - 自主进行验证、执行、反思
+2. **Agent智能检查**：
+   - 首先检查 `memories` 中是否有完整的数据库分析记忆
+   - 如果缺少分析，自主调用相应的分析工具（schema_extraction、domain_analysis等）
+   - 分析结果自动保存到 `memories` 中
 
-3. **记忆驱动**：
-   - 所有工具调用结果自动保存到记忆
-   - 后续工具自动从记忆中获取所需信息
-   - 无需外部传参，完全依赖记忆机制
+3. **场景方案生成**：
+   - 调用 `scenario_operation_generation` 获取场景和操作方案
+   - 工具内部生成匹配的提示词模板
+   - 结果保存到 `memories["scenario_operation"]`
+
+4. **问题和SQL生成**：
+   - 调用 `question_generation`，工具自动注入 `memories["scenario_operation"]` 中的信息
+   - 调用 `sql_generation`，工具自动从记忆中读取所有需要的信息
+   - 每个工具的结果都自动保存到记忆中
+
+5. **验证和反思**：
+   - 自主进行SQL验证、执行、反思
+   - 基于反思结果自主决定是否需要修正
 
 ### **🔧 关键优势**
 
