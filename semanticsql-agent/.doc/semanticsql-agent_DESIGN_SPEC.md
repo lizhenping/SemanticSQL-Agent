@@ -71,96 +71,154 @@ SemanticSQL Agent 是一个基于 ReAct 智能体架构的 **NL2SQL 训练数据
 #### 2.1.2 基于纯ReAct模式的数据生成流程
 
 **核心设计原则**：
-- **外部大循环**：简单的数量控制，负责迭代生成多个样本
-- **内部纯ReAct**：Agent完全自主决策，拥有所有工具访问权限
-- **提示词引导**：通过提示词提供思考流程指导，不强制执行顺序
-- **记忆驱动**：自动管理和共享数据库分析结果
+- **完全Agent自主**：无外部循环控制，Agent根据任务自主决策所有执行流程
+- **记忆驱动协作**：工具调用结果自动保存到记忆，后续工具自动从记忆中获取信息
+- **提示词引导**：通过提示词提供思考流程指导，但Agent有完全的自主决策权
+- **工具内部批处理**：复杂的遍历逻辑封装在工具内部，Agent只需调用工具获取结果
 
-**真正的ReAct自主决策模式**：Agent通过思考-行动-观察循环，完全自主决定执行策略
+**真正的ReAct自主决策模式**：Agent接收简单任务输入，通过思考-行动-观察循环，完全自主决定执行策略和工具调用顺序
 
-**简化的执行架构图**：
+**极简的执行架构图**：
 ```mermaid
 graph TB
-    Start[开始任务] --> Loop[外部大循环: for i in range(count)]
-    Loop --> Task[任务: 生成第i+1个样本]
-    Task --> Agent[Agent完全自主决策]
+    Start[用户输入: 请生成高质量的NL2SQL训练问题] --> Agent[Agent完全自主决策]
     
     Agent --> React[ReAct推理循环]
     React --> Thought[Thought: 分析当前状态]
     Thought --> Action[Action: 选择合适工具]
     Action --> Input[Action Input: 准备参数]
     Input --> Execute[执行工具]
-    Execute --> Observe[Observation: 观察结果]
+    Execute --> Memory[结果自动保存到记忆]
+    Memory --> Observe[Observation: 观察结果]
     
     Observe --> Complete{任务完成?}
     Complete -->|否| Thought
     Complete -->|是| Answer[Final Answer: 训练样本]
     
-    Answer --> Save[保存样本]
-    Save --> Next{继续下一个?}
-    Next -->|是| Loop
-    Next -->|否| End[完成所有生成]
+    Answer --> End[任务完成]
     
     style Agent fill:#e1f5fe
     style React fill:#f3e5f5
-    style Loop fill:#e8f5e8
+    style Memory fill:#fff3e0
 ```
 
-**简化的Agent决策模式**：
+**极简的Agent决策模式**：
 
-Agent接收到"生成第N个训练样本"的任务后，完全自主决策执行流程：
+Agent接收到"请生成高质量的NL2SQL训练问题"的任务后，完全自主决策执行流程：
 
-1. **状态检查**：检查记忆中是否有足够的数据库分析信息
-2. **按需分析**：如果缺少信息，自主选择需要的分析工具
-3. **场景生成**：选择合适的业务场景
-4. **问题构建**：生成自然语言问题
-5. **SQL实现**：将问题转换为SQL查询
-6. **验证测试**：确保SQL正确可执行
-7. **质量评估**：反思生成质量，必要时自主修正
+1. **自主分析**：检查记忆状态，按需调用数据库分析工具
+2. **获取方案**：调用 `scenario_operation_generation` 获取场景和操作方案
+3. **方案记忆**：工具返回的方案自动保存到记忆中
+4. **问题生成**：调用 `question_generation`，工具自动从记忆中读取场景信息
+5. **SQL生成**：调用 `sql_generation`，工具自动从记忆中读取问题和场景信息
+6. **验证反思**：验证SQL正确性，执行测试，反思质量
+7. **自主修正**：如果质量不佳，基于反思建议自主选择修正策略
 
 **关键特点**：
-- **完全自主**：没有外部预设的执行步骤
-- **智能记忆**：自动利用和更新数据库分析结果
-- **按需执行**：根据实际需求选择工具，避免不必要的分析
-- **自我修正**：基于反思结果自主选择修正策略
+- **无外部控制**：没有任何外部循环或数量控制逻辑
+- **记忆驱动**：工具之间通过记忆自动协作，无需手动传参
+- **完全自主**：Agent根据任务需求自主决定所有工具调用
+- **质量导向**：专注于单个样本的高质量生成，包含完整的反思修正机制
 
-**记忆机制**：
-- **数据库分析结果必须完整记忆**：一次性分析数据库，结果贯穿整个过程
-- **上下文保持**：Agent在整个执行过程中维护分析结果的记忆
-- **避免重复分析**：已分析的结构信息在后续步骤中直接使用
+**记忆驱动机制**：
+- **工具结果自动记忆**：每个工具的调用结果自动保存到 `tool_results` 中
+- **工具间自动协作**：后续工具自动从记忆中读取所需的前置信息
+- **Agent无需传参**：Agent只需调用工具，工具间的数据传递完全通过记忆自动完成
+
+### **完整的Agent自主执行示例**
+
+```
+用户输入: "请生成高质量的NL2SQL训练问题"
+    ↓
+Thought: 我需要生成训练问题，先检查是否了解数据库
+Action: schema_extraction
+Observation: 数据库结构信息 → 自动保存到 tool_results["schema_extraction"]
+    ↓
+Thought: 需要理解业务领域
+Action: domain_analysis  
+Observation: 电商领域信息 → 自动保存到 tool_results["domain_analysis"]
+    ↓
+Thought: 现在获取场景和操作方案
+Action: scenario_operation_generation
+Action Input: {"mode": "get_single_combination"}
+Observation: {
+    "scenario": {"name": "销售分析", "complexity": "moderate"},
+    "operations": ["SELECT", "GROUP BY", "HAVING"]
+} → 自动保存到 tool_results["scenario_operation_generation"]
+    ↓
+Thought: 我有了场景方案，现在生成具体问题
+Action: question_generation
+Action Input: {}  # 工具自动从记忆中读取场景信息
+Observation: "统计每月销售总额" → 自动保存到 tool_results["question_generation"]
+    ↓
+Thought: 生成对应的SQL
+Action: sql_generation
+Action Input: {}  # 工具自动从记忆中读取问题和场景信息
+Observation: "SELECT MONTH(order_date), SUM(amount) FROM orders GROUP BY MONTH(order_date)"
+    ↓
+Thought: 验证SQL语法
+Action: sql_validation
+Observation: 语法正确
+    ↓
+Thought: 执行SQL测试
+Action: sql_execution
+Observation: 成功返回12条记录
+    ↓
+Thought: 反思生成质量
+Action: sql_reflection
+Observation: {"quality_score": 0.85, "needs_revision": false}
+    ↓
+Thought: 质量良好，训练样本生成完成
+Final Answer: {"question": "统计每月销售总额", "sql": "SELECT...", "quality_score": 0.85}
+```
 
 **工具类型区分**：
-- **思考工具（sequential_thinking）**：用于深度分析和推理，在需要复杂决策时调用
-- **反思工具（sql_reflection）**：SQL执行后的质量评估和问题诊断
+- **分析工具**：提取和分析数据库信息，结果保存到记忆供后续使用
+- **生成工具**：基于记忆中的信息生成场景、问题、SQL等内容
+- **验证工具**：验证SQL语法和执行结果
+- **反思工具**：评估生成质量，提供简单的修正建议
+- **思考工具**：用于复杂问题的深度分析
 
-**简化的执行机制**：
+**极简的执行机制**：
 
 ```python
-# 外部：简单的大循环
-def generate_training_data(self, count: int):
-    results = []
-    
-    for i in range(count):
-        # 每次迭代都是独立的ReAct任务
-        task = f"生成第{i+1}个高质量NL2SQL训练样本"
+# 完全Agent自主驱动，无外部循环控制
+class SQLAgent:
+    def generate_training_data(self):
+        """完全由Agent自主驱动的训练数据生成"""
+        
+        # 极简任务输入
+        task = "请生成高质量的NL2SQL训练问题"
         
         # 完全交给Agent自主决策
         result = self.agent_executor.invoke({
             "input": task,
-            "iteration": i,
             "database_name": self.db_config.database
         })
         
-        sample = self._extract_sample(result)
-        if sample:
-            results.append(sample)
-    
-    return results
+        return self._extract_samples(result)
 ```
+
+### **核心设计优势**
+
+1. **架构极简**：
+   - 用户只需调用一个方法：`agent.generate_training_data()`
+   - 无任何外部循环或数量控制逻辑
+   - Agent完全自主决策执行流程
+
+2. **记忆驱动**：
+   - 工具调用结果自动保存到记忆
+   - 后续工具自动从记忆读取信息
+   - 无需手动传递参数
+
+3. **真正ReAct**：
+   - Agent根据任务自主选择工具调用顺序
+   - 基于工具输出自主决定下一步行动
+   - 完全符合ReAct的自主决策原则
 
 **Agent内部的自主推理示例**：
 ```
-用户: "生成第1个高质量NL2SQL训练样本"
+用户: "请生成高质量的NL2SQL训练问题"
 
 Thought: 需要生成训练样本。先检查是否了解数据库。
 Action: 检查记忆状态，必要时调用schema_extraction
