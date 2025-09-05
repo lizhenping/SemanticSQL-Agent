@@ -1,20 +1,18 @@
 """
-数据库结构提取工具 - 提取完整的数据库模式信息
-基于 LangChain BaseTool，参考pipeline的简洁设计
+数据库结构提取工具 - 优化版本
+简化设计，移除过度异常处理，按就近原则组织代码
 """
 
 from typing import Dict, Any, Type, List, Optional
-from pydantic import BaseModel, Field, ConfigDict
+import json
+from pydantic import BaseModel, Field
 
-from models.exceptions import (
-    ToolExecutionError,
-    DatabaseConnectionError,
-    SchemaExtractionError,
-)
+from models.exceptions import ToolExecutionError
 from utils.database import DatabaseManager
 from ..base_tool import BaseSemanticSQLTool
 
 
+# ========== 工具内部数据模型（就近原则）==========
 class SchemaExtractionInput(BaseModel):
     """Schema提取输入参数"""
     database_name: str = Field(description="数据库名称")
@@ -23,16 +21,35 @@ class SchemaExtractionInput(BaseModel):
     tables: Optional[List[str]] = Field(default=None, description="指定要提取的表")
 
 
+class SchemaInfo(BaseModel):
+    """数据库结构信息"""
+    database_name: str
+    tables: Dict[str, Dict[str, Any]]
+    table_count: int
+    total_columns: int
+
+
 class SchemaExtractionTool(BaseSemanticSQLTool):
-    """数据库结构提取工具"""
+    """数据库结构提取工具 - 优化版本
+    
+    职责：
+    - 提取数据库完整结构信息
+    - 获取表、列、主键、外键等元数据
+    - 支持样本数据提取
+    
+    设计原则：
+    - 单一职责：专注结构提取
+    - 简化异常：让异常自然传播
+    - 类型安全：使用Pydantic模型
+    """
 
     name: str = "schema_extraction"
-    description: str = "提取数据库的完整结构信息，包括表、列、索引、外键等。需要参数：database_name（数据库名称）"
+    description: str = "提取数据库的完整结构信息，包括表、列、索引、外键等"
     args_schema: Type[BaseModel] = SchemaExtractionInput
 
-    def __init__(self, **kwargs):
+    def __init__(self, db_manager: DatabaseManager = None, **kwargs):
         super().__init__(**kwargs)
-        # DatabaseManager will be obtained from memory when needed
+        object.__setattr__(self, 'db_manager', db_manager)
 
     def _run(
         self,
@@ -42,223 +59,127 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
         tables: Optional[List[str]] = None,
         **kwargs
     ) -> str:
-        """执行数据库结构提取"""
-        try:
-            # Get database manager from memory
-            db_manager = self.get_from_memory("database_manager")
-            if not db_manager:
-                raise ToolExecutionError(
-                    tool_name=self.name, 
-                    message="数据库管理器未初始化",
-                    details="需要先在Agent记忆中设置database_manager"
-                )
+        """执行数据库结构提取 - 简化版本"""
+        # 获取数据库管理器
+        db_manager = self._get_database_manager()
+        
+        # 获取表列表并提取信息
+        target_tables = tables if tables else db_manager.get_tables()
+        table_infos = self._extract_all_tables_info(
+            target_tables, database_name, sample_data, db_manager
+        )
+        
+        # 构建结果
+        result = self._build_schema_result(database_name, table_infos)
+        
+        # 保存并返回
+        self.save_to_memory("schema_extraction", result)
+        return json.dumps(result, ensure_ascii=False)
 
-            # 获取表列表
-            all_tables = tables if tables else db_manager.get_tables()
-            
-            # 提取每个表的信息
-            table_infos = {}
-            for table_name in all_tables:
-                table_infos[table_name] = self._extract_table_info(
-                    table_name, database_name, sample_data
-                )
+    # ========== 核心提取逻辑 ==========
+    def _get_database_manager(self) -> DatabaseManager:
+        """获取数据库管理器"""
+        if self.db_manager:
+            return self.db_manager
+        
+        # 从记忆获取（向后兼容）
+        db_manager = self.get_from_memory("database_manager")
+        if not db_manager:
+            raise ToolExecutionError(
+                tool_name=self.name,
+                reason="数据库管理器未初始化"
+            )
+        return db_manager
 
-            # 构建返回结果
-            result = {
-                "database_name": database_name,
-                "tables": table_infos,
-                "table_count": len(table_infos),
-                "total_columns": sum(
-                    len(info.get("columns", {})) for info in table_infos.values()
-                ),
-            }
+    def _extract_all_tables_info(
+        self,
+        tables: List[str],
+        database_name: str,
+        sample_data: bool,
+        db_manager: DatabaseManager
+    ) -> Dict[str, Dict[str, Any]]:
+        """提取所有表的信息"""
+        table_infos = {}
+        for table_name in tables:
+            table_infos[table_name] = self._extract_single_table_info(
+                table_name, database_name, sample_data, db_manager
+            )
+        return table_infos
 
-            # 保存到记忆
-            self.save_to_memory("schema_extraction", result)
-
-            # 返回字典格式，让Agent决定如何序列化
-            return result
-
-        except DatabaseConnectionError:
-            raise
-        except Exception as e:
-            raise SchemaExtractionError(database=database_name, error=str(e))
-
-    def _extract_table_info(
+    def _extract_single_table_info(
         self,
         table_name: str,
         database_name: str,
         sample_data: bool,
+        db_manager: DatabaseManager
     ) -> Dict[str, Any]:
         """提取单个表的详细信息"""
+        # 获取基础表信息
+        columns = db_manager.get_table_columns(table_name)
+        primary_keys = db_manager.get_primary_keys(table_name)
+        foreign_keys = db_manager.get_foreign_keys(table_name)
+        
         table_info = {
             "name": table_name,
-            "columns": {},
-            "primary_key": [],
+            "columns": self._format_columns_info(columns),
+            "primary_keys": primary_keys,
+            "foreign_keys": self._format_foreign_keys_info(foreign_keys),
+            "row_count": self._get_table_row_count(table_name, db_manager)
         }
-
-        try:
-            # 获取表基本信息
-            table_info.update(self._get_table_metadata(table_name, database_name))
-            
-            # 获取列信息
-            table_info["columns"] = self._get_columns_info(table_name, database_name)
-            
-            # 获取主键信息
-            table_info["primary_key"] = self._get_primary_keys(table_name, database_name)
-            
-            # 获取样本数据
-            if sample_data:
-                table_info["sample_data"] = self._get_sample_data(table_name, limit=3)
-
-        except Exception as e:
-            self.logger.error(f"提取表 {table_name} 信息时出错: {str(e)}")
-
+        
+        # 添加样本数据
+        if sample_data:
+            table_info["sample_data"] = self._get_sample_data(table_name, db_manager)
+        
         return table_info
 
-    def _get_table_metadata(self, table_name: str, database_name: str) -> Dict[str, Any]:
-        """获取表的元数据信息"""
-        metadata = {"comment": "", "row_count": 0}
+    def _format_columns_info(self, columns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """格式化列信息"""
+        return [{
+            "name": col.get("name", ""),
+            "type": col.get("type", ""),
+            "nullable": col.get("nullable", True),
+            "default": col.get("default"),
+            "comment": col.get("comment", "")
+        } for col in columns]
 
-        try:
-            query = """
-            SELECT table_comment, table_rows
-            FROM information_schema.tables 
-            WHERE table_schema = :database_name AND table_name = :table_name
-            """
-            result = db_manager._execute_query(
-                query, {"database_name": database_name, "table_name": table_name}
-            )
+    def _format_foreign_keys_info(self, foreign_keys: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """格式化外键信息"""
+        return [{
+            "constrained_columns": fk.get("constrained_columns", []),
+            "referred_table": fk.get("referred_table", ""),
+            "referred_columns": fk.get("referred_columns", [])
+        } for fk in foreign_keys]
 
-            if result.get("success") and result.get("data"):
-                row = result["data"][0]
-                metadata["comment"] = row.get("TABLE_COMMENT", "") or ""
-                metadata["row_count"] = int(row.get("TABLE_ROWS", 0) or 0)
+    def _get_table_row_count(self, table_name: str, db_manager: DatabaseManager) -> int:
+        """获取表行数"""
+        return db_manager.get_table_row_count(table_name)
 
-        except Exception as e:
-            self.logger.warning(f"获取表 {table_name} 元数据失败: {str(e)}")
+    def _get_sample_data(self, table_name: str, db_manager: DatabaseManager, limit: int = 3) -> List[Dict[str, Any]]:
+        """获取样本数据"""
+        return db_manager.get_sample_data(table_name, limit)
 
-        return metadata
+    def _build_schema_result(self, database_name: str, table_infos: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+        """构建最终结果"""
+        total_columns = sum(
+            len(info.get("columns", [])) for info in table_infos.values()
+        )
+        
+        return {
+            "database_name": database_name,
+            "tables": table_infos,
+            "table_count": len(table_infos),
+            "total_columns": total_columns,
+            "extraction_summary": f"提取了{len(table_infos)}个表，共{total_columns}个字段"
+        }
 
-    def _get_columns_info(
-        self, table_name: str, database_name: str
-    ) -> Dict[str, Dict[str, Any]]:
-        """获取列信息"""
-        columns = {}
-
-        try:
-            query = """
-            SELECT 
-                column_name,
-                data_type,
-                is_nullable,
-                column_default,
-                column_comment,
-                character_maximum_length,
-                numeric_precision,
-                numeric_scale
-            FROM information_schema.columns 
-            WHERE table_schema = :database_name AND table_name = :table_name 
-            ORDER BY ordinal_position
-            """
-
-            result = db_manager._execute_query(
-                query, {"database_name": database_name, "table_name": table_name}
-            )
-
-            if result.get("success") and result.get("data"):
-                for col in result["data"]:
-                    col_name = col["COLUMN_NAME"]
-                    columns[col_name] = {
-                        "name": col_name,
-                        "type": self._format_column_type(col),
-                        "nullable": col["IS_NULLABLE"] == "YES",
-                        "default": col["COLUMN_DEFAULT"],
-                        "comment": col["COLUMN_COMMENT"] or "",
-                    }
-
-        except Exception as e:
-            self.logger.error(f"获取表 {table_name} 列信息失败: {str(e)}")
-
-        return columns
-
-    def _get_primary_keys(self, table_name: str, database_name: str) -> List[str]:
-        """获取主键列表"""
-        primary_keys = []
-
-        try:
-            query = """
-            SELECT column_name 
-            FROM information_schema.key_column_usage 
-            WHERE table_schema = :database_name 
-              AND table_name = :table_name 
-              AND constraint_name = 'PRIMARY'
-            ORDER BY ordinal_position
-            """
-
-            result = db_manager._execute_query(
-                query, {"database_name": database_name, "table_name": table_name}
-            )
-
-            if result.get("success") and result.get("data"):
-                primary_keys = [row["COLUMN_NAME"] for row in result["data"]]
-
-        except Exception as e:
-            self.logger.warning(f"获取表 {table_name} 主键失败: {str(e)}")
-
-        return primary_keys
-
-    def _format_column_type(self, col_data: Dict[str, Any]) -> str:
-        """格式化列类型信息"""
-        data_type = col_data["DATA_TYPE"]
-        max_length = col_data.get("CHARACTER_MAXIMUM_LENGTH")
-        precision = col_data.get("NUMERIC_PRECISION")
-        scale = col_data.get("NUMERIC_SCALE")
-
-        # 处理字符串类型
-        if data_type in ("varchar", "char") and max_length:
-            return f"{data_type}({max_length})"
-
-        # 处理数字类型
-        if data_type in ("decimal", "numeric") and precision:
-            if scale:
-                return f"{data_type}({precision},{scale})"
-            else:
-                return f"{data_type}({precision})"
-
-        return data_type
-
-    def _get_sample_data(self, table_name: str, limit: int = 5) -> List[Dict[str, Any]]:
-        """获取表的样本数据"""
-        try:
-            db_manager = self.get_from_memory("database_manager")
-            if not db_manager:
-                return []
-                
-            query = f"SELECT * FROM {table_name} LIMIT {limit}"
-            result = db_manager._execute_query(query)
-            if result.get("success") and result.get("data"):
-                return self._serialize_sample_data(result["data"])
-            return []
-        except Exception as e:
-            self.logger.warning(f"获取表 {table_name} 样本数据失败: {str(e)}")
-            return []
-
-    def _serialize_sample_data(self, raw_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """序列化样本数据，确保JSON兼容"""
-        serializable_data = []
-
-        for row in raw_data:
-            serializable_row = {}
-            for key, value in row.items():
-                if value is None:
-                    serializable_row[key] = None
-                elif hasattr(value, "isoformat"):  # 日期时间类型
-                    serializable_row[key] = value.isoformat()
-                elif isinstance(value, (bytes, bytearray)):  # 二进制数据
-                    serializable_row[key] = f"<binary_data:{len(value)}_bytes>"
-                else:
-                    serializable_row[key] = value
-            serializable_data.append(serializable_row)
-
-        return serializable_data
+    async def _arun(
+        self,
+        database_name: str,
+        include_views: bool = False,
+        sample_data: bool = True,
+        tables: Optional[List[str]] = None,
+        **kwargs
+    ) -> str:
+        """异步执行（当前实现为同步）"""
+        return self._run(database_name, include_views, sample_data, tables, **kwargs)
