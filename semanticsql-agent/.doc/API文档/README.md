@@ -53,7 +53,6 @@
 系统工具类。
 
 - [DatabaseManager](./utils模块/DatabaseManager-API.md) - MySQL 数据库管理
-- [LLMClient](./utils模块/LLMClient-API.md) - 基于 LangChain 的 LLM 客户端
 - [MemoryManager](./utils模块/MemoryManager-API.md) - 记忆管理工具
 - [TrajectoryRecorder](./utils模块/TrajectoryRecorder-API.md) - 执行轨迹记录
 - [CallbackHandler](./utils模块/CallbackHandler-API.md) - LangChain 回调处理器

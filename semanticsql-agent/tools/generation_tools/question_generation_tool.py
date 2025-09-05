@@ -4,13 +4,12 @@
 """
 
 from typing import Dict, Any, Type, List, Optional
-from langchain.tools import BaseTool
-from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field, ConfigDict, model_validator
+from pydantic import BaseModel, Field, model_validator
 import json
 
 from models.exceptions import ToolExecutionError
 from prompts.manager import PromptManager
+from ..base_tool import BaseSemanticSQLTool
 
 
 class QuestionGenerationInput(BaseModel):
@@ -38,50 +37,26 @@ class GeneratedQuestion(BaseModel):
     category: Optional[str] = Field(default=None, description="类别")
 
 
-class QuestionGenerationTool(BaseTool):
+class QuestionGenerationTool(BaseSemanticSQLTool):
     """生成自然语言问题"""
     
     name: str = "question_generation"
     description: str = "基于记忆中的场景组合生成自然语言问题，自动注入场景信息和专用提示词"
     args_schema: Type[BaseModel] = QuestionGenerationInput
     
-    # 定义必需的字段
-    llm: Optional[ChatOpenAI] = Field(default=None, exclude=True)
-    prompt_manager: Optional[PromptManager] = Field(default=None, exclude=True)
-    
-    # Pydantic v2配置
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    
-    def __init__(self, llm: ChatOpenAI):
-        super().__init__()
-        self.llm = llm
-        self.prompt_manager = PromptManager()
-        self.memory = None  # 将由Agent设置
-    
-    def set_memory(self, memory):
-        """设置记忆引用"""
-        self.memory = memory
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        object.__setattr__(self, 'prompt_manager', PromptManager())
     
     def _run(
         self,
         combination_index: int = 0,
         **kwargs
-    ) -> Dict[str, Any]:
+    ) -> str:
         """生成问题（新设计：基于记忆中的场景组合）"""
         try:
             # 从记忆中获取场景组合信息
-            if not self.memory:
-                raise ToolExecutionError(
-                    tool_name=self.name,
-                    reason="记忆系统未初始化"
-                )
-            
-            # 获取记忆数据
-            memory_data = self.memory.load_memory_variables({})
-            db_analysis = memory_data.get("db_analysis", {})
-            
-            # 检查是否有场景组合信息
-            all_combinations = db_analysis.get("all_scenario_combinations")
+            all_combinations = self.get_from_memory("all_scenario_combinations")
             if not all_combinations:
                 raise ToolExecutionError(
                     tool_name=self.name,
@@ -106,19 +81,24 @@ class QuestionGenerationTool(BaseTool):
             context = {
                 "combination": current_combination,
                 "generated_prompt": generated_prompt,
-                "scenario": scenario_info,
-                "db_analysis": db_analysis
+                "scenario": scenario_info
             }
             
             # 使用LLM生成问题
             question = self._generate_question_with_llm(context)
             
-            return {
+            result = {
                 "question": question,
                 "combination_id": current_combination.get("combination_id"),
                 "scenario_info": scenario_info,
                 "combination_index": combination_index
             }
+            
+            # 保存生成的问题到记忆
+            self.save_to_memory("current_question", question)
+            self.save_to_memory("question_generation_result", result)
+            
+            return json.dumps(result, ensure_ascii=False)
             
         except Exception as e:
             raise ToolExecutionError(
@@ -149,28 +129,46 @@ class QuestionGenerationTool(BaseTool):
         
         return "\n".join(context_parts)
     
-    def _generate_question_with_llm(self, context: str) -> str:
+    def _generate_question_with_llm(self, context: Dict[str, Any]) -> str:
         """使用LLM生成问题"""
-        prompt = self.prompt_manager.get_tool_prompt(
-            "question_generation",
-            context=context
-        )
+        # 从记忆中获取LLM
+        llm = self.get_from_memory("llm")
+        if not llm:
+            # 如果没有LLM，使用简化生成
+            return self._generate_question_by_rules(context)
+        
+        try:
+            prompt = self.prompt_manager.get_tool_prompt(
+                "question_generation",
+                context=context
+            )
 
-        response = self.llm.invoke(prompt)
-        question = response.content.strip()
+            response = llm.invoke(prompt)
+            question = response.content.strip()
+            
+            # 清理问题格式
+            question = question.strip('"\'')
+            if not question.endswith('？'):
+                question += '？'
+            
+            return question
+        except Exception as e:
+            self.logger.warning(f"LLM问题生成失败: {e}")
+            return self._generate_question_by_rules(context)
+    
+    def _generate_question_by_rules(self, context: Dict[str, Any]) -> str:
+        """基于规则生成问题（当LLM不可用时）"""
+        scenario_info = context.get("scenario", {})
+        main_name = scenario_info.get("main_name", "数据分析")
+        sub_name = scenario_info.get("sub_name", "查询")
         
-        # 清理问题格式
-        question = question.strip('"\'')
-        if not question.endswith('？'):
-            question += '？'
-        
-        return question
+        # 简单的问题模板
+        return f"请帮我分析{main_name}中的{sub_name}相关信息？"
     
     async def _arun(
         self,
-        scenario: Dict[str, Any],
-        operations: List[str],
-        memory: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        combination_index: int = 0,
+        **kwargs
+    ) -> str:
         """异步执行（当前实现为同步）"""
-        return self._run(scenario, operations, memory)
+        return self._run(combination_index, **kwargs)

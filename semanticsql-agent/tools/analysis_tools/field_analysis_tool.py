@@ -45,8 +45,8 @@ class FieldAnalysisTool(BaseSemanticSQLTool):
         """执行字段分类"""
         try:
             # 从记忆中获取必要信息
-            schema_info = self.get_schema_info()
-            domain_info = self.get_domain_info()
+            schema_info = self.get_from_memory("schema_extraction")
+            domain_info = self.get_from_memory("domain_analysis")
             
             if not schema_info:
                 raise ToolExecutionError(

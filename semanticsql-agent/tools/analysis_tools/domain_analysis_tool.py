@@ -45,7 +45,7 @@ class DomainAnalysisTool(BaseSemanticSQLTool):
         """执行领域分析"""
         try:
             # 从记忆中获取schema_info
-            schema_info = self.get_schema_info()
+            schema_info = self.get_from_memory("schema_extraction")
             if not schema_info:
                 raise ToolExecutionError(
                     tool_name=self.name,

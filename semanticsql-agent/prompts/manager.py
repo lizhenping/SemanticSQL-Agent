@@ -85,57 +85,8 @@ class PromptManager:
             # 如果没有特定的工具模板，返回空字符串
             return ""
     
-    def get_analysis_prompt(self, analysis_type: str, **kwargs) -> str:
-        """获取分析提示词
-        
-        Args:
-            analysis_type: 分析类型
-            **kwargs: 模板变量
-            
-        Returns:
-            分析提示词字符串
-        """
-        template_path = f'analysis/{analysis_type}.j2'
-        try:
-            return self.render_template(template_path, **kwargs)
-        except Exception as e:
-            # 记录错误并返回空字符串
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Failed to load analysis template {analysis_type}: {e}")
-            return ""
     
-    def get_generation_prompt(self, generation_type: str, **kwargs) -> str:
-        """获取生成提示词
-        
-        Args:
-            generation_type: 生成类型
-            **kwargs: 模板变量
-            
-        Returns:
-            生成提示词字符串
-        """
-        template_path = f'generation/{generation_type}.j2'
-        try:
-            return self.render_template(template_path, **kwargs)
-        except:
-            return ""
     
-    def get_reflection_prompt(self, reflection_type: str, **kwargs) -> str:
-        """获取反思提示词
-        
-        Args:
-            reflection_type: 反思类型
-            **kwargs: 模板变量
-            
-        Returns:
-            反思提示词字符串
-        """
-        template_path = f'reflection/{reflection_type}.j2'
-        try:
-            return self.render_template(template_path, **kwargs)
-        except:
-            return ""
     
     def get_thinking_prompt(self, thinking_type: str, **kwargs) -> str:
         """获取思考提示词
@@ -211,9 +162,7 @@ class PromptManager:
         templates = {
             "system": [],
             "tools": [],
-            "analysis": [],
             "generation": [],
-            "reflection": [],
             "thinking": []
         }
         

@@ -9,6 +9,7 @@ import os
 from unittest.mock import Mock, patch
 
 from agent.data_generation_agent import DataGenerationAgent
+from models.training import TrainingDataResult
 from config.settings import Settings
 from utils.database_config import DatabaseConfig
 from models.exceptions import AgentExecutionError

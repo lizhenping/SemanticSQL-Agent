@@ -11,6 +11,8 @@ from typing import Dict, Any, List, Optional
 from langchain.tools import BaseTool
 from langchain.pydantic_v1 import BaseModel, Field
 
+from prompts.manager import PromptManager
+
 logger = logging.getLogger(__name__)
 
 
@@ -32,6 +34,16 @@ class ScenarioOperationTool(BaseTool):
     name: str = "scenario_operation_generation"
     description: str = "生成所有场景-操作组合，内部处理三层for循环遍历，为每个组合生成专用提示词"
     args_schema: type = ScenarioOperationInput
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # 设置为私有属性避免 Pydantic 验证
+        self._prompt_manager = PromptManager()
+    
+    @property
+    def prompt_manager(self):
+        """获取提示词管理器"""
+        return self._prompt_manager
     
     @property
     def config_dir(self) -> Path:
@@ -246,24 +258,23 @@ class ScenarioOperationTool(BaseTool):
         
         complexity_desc = self.complexity_config.get(complexity, {}).get('description', complexity)
         
-        prompt_template = f"""
-基于{main_data['name']}场景的{sub_data['name']}任务，生成{complexity}级别的问题。
-
-## 场景描述
-{main_data['description']}
-
-## 任务焦点
-{', '.join(sub_data.get('focus_areas', []))}
-
-## SQL操作要求
-必须使用以下操作: {', '.join(operations)}
-
-## 复杂度要求
-{complexity_desc}
-
-请生成一个符合上述要求的自然语言问题。
-"""
-        return prompt_template.strip()
+        # 使用统一的提示词管理
+        try:
+            prompt = self.prompt_manager.get_tool_prompt(
+                "scenario_operation",
+                main_name=main_data['name'],
+                sub_name=sub_data['name'],
+                complexity=complexity,
+                main_description=main_data['description'],
+                focus_areas=sub_data.get('focus_areas', []),
+                operations=operations,
+                complexity_desc=complexity_desc
+            )
+            return prompt
+        except Exception as e:
+            logger.warning(f"Failed to load prompt template: {e}")
+            # 后备方案：简化的提示词
+            return f"基于{main_data['name']}场景生成{complexity}级别的问题，使用操作：{', '.join(operations)}"
     
     async def _arun(self, mode: str = "get_all_combinations", iteration: int = 0, **kwargs) -> Dict[str, Any]:
         """异步执行（可选实现）"""

@@ -52,29 +52,6 @@ class BaseSemanticSQLTool(BaseTool):
             except Exception as e:
                 self.logger.warning(f"Failed to save to memory: {e}")
     
-    def get_schema_info(self) -> Dict[str, Any]:
-        """获取数据库结构信息"""
-        return self.get_from_memory("schema_info")
-    
-    def get_domain_info(self) -> Dict[str, Any]:
-        """获取领域信息"""
-        return self.get_from_memory("domain_info")
-    
-    def get_field_classification(self) -> Dict[str, Any]:
-        """获取字段分类信息"""
-        return self.get_from_memory("field_classification")
-    
-    def get_column_meanings(self) -> Dict[str, Any]:
-        """获取列含义信息"""
-        return self.get_from_memory("column_meanings")
-    
-    def get_table_meanings(self) -> Dict[str, Any]:
-        """获取表含义信息"""
-        return self.get_from_memory("table_meanings")
-    
-    def get_er_relations(self) -> Dict[str, Any]:
-        """获取ER关系信息"""
-        return self.get_from_memory("er_relations")
     
     def run(self, *args, **kwargs) -> Any:
         """执行工具并清理输出"""

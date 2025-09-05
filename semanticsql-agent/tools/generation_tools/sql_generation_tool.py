@@ -12,8 +12,8 @@ import json
 
 from models.base import SQLOperation
 from models.exceptions import ToolExecutionError, LLMError
-from utils.database import DatabaseManager
 from prompts.manager import PromptManager
+from ..base_tool import BaseSemanticSQLTool
 
 
 class SQLGenerationInput(BaseModel):
@@ -44,31 +44,17 @@ class GeneratedSQL(BaseModel):
     complexity: str = Field(default="medium", description="复杂度")
 
 
-class SQLGenerationTool(BaseTool):
-    """生成SQL查询语句"""
+class SQLGenerationTool(BaseSemanticSQLTool):
+    """SQL生成工具 - 从记忆中获取信息并生成SQL"""
     
     name: str = "sql_generation"
-    description: str = "根据自然语言问题和数据库结构生成对应的SQL查询"
+    description: str = "根据自然语言问题生成SQL查询。自动从记忆中获取schema和分析结果"
     args_schema: Type[BaseModel] = SQLGenerationInput
     
-    # 定义必需的字段
-    llm: Optional[ChatOpenAI] = Field(default=None, exclude=True)
-    db_manager: Optional[DatabaseManager] = Field(default=None, exclude=True)
-    prompt_manager: Optional[PromptManager] = Field(default=None, exclude=True)
     
-    # Pydantic v2配置
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    
-    def __init__(self, llm: ChatOpenAI, db_manager: Optional[DatabaseManager] = None):
-        super().__init__()
-        self.llm = llm
-        self.db_manager = db_manager
-        self.prompt_manager = PromptManager()
-        self.memory = None  # 将由Agent设置
-    
-    def set_memory(self, memory):
-        """设置记忆引用"""
-        self.memory = memory
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        object.__setattr__(self, 'prompt_manager', PromptManager())
     
     def _run(
         self,
@@ -82,33 +68,33 @@ class SQLGenerationTool(BaseTool):
     ) -> Dict[str, Any]:
         """生成SQL查询"""
         try:
-            # 处理默认值
-            if memory is None:
-                memory = {}
-            if operations is None:
-                operations = []
-            if scenario is None:
-                scenario = {}
-            
-            # 从记忆中获取必要信息
-            db_analysis = memory.get("db_analysis", {})
-            schema_info = db_analysis.get("schema_info", {})
-            domain_info = db_analysis.get("domain_info", {})
-            field_classification = db_analysis.get("field_classification", {})
+            # 从记忆中获取所需信息
+            schema_info = self.get_from_memory("schema_extraction")
+            domain_analysis = self.get_from_memory("domain_analysis")
+            table_meanings = self.get_from_memory("table_meaning_analysis")
+            column_meanings = self.get_from_memory("column_meaning_analysis")
+            er_relations = self.get_from_memory("er_analysis")
+            field_classification = self.get_from_memory("field_analysis")
             
             if not schema_info:
                 raise ToolExecutionError(
                     tool_name=self.name,
-                    reason="未找到数据库结构信息，请先执行数据库分析"
+                    message="无法获取数据库结构信息",
+                    details="需要先运行schema_extraction工具"
                 )
             
-            # 构建提示词上下文
-            context = self._build_context(
-                schema_info, domain_info, field_classification, operations
-            )
+            # 从记忆中获取LLM（如果可用）
+            llm = self.get_from_memory("llm")
             
-            # 生成SQL
-            sql = self._generate_sql_with_llm(question, context, dialect)
+            if llm:
+                # 使用LLM生成SQL
+                context = self._build_context(
+                    schema_info, domain_analysis, field_classification
+                )
+                sql = self._generate_sql_with_llm(question, context, dialect)
+            else:
+                # 使用规则生成SQL（简化版本）
+                sql = self._generate_sql_by_rules(question, schema_info, dialect)
             
             # 后处理
             sql = self._postprocess_sql(sql, dialect)
@@ -116,7 +102,8 @@ class SQLGenerationTool(BaseTool):
             # 分析SQL
             analysis = self._analyze_sql(sql, schema_info)
             
-            return {
+            # 构建结果
+            result = {
                 "sql": sql,
                 "dialect": dialect,
                 "tables_used": analysis["tables"],
@@ -125,6 +112,13 @@ class SQLGenerationTool(BaseTool):
                 "has_join": analysis["has_join"],
                 "complexity": analysis["complexity"]
             }
+            
+            # 保存生成的SQL到记忆
+            self.save_to_memory("current_sql", sql)
+            self.save_to_memory("current_question", question)
+            self.save_to_memory("sql_generation_result", result)
+            
+            return json.dumps(result, ensure_ascii=False)
             
         except LLMError:
             raise
@@ -308,6 +302,38 @@ class SQLGenerationTool(BaseTool):
             "has_join": has_join,
             "complexity": complexity
         }
+    
+    def _generate_sql_by_rules(self, question: str, schema_info: Dict[str, Any], dialect: str) -> str:
+        """基于简单规则生成SQL（当LLM不可用时的备用方案）"""
+        question_lower = question.lower()
+        tables = schema_info.get("tables", {})
+        
+        if not tables:
+            return "SELECT 1;"
+        
+        # 选择主表（通常选择第一个表）
+        main_table = list(tables.keys())[0]
+        table_info = tables[main_table]
+        columns = list(table_info.get("columns", {}).keys())
+        
+        # 基本SELECT语句
+        if "count" in question_lower or "数量" in question_lower or "多少" in question_lower:
+            sql = f"SELECT COUNT(*) FROM {main_table};"
+        elif "all" in question_lower or "所有" in question_lower or "全部" in question_lower:
+            if len(columns) > 5:
+                # 如果列太多，只选择前5列
+                selected_cols = ", ".join(columns[:5])
+            else:
+                selected_cols = ", ".join(columns) if columns else "*"
+            sql = f"SELECT {selected_cols} FROM {main_table};"
+        else:
+            # 默认查询
+            if columns:
+                sql = f"SELECT {columns[0]} FROM {main_table};"
+            else:
+                sql = f"SELECT * FROM {main_table};"
+        
+        return sql
     
     def _estimate_complexity(
         self,

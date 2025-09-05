@@ -582,7 +582,6 @@ Final Answer: 完整的训练样本
 | BaseTool | langchain.tools.BaseTool | 工具基类 |
 | BaseAgent | langchain.agents.AgentExecutor | Agent 执行器 |
 | Memory | langchain.memory.BaseMemory | 记忆基类 |
-| LLMClient | langchain.chat_models.ChatOpenAI | LLM 客户端 |
 | Callbacks | langchain.callbacks.BaseCallbackHandler | 回调处理器 |
 | PromptManager | langchain.prompts.BasePromptTemplate | 提示词模板 |
 

@@ -5,49 +5,41 @@ SQL验证工具 - 验证SQL语法正确性
 
 from typing import Dict, Any, Type, List, Optional
 import sqlparse
-from langchain.tools import BaseTool
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field
+import json
 
 from models.exceptions import ToolExecutionError
-from utils.database import DatabaseManager
+from ..base_tool import BaseSemanticSQLTool
 
 
 class SQLValidationInput(BaseModel):
     """SQL验证输入"""
     sql: str = Field(description="要验证的SQL语句")
-    memory: Dict[str, Any] = Field(description="包含数据库分析结果的记忆")
 
 
-class SQLValidationTool(BaseTool):
+class SQLValidationTool(BaseSemanticSQLTool):
     """SQL语法验证工具"""
     
     name: str = "sql_validation"
-    description: str = "验证SQL语句的语法正确性"
+    description: str = "验证SQL语句的语法正确性。自动从记忆中获取数据库管理器"
     args_schema: Type[BaseModel] = SQLValidationInput
     
-    # 定义必需的字段
-    db_manager: Optional[DatabaseManager] = Field(default=None, exclude=True)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
     
-    # Pydantic v2配置
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    
-    def __init__(self, db_manager: DatabaseManager):
-        super().__init__()
-        self.db_manager = db_manager
-    
-    def _run(self, sql: str, memory: Dict[str, Any],
-        **kwargs  # 接受额外的参数如 verbose
-    ) -> Dict[str, Any]:
+    def _run(self, sql: str, **kwargs) -> str:
         """验证SQL"""
         try:
             # 基本语法验证
             parsed = sqlparse.parse(sql)
             if not parsed:
-                return {
+                result = {
                     "valid": False,
                     "error": "无法解析SQL语句",
                     "suggestions": ["检查SQL语法是否完整"]
                 }
+                self.save_to_memory("sql_validation_result", result)
+                return json.dumps(result, ensure_ascii=False)
             
             # 格式化SQL
             formatted_sql = sqlparse.format(
@@ -59,12 +51,17 @@ class SQLValidationTool(BaseTool):
             # 使用数据库的EXPLAIN验证
             validation_result = self._validate_with_explain(formatted_sql)
             
-            return {
+            result = {
                 "valid": validation_result["valid"],
                 "formatted_sql": formatted_sql,
                 "error": validation_result.get("error"),
                 "suggestions": validation_result.get("suggestions", [])
             }
+            
+            # 保存验证结果到记忆
+            self.save_to_memory("sql_validation_result", result)
+            
+            return json.dumps(result, ensure_ascii=False)
             
         except Exception as e:
             raise ToolExecutionError(
@@ -75,9 +72,18 @@ class SQLValidationTool(BaseTool):
     def _validate_with_explain(self, sql: str) -> Dict[str, Any]:
         """使用EXPLAIN验证SQL"""
         try:
+            # 从记忆中获取数据库管理器
+            db_manager = self.get_from_memory("database_manager")
+            if not db_manager:
+                self.logger.warning("数据库管理器不可用，跳过EXPLAIN验证")
+                return {
+                    "valid": True,
+                    "warning": "无法执行EXPLAIN验证，仅进行语法检查"
+                }
+            
             # 使用EXPLAIN检查SQL
             explain_sql = f"EXPLAIN {sql}"
-            result = self.db_manager.execute_query(explain_sql)
+            result = db_manager.execute_query(explain_sql)
             
             return {
                 "valid": True,
@@ -111,6 +117,6 @@ class SQLValidationTool(BaseTool):
         
         return suggestions
     
-    async def _arun(self, sql: str, memory: Dict[str, Any]) -> Dict[str, Any]:
+    async def _arun(self, sql: str, **kwargs) -> str:
         """异步执行（当前实现为同步）"""
-        return self._run(sql, memory)
+        return self._run(sql, **kwargs)

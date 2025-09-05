@@ -1,5 +1,6 @@
 """
-训练数据相关模型
+训练数据相关模型 - Agent专用
+从 models/training.py 迁移到此处，遵循就近原则
 """
 
 from pydantic import BaseModel, Field
@@ -7,7 +8,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 import uuid
 
-from .base import DifficultyLevel
+from models.base import DifficultyLevel
 
 
 class GeneratedExample(BaseModel):

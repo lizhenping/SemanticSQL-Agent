@@ -4,11 +4,11 @@ SQL执行工具 - 执行SQL并返回结果
 """
 
 from typing import Dict, Any, Type, List, Optional
-from langchain.tools import BaseTool
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field
+import json
 
 from models.exceptions import ToolExecutionError, SQLExecutionError
-from utils.database import DatabaseManager
+from ..base_tool import BaseSemanticSQLTool
 
 
 class SQLExecutionInput(BaseModel):
@@ -17,52 +17,60 @@ class SQLExecutionInput(BaseModel):
     limit: int = Field(default=100, description="结果限制")
 
 
-class SQLExecutionTool(BaseTool):
+class SQLExecutionTool(BaseSemanticSQLTool):
     """SQL执行工具"""
     
     name: str = "sql_execution"
-    description: str = "执行SQL查询并返回结果"
+    description: str = "执行SQL查询并返回结果。自动从记忆中获取数据库连接"
     args_schema: Type[BaseModel] = SQLExecutionInput
     
-    # 定义必需的字段
-    db_manager: Optional[DatabaseManager] = Field(default=None, exclude=True)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
     
-    # Pydantic v2配置
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    
-    def __init__(self, db_manager: DatabaseManager):
-        super().__init__()
-        self.db_manager = db_manager
-    
-    def _run(self, sql: str, limit: int = 100,
-        **kwargs  # 接受额外的参数如 verbose
-    ) -> Dict[str, Any]:
+    def _run(self, sql: str, limit: int = 100, **kwargs) -> str:
         """执行SQL"""
         try:
+            # 从记忆中获取数据库管理器
+            db_manager = self.get_from_memory("database_manager")
+            if not db_manager:
+                raise ToolExecutionError(
+                    tool_name=self.name,
+                    message="数据库管理器未初始化",
+                    details="需要先在Agent记忆中设置database_manager"
+                )
+            
             # 添加LIMIT如果没有
             sql_lower = sql.lower()
             if 'limit' not in sql_lower and sql_lower.startswith('select'):
                 sql = sql.rstrip(';') + f' LIMIT {limit};'
             
             # 执行查询
-            result = self.db_manager.execute_query(sql)
+            result = db_manager.execute_query(sql)
             
-            # 返回结果
-            return {
+            # 构建结果
+            execution_result = {
                 "success": True,
                 "data": result,
                 "row_count": len(result) if result else 0,
                 "truncated": len(result) == limit if result else False
             }
             
+            # 保存执行结果到记忆
+            self.save_to_memory("execution_result", execution_result)
+            
+            return json.dumps(execution_result, ensure_ascii=False)
+            
         except Exception as e:
-            return {
+            self.logger.error(f"SQL执行失败: {e}")
+            error_result = {
                 "success": False,
                 "error": str(e),
                 "data": [],
                 "row_count": 0
             }
+            
+            # 保存错误结果到记忆
+            self.save_to_memory("execution_result", error_result)
+            
+            return json.dumps(error_result, ensure_ascii=False)
     
-    async def _arun(self, sql: str, limit: int = 100) -> Dict[str, Any]:
-        """异步执行（当前实现为同步）"""
-        return self._run(sql, limit)
