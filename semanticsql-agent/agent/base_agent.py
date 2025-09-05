@@ -15,7 +15,7 @@ from langchain.tools import BaseTool
 from langchain_core.memory import BaseMemory
 
 from config.settings import Settings
-from config.database import DatabaseConfig
+from utils.database_config import DatabaseConfig
 from models.agent import AgentExecution, AgentStep
 from utils.trajectory import TrajectoryRecorder
 from utils.callbacks import TrajectoryCallbackHandler

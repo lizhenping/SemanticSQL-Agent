@@ -29,9 +29,8 @@
 - [TableMeaningTool](./tools模块/分析工具/TableMeaningTool.md) - 表业务含义分析
 - [ERAnalysisTool](./tools模块/分析工具/ERAnalysisTool.md) - 实体关系分析
 
-##### 生成工具（4个）
-- [ScenarioTool](./tools模块/生成工具/ScenarioTool.md) - 场景生成（基于预定义模板）
-- [OperationSelectionTool](./tools模块/生成工具/OperationSelectionTool.md) - SQL操作选择
+##### 生成工具（3个）
+- [ScenarioOperationTool](./tools模块/生成工具/ScenarioOperationTool.md) - 场景-操作组合生成（核心工具）
 - [QuestionGenerationTool](./tools模块/生成工具/QuestionGenerationTool.md) - 自然语言问题生成
 - [SQLGenerationTool](./tools模块/生成工具/SQLGenerationTool.md) - SQL 查询生成
 

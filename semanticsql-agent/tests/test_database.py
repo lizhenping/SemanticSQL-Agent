@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import Mock, patch, MagicMock
 
 from utils.database import DatabaseManager
-from config.database import DatabaseConfig, DatabaseType
+from utils.database_config import DatabaseConfig, DatabaseType
 
 
 class TestDatabaseManager:

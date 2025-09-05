@@ -12,7 +12,7 @@ from models.exceptions import (
     SchemaExtractionError,
 )
 from utils.database import DatabaseManager
-from .base_analysis_tool import BaseAnalysisTool
+from ..base_tool import BaseSemanticSQLTool
 
 
 class SchemaExtractionInput(BaseModel):
@@ -23,23 +23,16 @@ class SchemaExtractionInput(BaseModel):
     tables: Optional[List[str]] = Field(default=None, description="指定要提取的表")
 
 
-class SchemaExtractionTool(BaseAnalysisTool):
+class SchemaExtractionTool(BaseSemanticSQLTool):
     """数据库结构提取工具"""
 
     name: str = "schema_extraction"
     description: str = "提取数据库的完整结构信息，包括表、列、索引、外键等。需要参数：database_name（数据库名称）"
     args_schema: Type[BaseModel] = SchemaExtractionInput
-    
-    # 正确定义db_manager字段
-    db_manager: Optional[DatabaseManager] = Field(default=None, exclude=True)
-    
-    # Pydantic v2配置
-    model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    def __init__(self, db_manager: DatabaseManager, **kwargs):
+    def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        # 直接赋值，因为已经定义了字段
-        self.db_manager = db_manager
+        # DatabaseManager will be obtained from memory when needed
 
     def _run(
         self,
@@ -47,17 +40,21 @@ class SchemaExtractionTool(BaseAnalysisTool):
         include_views: bool = False,
         sample_data: bool = True,
         tables: Optional[List[str]] = None,
-        **kwargs  # 接受额外的参数如 verbose
+        **kwargs
     ) -> str:
         """执行数据库结构提取"""
         try:
-            if not self.db_manager:
+            # Get database manager from memory
+            db_manager = self.get_from_memory("database_manager")
+            if not db_manager:
                 raise ToolExecutionError(
-                    tool_name=self.name, reason="数据库管理器未初始化"
+                    tool_name=self.name, 
+                    message="数据库管理器未初始化",
+                    details="需要先在Agent记忆中设置database_manager"
                 )
 
             # 获取表列表
-            all_tables = tables if tables else self.db_manager.get_tables()
+            all_tables = tables if tables else db_manager.get_tables()
             
             # 提取每个表的信息
             table_infos = {}
@@ -129,7 +126,7 @@ class SchemaExtractionTool(BaseAnalysisTool):
             FROM information_schema.tables 
             WHERE table_schema = :database_name AND table_name = :table_name
             """
-            result = self.db_manager._execute_query(
+            result = db_manager._execute_query(
                 query, {"database_name": database_name, "table_name": table_name}
             )
 
@@ -165,7 +162,7 @@ class SchemaExtractionTool(BaseAnalysisTool):
             ORDER BY ordinal_position
             """
 
-            result = self.db_manager._execute_query(
+            result = db_manager._execute_query(
                 query, {"database_name": database_name, "table_name": table_name}
             )
 
@@ -199,7 +196,7 @@ class SchemaExtractionTool(BaseAnalysisTool):
             ORDER BY ordinal_position
             """
 
-            result = self.db_manager._execute_query(
+            result = db_manager._execute_query(
                 query, {"database_name": database_name, "table_name": table_name}
             )
 
@@ -234,8 +231,12 @@ class SchemaExtractionTool(BaseAnalysisTool):
     def _get_sample_data(self, table_name: str, limit: int = 5) -> List[Dict[str, Any]]:
         """获取表的样本数据"""
         try:
+            db_manager = self.get_from_memory("database_manager")
+            if not db_manager:
+                return []
+                
             query = f"SELECT * FROM {table_name} LIMIT {limit}"
-            result = self.db_manager._execute_query(query)
+            result = db_manager._execute_query(query)
             if result.get("success") and result.get("data"):
                 return self._serialize_sample_data(result["data"])
             return []

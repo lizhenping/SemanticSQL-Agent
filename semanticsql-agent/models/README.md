@@ -82,8 +82,7 @@ models/
 - `ERAnalysisInput` → er_analysis_tool.py
 
 ### 生成工具
-- `QueryScenario` → scenario_tool.py
-- `ScenarioToolInput` → scenario_tool.py
+- `ScenarioOperationInput` → scenario_operation_tool.py
 - `QuestionGenerationInput` → question_generation_tool.py
 - `GeneratedQuestion` → question_generation_tool.py
 - `SQLGenerationInput` → sql_generation_tool.py

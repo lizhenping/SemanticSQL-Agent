@@ -29,27 +29,41 @@ class ScenarioOperationInput(BaseModel):
 class ScenarioOperationTool(BaseTool):
     """场景-操作组合生成工具（核心工具）"""
     
-    name = "scenario_operation_generation"
-    description = "生成所有场景-操作组合，内部处理三层for循环遍历，为每个组合生成专用提示词"
-    args_schema = ScenarioOperationInput
+    name: str = "scenario_operation_generation"
+    description: str = "生成所有场景-操作组合，内部处理三层for循环遍历，为每个组合生成专用提示词"
+    args_schema: type = ScenarioOperationInput
     
-    def __init__(self):
-        super().__init__()
-        self.logger = logging.getLogger(__name__)
-        
-        # 配置文件路径
-        self.config_dir = Path(__file__).parent.parent.parent / 'config'
-        
-        # 加载配置
-        try:
-            self.scenarios = self._load_yaml('scenarios.yaml')
-            self.operation_mapping = self._load_yaml('operation_mapping.yaml')
-            self.complexity_config = self._load_yaml('complexity.yaml')
-            self.logger.info("成功加载场景和操作配置文件")
-        except Exception as e:
-            self.logger.error(f"加载配置文件失败: {e}")
-            # 使用默认配置
-            self._init_default_configs()
+    @property
+    def config_dir(self) -> Path:
+        """获取配置目录路径"""
+        return Path(__file__).parent.parent.parent / 'prompts' / 'templates' / 'generation'
+    
+    @property 
+    def scenarios(self) -> Dict:
+        """延迟加载scenarios配置"""
+        if not hasattr(self, '_scenarios'):
+            self._scenarios = self._load_yaml('scenarios.yaml')
+            if not self._scenarios:
+                self._init_default_scenarios()
+        return self._scenarios
+    
+    @property
+    def operation_mapping(self) -> Dict:
+        """延迟加载operation_mapping配置"""
+        if not hasattr(self, '_operation_mapping'):
+            self._operation_mapping = self._load_yaml('operation_mapping.yaml')
+            if not self._operation_mapping:
+                self._init_default_operation_mapping()
+        return self._operation_mapping
+    
+    @property
+    def complexity_config(self) -> Dict:
+        """延迟加载complexity_config配置"""  
+        if not hasattr(self, '_complexity_config'):
+            self._complexity_config = self._load_yaml('complexity.yaml')
+            if not self._complexity_config:
+                self._init_default_complexity_config()
+        return self._complexity_config
     
     def _load_yaml(self, filename: str) -> Dict:
         """加载YAML配置文件"""
@@ -59,15 +73,15 @@ class ScenarioOperationTool(BaseTool):
                 with open(config_path, 'r', encoding='utf-8') as f:
                     return yaml.safe_load(f)
             else:
-                self.logger.warning(f"配置文件不存在: {config_path}")
+                logger.warning(f"配置文件不存在: {config_path}")
                 return {}
         except Exception as e:
-            self.logger.error(f"加载配置文件失败 {filename}: {e}")
+            logger.error(f"加载配置文件失败 {filename}: {e}")
             return {}
     
-    def _init_default_configs(self):
-        """初始化默认配置"""
-        self.scenarios = {
+    def _init_default_scenarios(self):
+        """初始化默认scenarios配置"""
+        self._scenarios = {
             "sales_analysis": {
                 "name": "销售分析",
                 "description": "销售数据分析和统计",
@@ -93,15 +107,19 @@ class ScenarioOperationTool(BaseTool):
                 }
             }
         }
-        
-        self.operation_mapping = {
+    
+    def _init_default_operation_mapping(self):
+        """初始化默认operation_mapping配置"""
+        self._operation_mapping = {
             "simple": ["SELECT", "WHERE"],
             "moderate": ["SELECT", "GROUP BY", "HAVING"],
             "complex": ["SELECT", "JOIN", "SUBQUERY"],
             "expert": ["SELECT", "WINDOW_FUNCTION", "CTE"]
         }
-        
-        self.complexity_config = {
+    
+    def _init_default_complexity_config(self):
+        """初始化默认complexity_config配置"""
+        self._complexity_config = {
             "simple": {"level": 1, "description": "基础查询"},
             "moderate": {"level": 2, "description": "聚合分析"},
             "complex": {"level": 3, "description": "多表关联"},
@@ -131,7 +149,7 @@ class ScenarioOperationTool(BaseTool):
                 }
                 
         except Exception as e:
-            self.logger.error(f"场景-操作生成失败: {e}")
+            logger.error(f"场景-操作生成失败: {e}")
             return {
                 "success": False,
                 "error": str(e)
@@ -187,7 +205,7 @@ class ScenarioOperationTool(BaseTool):
             "generation_strategy": "三层遍历：主场景×子场景×复杂度"
         }
         
-        self.logger.info(f"生成了 {len(all_combinations)} 个场景-操作组合")
+        logger.info(f"生成了 {len(all_combinations)} 个场景-操作组合")
         return result
     
     def _generate_single_combination(self, iteration: int) -> Dict[str, Any]:

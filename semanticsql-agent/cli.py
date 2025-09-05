@@ -14,7 +14,7 @@ import click
 import yaml
 
 from config.settings import Settings
-from config.database import DatabaseConfig
+from utils.database_config import DatabaseConfig
 from agent.sql_agent import SQLAgent
 from models.exceptions import (
     DatabaseConnectionError,

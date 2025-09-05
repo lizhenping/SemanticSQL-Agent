@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 
 from agent.data_generation_agent import DataGenerationAgent
 from config.settings import Settings
-from config.database import DatabaseConfig
+from utils.database_config import DatabaseConfig
 from models.exceptions import AgentExecutionError
 
 
@@ -67,7 +67,7 @@ class TestDataGenerationAgent:
         expected_tools = [
             'schema_extraction', 'domain_analysis', 'field_classification',
             'column_meaning_analysis', 'table_meaning_analysis', 'er_analysis',
-            'scenario_tool', 'operation_selection', 'question_generation',
+            'scenario_operation_generation', 'question_generation',
             'sql_generation', 'sql_validation', 'sql_execution',
             'sql_reflection', 'sequential_thinking'
         ]
@@ -177,8 +177,7 @@ class TestDataGenerationAgent:
                     task_arg = mock_run.call_args[0][0]
                     
                     # 验证任务包含正确的流程描述
-                    assert "scenario_tool" in task_arg
-                    assert "operation_selection" in task_arg
+                    assert "scenario_operation_generation" in task_arg
                     assert "question_generation" in task_arg
                     assert "sql_generation" in task_arg
                     assert "sql_reflection" in task_arg
@@ -292,7 +291,7 @@ class TestDataGenerationAgent:
         mock_trajectories = [
             {
                 "type": "tool_end",
-                "tool_name": "scenario_tool",
+                "tool_name": "scenario_operation_generation",
                 "output": json.dumps({
                     "scenario_id": "test_scenario",
                     "category": "测试场景",

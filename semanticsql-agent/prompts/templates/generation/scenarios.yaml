@@ -1,0 +1,71 @@
+# 场景配置文件
+# 定义所有的分析场景和子场景
+
+scenario_types:
+  - sales_analysis
+  - inventory_management
+  - customer_analysis
+  - financial_analysis
+
+total_scenarios: 4
+total_sub_scenarios: 12
+
+# 销售分析场景
+sales_analysis:
+  name: "销售分析"
+  description: "销售数据的统计分析和趋势预测"
+  sub_scenarios:
+    sales_statistics:
+      name: "销售统计"
+      focus_areas: ["销售额", "订单量", "客户数", "平均订单价值"]
+    sales_trends:
+      name: "销售趋势"
+      focus_areas: ["时间趋势", "增长率", "季节性变化", "同比环比"]
+    sales_ranking:
+      name: "销售排名"
+      focus_areas: ["产品排名", "客户排名", "地区排名", "销售员排名"]
+
+# 库存管理场景
+inventory_management:
+  name: "库存管理"
+  description: "库存状态监控和优化分析"
+  sub_scenarios:
+    inventory_status:
+      name: "库存状态"
+      focus_areas: ["库存量", "库存预警", "缺货分析", "库存周转"]
+    restock_analysis:
+      name: "补货分析"
+      focus_areas: ["补货需求", "补货周期", "采购建议", "成本分析"]
+    inventory_turnover:
+      name: "库存周转"
+      focus_areas: ["周转率", "滞销商品", "快销商品", "库存成本"]
+
+# 客户分析场景
+customer_analysis:
+  name: "客户分析"
+  description: "客户行为分析和价值评估"
+  sub_scenarios:
+    customer_behavior:
+      name: "客户行为"
+      focus_areas: ["购买频次", "购买偏好", "活跃度", "流失分析"]
+    customer_value:
+      name: "客户价值"
+      focus_areas: ["客户终身价值", "RFM分析", "客户分层", "贡献度"]
+    customer_retention:
+      name: "客户留存"
+      focus_areas: ["留存率", "流失率", "复购率", "忠诚度"]
+
+# 财务分析场景
+financial_analysis:
+  name: "财务分析"
+  description: "财务数据分析和盈利能力评估"
+  sub_scenarios:
+    revenue_analysis:
+      name: "收入分析"
+      focus_areas: ["总收入", "收入结构", "收入增长", "盈利能力"]
+    cost_analysis:
+      name: "成本分析"
+      focus_areas: ["成本结构", "成本控制", "毛利率", "费用分析"]
+    profit_analysis:
+      name: "利润分析"
+      focus_areas: ["净利润", "利润率", "利润增长", "盈利预测"]

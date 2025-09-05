@@ -11,7 +11,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
-from config.database import DatabaseConfig
+from utils.database_config import DatabaseConfig
 
 
 class DatabaseManager:

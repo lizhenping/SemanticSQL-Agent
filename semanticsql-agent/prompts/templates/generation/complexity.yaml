@@ -1,0 +1,127 @@
+# 复杂度配置文件
+# 定义不同复杂度级别的详细描述和要求
+
+simple:
+  level: 1
+  name: "简单查询"
+  description: "基础的数据查询和过滤"
+  characteristics:
+    - "单表查询为主"
+    - "使用基本的WHERE条件"
+    - "简单的SELECT字段选择"
+    - "可包含基本的ORDER BY排序"
+  sql_operations:
+    - "SELECT"
+    - "WHERE"
+    - "ORDER BY"
+    - "LIMIT"
+  complexity_score: 1.0
+  expected_lines: "1-3行SQL"
+  difficulty_level: "入门级"
+
+moderate:
+  level: 2
+  name: "聚合分析"
+  description: "数据统计和分组分析"
+  characteristics:
+    - "使用聚合函数(COUNT, SUM, AVG等)"
+    - "GROUP BY分组统计"
+    - "HAVING条件过滤"
+    - "多个统计指标组合"
+  sql_operations:
+    - "SELECT"
+    - "GROUP BY"
+    - "HAVING"
+    - "COUNT", "SUM", "AVG", "MAX", "MIN"
+    - "ORDER BY"
+  complexity_score: 2.0
+  expected_lines: "3-8行SQL"
+  difficulty_level: "初级"
+
+complex:
+  level: 3
+  name: "关联查询"
+  description: "多表关联和子查询"
+  characteristics:
+    - "多表JOIN关联"
+    - "子查询嵌套"
+    - "UNION联合查询"
+    - "复杂的条件逻辑"
+  sql_operations:
+    - "SELECT"
+    - "JOIN (INNER, LEFT, RIGHT)"
+    - "SUBQUERY"
+    - "UNION"
+    - "EXISTS", "IN"
+  complexity_score: 3.0
+  expected_lines: "8-15行SQL"
+  difficulty_level: "中级"
+
+expert:
+  level: 4
+  name: "高级特性"
+  description: "窗口函数和高级SQL特性"
+  characteristics:
+    - "窗口函数(ROW_NUMBER, RANK等)"
+    - "公共表表达式(CTE)"
+    - "CASE WHEN条件语句"
+    - "递归查询"
+  sql_operations:
+    - "SELECT"
+    - "WINDOW FUNCTIONS"
+    - "CTE (WITH clause)"
+    - "CASE WHEN"
+    - "RECURSIVE"
+  complexity_score: 4.0
+  expected_lines: "15+行SQL"
+  difficulty_level: "高级"
+
+# 复杂度评估标准
+evaluation_criteria:
+  syntax_complexity:
+    simple: "基础语法"
+    moderate: "聚合函数"
+    complex: "多表关联"
+    expert: "高级特性"
+  
+  logic_complexity:
+    simple: "直接查询"
+    moderate: "分组统计"
+    complex: "嵌套逻辑"
+    expert: "复杂业务逻辑"
+  
+  performance_impact:
+    simple: "低"
+    moderate: "中等"
+    complex: "较高"
+    expert: "高"
+
+# 问题生成指导
+question_generation_guide:
+  simple:
+    patterns:
+      - "查询所有的..."
+      - "显示...的信息"
+      - "找出满足...条件的..."
+    keywords: ["查询", "显示", "列出", "找出"]
+  
+  moderate:
+    patterns:
+      - "统计...的总数/总额"
+      - "按...分组统计..."
+      - "计算...的平均值"
+    keywords: ["统计", "计算", "分组", "汇总"]
+  
+  complex:
+    patterns:
+      - "查询...和...关联的信息"
+      - "找出...中满足...条件的..."
+      - "比较...和...的差异"
+    keywords: ["关联", "比较", "匹配", "对比"]
+  
+  expert:
+    patterns:
+      - "排名前...的..."
+      - "计算...的累计/移动平均"
+      - "分析...的趋势变化"
+    keywords: ["排名", "趋势", "累计", "分析"]

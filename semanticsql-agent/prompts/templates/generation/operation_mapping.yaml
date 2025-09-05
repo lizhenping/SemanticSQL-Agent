@@ -1,0 +1,64 @@
+# SQL操作映射配置
+# 定义不同复杂度级别对应的SQL操作组合
+
+# 复杂度级别说明
+complexity_levels:
+  simple: 1
+  moderate: 2
+  complex: 3
+  expert: 4
+
+# 操作映射
+simple:
+  operations: ["SELECT", "WHERE"]
+  description: "基础查询，主要使用选择和过滤条件"
+  examples:
+    - "SELECT * FROM orders WHERE order_date >= '2024-01-01'"
+    - "SELECT customer_name FROM customers WHERE city = '北京'"
+
+moderate:
+  operations: ["SELECT", "GROUP BY", "HAVING", "ORDER BY"]
+  description: "聚合分析，包含分组统计和排序"
+  examples:
+    - "SELECT customer_id, COUNT(*) as order_count FROM orders GROUP BY customer_id"
+    - "SELECT category, SUM(amount) as total FROM sales GROUP BY category HAVING total > 10000"
+
+complex:
+  operations: ["SELECT", "JOIN", "SUBQUERY", "UNION"]
+  description: "多表关联和子查询"
+  examples:
+    - "SELECT o.*, c.customer_name FROM orders o JOIN customers c ON o.customer_id = c.id"
+    - "SELECT * FROM products WHERE price > (SELECT AVG(price) FROM products)"
+
+expert:
+  operations: ["SELECT", "WINDOW_FUNCTION", "CTE", "CASE_WHEN"]
+  description: "高级特性，包含窗口函数和公共表表达式"
+  examples:
+    - "SELECT *, ROW_NUMBER() OVER (PARTITION BY category ORDER BY price DESC) as rank FROM products"
+    - "WITH monthly_sales AS (SELECT DATE_FORMAT(order_date, '%Y-%m') as month, SUM(amount) as total FROM orders GROUP BY month) SELECT * FROM monthly_sales"
+
+# 场景与操作的关联规则
+scenario_operation_rules:
+  sales_analysis:
+    simple: ["SELECT", "WHERE"]
+    moderate: ["SELECT", "GROUP BY", "HAVING", "ORDER BY"]
+    complex: ["SELECT", "JOIN", "SUBQUERY", "GROUP BY"]
+    expert: ["SELECT", "WINDOW_FUNCTION", "CTE", "CASE_WHEN"]
+  
+  inventory_management:
+    simple: ["SELECT", "WHERE"]
+    moderate: ["SELECT", "GROUP BY", "HAVING"]
+    complex: ["SELECT", "JOIN", "SUBQUERY"]
+    expert: ["SELECT", "WINDOW_FUNCTION", "CTE"]
+  
+  customer_analysis:
+    simple: ["SELECT", "WHERE", "ORDER BY"]
+    moderate: ["SELECT", "GROUP BY", "HAVING", "ORDER BY"]
+    complex: ["SELECT", "JOIN", "SUBQUERY", "GROUP BY"]
+    expert: ["SELECT", "WINDOW_FUNCTION", "CTE", "CASE_WHEN"]
+  
+  financial_analysis:
+    simple: ["SELECT", "WHERE"]
+    moderate: ["SELECT", "GROUP BY", "HAVING", "ORDER BY"]
+    complex: ["SELECT", "JOIN", "SUBQUERY", "UNION"]
+    expert: ["SELECT", "WINDOW_FUNCTION", "CTE", "CASE_WHEN"]

@@ -166,6 +166,5 @@ print(f"关键要素: {result['key_elements']}")
 ---
 
 相关文档：
-- [ScenarioTool](./ScenarioTool.md)
-- [OperationSelectionTool](./OperationSelectionTool.md)
+- [ScenarioOperationTool](./ScenarioOperationTool.md) - 场景-操作组合生成（核心工具）
 - [SQLGenerationTool](./SQLGenerationTool.md)

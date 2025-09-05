@@ -8,7 +8,7 @@ from datetime import datetime
 
 from agent.smart_sql_agent import SmartSQLAgent
 from config.settings import Settings
-from config.database import DatabaseConfig, DatabaseType
+from utils.database_config import DatabaseConfig, DatabaseType
 from models.schemas import AgentStep, AgentStepType, SQLQueryResult
 
 

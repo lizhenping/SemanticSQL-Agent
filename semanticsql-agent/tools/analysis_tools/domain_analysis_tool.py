@@ -1,17 +1,16 @@
 """
 领域分析工具 - 分析数据库的业务领域
-基于 LangChain BaseTool，参考initial_domain_analysis_pipeline的实现
+基于 LangChain BaseTool，完全从记忆中获取信息
 """
 
-from typing import Dict, Any, Type, Union, List, Optional
-from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field, ConfigDict
+from typing import Dict, Any, Type, List, Optional
+from pydantic import BaseModel, Field
 import json
 import logging
 
 from models.exceptions import ToolExecutionError
 from prompts.manager import PromptManager
-from .base_analysis_tool import BaseAnalysisTool
+from ..base_tool import BaseSemanticSQLTool
 
 logger = logging.getLogger(__name__)
 
@@ -21,215 +20,84 @@ class DomainAnalysisInput(BaseModel):
     pass
 
 
-class DomainAnalysisTool(BaseAnalysisTool):
-    """业务领域分析工具 - 使用LLM驱动的分析"""
+class DomainAnalysis(BaseModel):
+    """领域分析结果"""
+    domain_type: str = Field(description="业务领域类型")
+    domain_description: str = Field(description="领域描述")
+    confidence: float = Field(default=0.0, description="置信度")
+    key_entities: List[str] = Field(default_factory=list, description="关键实体")
+    business_characteristics: List[str] = Field(default_factory=list, description="业务特征")
+    business_rules: List[str] = Field(default_factory=list, description="业务规则")
+
+
+class DomainAnalysisTool(BaseSemanticSQLTool):
+    """业务领域分析工具 - 从记忆中获取schema信息进行分析"""
 
     name: str = "domain_analysis"
-    description: str = "使用LLM分析数据库的业务领域，识别主要业务场景和数据特征。无需参数，自动从记忆中获取schema_info"
+    description: str = "分析数据库的业务领域，识别主要业务场景和数据特征。无需参数，自动从记忆中获取schema_info"
     args_schema: Type[BaseModel] = DomainAnalysisInput
-    
-    # 定义必需的字段
-    llm: Optional[ChatOpenAI] = Field(default=None, exclude=True)
-    prompt_manager: Optional[PromptManager] = Field(default=None, exclude=True)
-    
-    # Pydantic v2配置
-    model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    def __init__(self, llm: ChatOpenAI, **kwargs):
+    def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.llm = llm
-        self.prompt_manager = PromptManager()
+        object.__setattr__(self, 'prompt_manager', PromptManager())
 
-    def _run(self, input: Union[Dict[str, Any], str] = None, **kwargs) -> str:
-        """执行LLM驱动的领域分析"""
+    def _run(self, **kwargs) -> str:
+        """执行领域分析"""
         try:
-            # 获取schema_info
+            # 从记忆中获取schema_info
             schema_info = self.get_schema_info()
             if not schema_info:
                 raise ToolExecutionError(
                     tool_name=self.name,
-                    reason="未找到数据库结构信息，请先执行schema_extraction",
+                    message="无法获取数据库结构信息，请先运行schema_extraction工具",
+                    details="需要先提取数据库结构才能进行领域分析"
                 )
-
-            # 1. 格式化数据库DDL（参考FormatDatabaseDDLStep）
-            database_ddl = self._format_database_ddl(schema_info)
             
-            # 2. 收集字段统计（参考CollectFieldStatisticsStep）
-            field_statistics = self._collect_field_statistics(schema_info)
+            # 使用LLM进行领域分析（这里Agent会提供LLM调用能力）
+            # 简化实现：基于表名和列名进行基础分析
+            analysis_result = self._analyze_domain_from_schema(schema_info)
             
-            # 3. 使用LLM生成领域描述（参考GenerateDomainDescriptionStep）
-            domain_knowledge = self._generate_domain_description(
-                database_ddl, 
-                field_statistics,
-                schema_info.get("database_name", "unknown")
-            )
-
-            # 保存到记忆
-            self.save_to_memory("domain_analysis", domain_knowledge)
-
-            # 返回字典格式
-            return domain_knowledge
-
+            # 保存结果到记忆
+            self.save_to_memory("domain_analysis", analysis_result)
+            
+            return json.dumps(analysis_result, ensure_ascii=False)
+            
         except Exception as e:
+            self.logger.error(f"领域分析失败: {e}")
             raise ToolExecutionError(
-                tool_name=self.name, reason=f"领域分析失败: {str(e)}"
+                tool_name=self.name,
+                message=f"领域分析执行失败: {str(e)}",
+                details=str(e)
             )
-
-    def _format_database_ddl(self, schema_info: Dict[str, Any]) -> str:
-        """格式化数据库DDL"""
-        ddl_lines = []
-        tables = schema_info.get("tables", {})
+    
+    def _analyze_domain_from_schema(self, schema_info: Dict[str, Any]) -> Dict[str, Any]:
+        """基于数据库结构分析业务领域"""
+        tables = schema_info.get("tables", [])
         
-        for table_name, table_info in tables.items():
-            # 表定义开始
-            ddl_lines.append(f"CREATE TABLE `{table_name}` (")
-            
-            # 列定义
-            columns = table_info.get("columns", {})
-            column_defs = []
-            primary_keys = table_info.get("primary_key", [])
-            
-            for col_name, col_info in columns.items():
-                col_def = f"  `{col_name}` {col_info['type']}"
-                if not col_info.get("nullable", True):
-                    col_def += " NOT NULL"
-                if col_info.get("default"):
-                    col_def += f" DEFAULT {col_info['default']}"
-                column_defs.append(col_def)
-            
-            # 主键定义
-            if primary_keys:
-                pk_def = f"  PRIMARY KEY ({', '.join([f'`{pk}`' for pk in primary_keys])})"
-                column_defs.append(pk_def)
-            
-            ddl_lines.append(",\n".join(column_defs))
-            ddl_lines.append(");")
-            ddl_lines.append("")  # 空行分隔
-        
-        return "\n".join(ddl_lines)
-
-    def _collect_field_statistics(self, schema_info: Dict[str, Any]) -> Dict[str, Any]:
-        """收集字段统计信息"""
-        type_stats = {}
-        pattern_stats = {
-            'id_fields': [],
-            'date_fields': [],
-            'status_fields': [],
-            'amount_fields': [],
-            'count_fields': []
+        # 基础的域名推断逻辑
+        domain_keywords = {
+            "电商": ["order", "product", "customer", "payment", "cart"],
+            "财务": ["account", "transaction", "payment", "invoice", "billing"],
+            "人事": ["employee", "department", "salary", "attendance"],
+            "库存": ["inventory", "stock", "warehouse", "supplier"]
         }
         
-        tables = schema_info.get("tables", {})
+        detected_domains = []
+        for domain, keywords in domain_keywords.items():
+            for table in tables:
+                table_name = table.get("name", "").lower()
+                if any(keyword in table_name for keyword in keywords):
+                    detected_domains.append(domain)
+                    break
         
-        for table_name, table_info in tables.items():
-            columns = table_info.get("columns", {})
-            primary_keys = table_info.get("primary_key", [])
-            
-            for col_name, col_info in columns.items():
-                # 类型统计
-                data_type = col_info['type'].upper().split('(')[0]
-                type_stats[data_type] = type_stats.get(data_type, 0) + 1
-                
-                # 模式统计
-                col_name_lower = col_name.lower()
-                field_key = f"{table_name}.{col_name}"
-                
-                # ID字段
-                if col_name in primary_keys or col_name_lower.endswith('_id') or col_name_lower == 'id':
-                    pattern_stats['id_fields'].append(field_key)
-                
-                # 日期时间字段
-                if any(kw in col_name_lower for kw in ['date', 'time', 'created', 'updated']):
-                    pattern_stats['date_fields'].append(field_key)
-                
-                # 状态字段
-                if any(kw in col_name_lower for kw in ['status', 'state', 'type']):
-                    pattern_stats['status_fields'].append(field_key)
-                
-                # 金额字段
-                if any(kw in col_name_lower for kw in ['amount', 'price', 'cost', 'fee']):
-                    pattern_stats['amount_fields'].append(field_key)
-                
-                # 计数字段
-                if any(kw in col_name_lower for kw in ['count', 'num', 'qty', 'quantity']):
-                    pattern_stats['count_fields'].append(field_key)
+        # 确定主要域名
+        primary_domain = detected_domains[0] if detected_domains else "通用业务"
         
         return {
-            'type_distribution': type_stats,
-            'patterns': {k: len(v) for k, v in pattern_stats.items()},
-            'pattern_examples': {k: v[:3] for k, v in pattern_stats.items()}
+            "domain_type": primary_domain,
+            "domain_description": f"基于数据库结构分析，该数据库主要用于{primary_domain}系统",
+            "confidence": 0.8,
+            "key_entities": [table.get("name", "") for table in tables[:5]],
+            "business_characteristics": detected_domains,
+            "business_rules": [f"{primary_domain}相关的业务逻辑"]
         }
-
-    def _generate_domain_description(
-        self, 
-        database_ddl: str, 
-        field_statistics: Dict[str, Any],
-        database_name: str
-    ) -> Dict[str, Any]:
-        """使用LLM生成领域描述"""
-        # 准备提示词数据，包含完整的统计信息
-        prompt_data = {
-            'database_name': database_name,
-            'database_ddl': database_ddl,
-            'type_distribution': field_statistics['type_distribution'],
-            'field_patterns': field_statistics['patterns'],
-            'pattern_examples': field_statistics.get('pattern_examples', {}),
-            'total_tables': database_ddl.count('CREATE TABLE'),
-            'total_fields': sum(field_statistics['type_distribution'].values())
-        }
-        
-        # 使用结构化提示词
-        prompt = self.prompt_manager.get_analysis_prompt(
-            "initial_domain_analysis", **prompt_data
-        )
-        
-        # 调用LLM
-        response = self.llm.invoke(prompt)
-        print(response.content)
-        
-        # 解析响应
-        return self._parse_domain_response(response.content)
-
-    def _parse_domain_response(self, response: str) -> Dict[str, Any]:
-        """解析LLM响应为结构化的领域知识"""
-        try:
-            # 尝试直接解析JSON
-            return json.loads(response)
-        except json.JSONDecodeError:
-            # 如果不是JSON，进行结构化提取
-            import re
-            
-            result = {
-                "domain_type": "",
-                "domain_description": "",
-                "key_entities": [],
-                "business_rules": [],
-                "data_characteristics": []
-            }
-            
-            # 提取领域类型
-            domain_match = re.search(r'领域类型[：:]\s*(.+)', response)
-            if domain_match:
-                result["domain_type"] = domain_match.group(1).strip()
-            
-            # 提取实体
-            entities_match = re.search(r'核心实体[：:]\s*(.+)', response)
-            if entities_match:
-                entities_text = entities_match.group(1)
-                result["key_entities"] = [e.strip() for e in re.split(r'[,，、]', entities_text)]
-            
-            # 提取业务规则
-            rules_section = re.search(r'业务规则[：:]([\s\S]+?)(?=\n\n|\Z)', response)
-            if rules_section:
-                rules_text = rules_section.group(1)
-                result["business_rules"] = [
-                    line.strip() for line in rules_text.split('\n') 
-                    if line.strip() and line.strip()[0] in '•·-*'
-                ]
-            
-            # 如果没有提取到任何内容，使用整个响应作为描述
-            if not any(result.values()):
-                result["domain_description"] = response
-                result["domain_type"] = "未知"
-            
-            return result

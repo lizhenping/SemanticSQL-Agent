@@ -4,14 +4,14 @@
 """
 
 from typing import Dict, Any, Type, List, Optional
-from langchain_openai import ChatOpenAI
+
 from pydantic import BaseModel, Field, ConfigDict
 import json
 import logging
 
 from models.exceptions import ToolExecutionError
 from prompts.manager import PromptManager
-from .base_analysis_tool import BaseAnalysisTool
+from ..base_tool import BaseSemanticSQLTool
 
 logger = logging.getLogger(__name__)
 
@@ -21,39 +21,33 @@ class ColumnMeaningInput(BaseModel):
     pass
 
 
-class ColumnAnalysisTool(BaseAnalysisTool):
+class ColumnMeaning(BaseModel):
+    """列业务含义"""
+    column_name: str = Field(description="列名")
+    table_name: str = Field(description="表名")
+    business_meaning: str = Field(description="业务含义")
+    data_type: str = Field(description="数据类型")
+    examples: List[str] = Field(default_factory=list, description="示例值")
+
+
+class ColumnAnalysisTool(BaseSemanticSQLTool):
     """列业务含义分析工具"""
     
     name: str = "column_analysis"
-    description: str = "使用LLM为数据库每个列生成业务含义描述。无需参数，自动从记忆中获取数据"
+    description: str = "为数据库每个列生成业务含义描述。无需参数，自动从记忆中获取数据"
     args_schema: Type[BaseModel] = ColumnMeaningInput
     
-    # 定义必需的字段
-    llm: Optional[ChatOpenAI] = Field(default=None, exclude=True)
-    prompt_manager: Optional[PromptManager] = Field(default=None, exclude=True)
-    
-    # Pydantic v2配置
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    
-    def __init__(self, llm: ChatOpenAI, **kwargs):
+    def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.llm = llm
-        self.prompt_manager = PromptManager()
+        object.__setattr__(self, 'prompt_manager', PromptManager())
     
-    def _run(
-        self,
-        schema_info: Dict[str, Any] = None,
-        domain_info: Dict[str, Any] = None,
-        field_classification: Dict[str, Any] = None
-    ,
-        **kwargs  # 接受额外的参数如 verbose
-    ) -> Dict[str, Any]:
+    def _run(self, **kwargs) -> str:
         """执行列含义分析"""
         try:
-            # 从参数或memory获取数据
-            schema_info = schema_info or self.get_schema_info()
-            domain_info = domain_info or self.get_domain_info()
-            field_classification = field_classification or self.get_field_classification()
+            # 从记忆中获取数据
+            schema_info = self.get_from_memory("schema_extraction")
+            domain_info = self.get_from_memory("domain_analysis")
+            field_classification = self.get_from_memory("field_analysis")
             
             if not schema_info:
                 raise ToolExecutionError(
@@ -61,16 +55,9 @@ class ColumnAnalysisTool(BaseAnalysisTool):
                     reason="未找到数据库结构信息，请先执行schema_extraction"
                 )
             
-            # 1. 格式化表DDL（参考FormatTableDDLStep）
-            table_ddls = self._format_table_ddls(schema_info)
-            
-            # 2. 收集列样例数据（参考CollectColumnExamplesStep）
-            field_examples = self._collect_column_examples(schema_info)
-            
-            # 3. 批量生成列描述（参考GenerateColumnDescriptionsStep）
-            column_descriptions = self._generate_column_descriptions(
-                table_ddls,
-                field_examples,
+            # 基于规则生成列描述
+            column_descriptions = self._generate_column_descriptions_by_rules(
+                schema_info,
                 domain_info,
                 field_classification
             )
@@ -93,182 +80,109 @@ class ColumnAnalysisTool(BaseAnalysisTool):
                 reason=f"列含义分析失败: {str(e)}"
             )
     
-    def _format_table_ddls(self, schema_info: Dict[str, Any]) -> Dict[str, str]:
-        """格式化每个表的DDL"""
-        table_ddls = {}
-        tables = schema_info.get("tables", {})
-        
-        for table_name, table_info in tables.items():
-            ddl_lines = [f"CREATE TABLE `{table_name}` ("]
-            
-            # 列定义
-            columns = table_info.get("columns", {})
-            column_defs = []
-            
-            for col_name, col_info in columns.items():
-                col_def = f"  `{col_name}` {col_info['type']}"
-                if not col_info.get("nullable", True):
-                    col_def += " NOT NULL"
-                if col_info.get("default"):
-                    col_def += f" DEFAULT {col_info['default']}"
-                if col_info.get("comment"):
-                    col_def += f" COMMENT '{col_info['comment']}'"
-                column_defs.append(col_def)
-            
-            # 主键
-            primary_keys = table_info.get("primary_key", [])
-            if primary_keys:
-                pk_def = f"  PRIMARY KEY ({', '.join([f'`{pk}`' for pk in primary_keys])})"
-                column_defs.append(pk_def)
-            
-            ddl_lines.extend([f"{cd}," if i < len(column_defs) - 1 else cd 
-                            for i, cd in enumerate(column_defs)])
-            ddl_lines.append(");")
-            
-            table_ddls[table_name] = "\n".join(ddl_lines)
-        
-        return table_ddls
-    
-    def _collect_column_examples(self, schema_info: Dict[str, Any]) -> Dict[str, List[Any]]:
-        """收集列的样例数据"""
-        field_examples = {}
-        tables = schema_info.get("tables", {})
-        
-        for table_name, table_info in tables.items():
-            # 从sample_data中提取每列的样例
-            sample_data = table_info.get("sample_data", [])
-            
-            if sample_data:
-                columns = table_info.get("columns", {})
-                for col_name in columns:
-                    field_key = f"{table_name}.{col_name}"
-                    # 提取该列的所有样例值
-                    examples = []
-                    for row in sample_data:
-                        if col_name in row:
-                            value = row[col_name]
-                            if value is not None and value not in examples:
-                                examples.append(value)
-                    
-                    field_examples[field_key] = examples[:5]  # 最多保留5个样例
-        
-        return field_examples
-    
-    def _generate_column_descriptions(
+    def _generate_column_descriptions_by_rules(
         self,
-        table_ddls: Dict[str, str],
-        field_examples: Dict[str, List[Any]],
+        schema_info: Dict[str, Any],
         domain_info: Dict[str, Any],
         field_classification: Dict[str, Any]
     ) -> Dict[str, str]:
-        """批量生成列描述"""
+        """基于规则生成列描述"""
         column_descriptions = {}
+        tables = schema_info.get("tables", {})
+        domain_type = domain_info.get("domain_type", "未知") if domain_info else "未知"
         
-        # 按表批量处理
-        for table_name, table_ddl in table_ddls.items():
-            # 准备该表的列信息
-            table_columns = []
-            for field_key, examples in field_examples.items():
-                if field_key.startswith(f"{table_name}."):
-                    col_name = field_key.split('.', 1)[1]
-                    
-                    # 获取字段分类信息
-                    field_class = {}
-                    if field_classification:
-                        classifications = field_classification.get("field_classifications", {})
-                        table_fields = classifications.get(table_name, {})
-                        field_class = table_fields.get(col_name, {})
-                    
-                    table_columns.append({
-                        'name': col_name,
-                        'examples': examples,
-                        'classification': field_class
-                    })
+        # 获取字段分类信息
+        field_classifications = {}
+        if field_classification:
+            field_classifications = field_classification.get("field_classifications", {})
+        
+        for table_name, table_info in tables.items():
+            columns = table_info.get("columns", {})
+            sample_data = table_info.get("sample_data", [])
             
-            if table_columns:
-                # 使用LLM批量生成该表所有列的描述
-                descriptions = self._generate_table_column_descriptions(
-                    table_name,
-                    table_ddl,
-                    table_columns,
-                    domain_info
+            for col_name, col_info in columns.items():
+                col_key = f"{table_name}.{col_name}"
+                
+                # 获取字段分类
+                field_class_info = {}
+                if table_name in field_classifications:
+                    field_class_info = field_classifications[table_name].get(col_name, {})
+                
+                # 基于规则生成描述
+                description = self._infer_column_meaning(
+                    col_name, col_info, field_class_info, domain_type, sample_data
                 )
                 
-                # 更新结果
-                for col_name, desc in descriptions.items():
-                    column_descriptions[f"{table_name}.{col_name}"] = desc
+                column_descriptions[col_key] = description
         
         return column_descriptions
     
-    def _generate_table_column_descriptions(
+    def _infer_column_meaning(
         self,
-        table_name: str,
-        table_ddl: str,
-        columns: List[Dict[str, Any]],
-        domain_info: Dict[str, Any]
-    ) -> Dict[str, str]:
-        """为一个表的所有列生成描述"""
-        # 准备提示词数据，包含所有前面步骤的信息
-        prompt_data = {
-            'table_name': table_name,
-            'table_ddl': table_ddl,
-            'columns': columns,
-            'domain_type': domain_info.get('domain_type', '未知'),
-            'domain_description': domain_info.get('domain_description', ''),
-            'key_entities': domain_info.get('key_entities', []),
-            'business_characteristics': domain_info.get('business_characteristics', [])
-        }
+        col_name: str,
+        col_info: Dict[str, Any],
+        field_class_info: Dict[str, Any],
+        domain_type: str,
+        sample_data: List[Dict[str, Any]]
+    ) -> str:
+        """基于规则推断列的业务含义"""
+        col_name_lower = col_name.lower()
+        data_type = col_info.get("type", "").lower()
         
-        # 渲染提示词
-        prompt = self.prompt_manager.get_analysis_prompt(
-            "column_description", **prompt_data
-        )
+        # 优先使用字段分类信息
+        if field_class_info:
+            category = field_class_info.get("category", "")
+            field_type = field_class_info.get("field_type", "")
+            if category and field_type:
+                return f"{col_name}：{field_type}字段，属于{category}类别，用于{domain_type}业务"
         
-        # 调用LLM
-        response = self.llm.invoke(prompt)
+        # 基于列名和类型推断
+        if col_name_lower in ["id"] or col_name_lower.endswith("_id"):
+            if col_name_lower == "id":
+                return f"{col_name}：主键标识符，唯一标识该表中的每一条记录"
+            else:
+                ref_entity = col_name_lower[:-3]
+                return f"{col_name}：外键标识符，关联{ref_entity}表的主键"
         
-        # 解析响应
-        return self._parse_descriptions_response(response.content, table_name, columns)
+        elif any(keyword in col_name_lower for keyword in ["name", "title"]):
+            return f"{col_name}：名称字段，存储易读的标识信息"
+        
+        elif any(keyword in col_name_lower for keyword in ["time", "date", "created", "updated"]):
+            if "created" in col_name_lower:
+                return f"{col_name}：创建时间，记录数据创建的时间点"
+            elif "updated" in col_name_lower:
+                return f"{col_name}：更新时间，记录数据最后修改的时间点"
+            else:
+                return f"{col_name}：时间字段，记录相关的时间信息"
+        
+        elif any(keyword in col_name_lower for keyword in ["status", "state", "type"]):
+            return f"{col_name}：状态/类型字段，表示数据的当前状态或分类"
+        
+        elif any(keyword in col_name_lower for keyword in ["amount", "price", "cost", "fee", "money"]):
+            return f"{col_name}：金额字段，存储货币数值信息"
+        
+        elif any(keyword in col_name_lower for keyword in ["count", "num", "qty", "quantity"]):
+            return f"{col_name}：数量字段，记录相关的计数信息"
+        
+        elif any(keyword in col_name_lower for keyword in ["phone", "mobile", "tel"]):
+            return f"{col_name}：电话号码字段，存储联系电话信息"
+        
+        elif "email" in col_name_lower or "mail" in col_name_lower:
+            return f"{col_name}：电子邮箱字段，存储邮箱地址信息"
+        
+        elif "address" in col_name_lower:
+            return f"{col_name}：地址字段，存储物理地址信息"
+        
+        # 基于数据类型推断
+        elif any(dt in data_type for dt in ["text", "varchar", "char"]):
+            return f"{col_name}：文本字段，存储字符串类型的{domain_type}业务数据"
+        
+        elif any(dt in data_type for dt in ["int", "decimal", "float", "numeric"]):
+            return f"{col_name}：数值字段，存储数字类型的{domain_type}业务数据"
+        
+        elif any(dt in data_type for dt in ["bool", "bit"]):
+            return f"{col_name}：布尔字段，表示是/否状态"
+        
+        # 默认描述
+        return f"{col_name}：{domain_type}领域的业务数据字段"
     
-    def _parse_descriptions_response(
-        self, 
-        response: str, 
-        table_name: str,
-        columns: List[Dict[str, Any]]
-    ) -> Dict[str, str]:
-        """解析LLM生成的列描述"""
-        descriptions = {}
-        
-        try:
-            # 尝试解析JSON响应
-            result = json.loads(response)
-            if isinstance(result, dict):
-                return result
-        except json.JSONDecodeError:
-            pass
-        
-        # 文本解析
-        lines = response.split('\n')
-        current_col = None
-        
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            
-            # 查找列名
-            for col in columns:
-                col_name = col['name']
-                if col_name in line and ':' in line:
-                    current_col = col_name
-                    # 提取描述
-                    desc = line.split(':', 1)[1].strip()
-                    descriptions[col_name] = desc
-                    break
-        
-        # 确保所有列都有描述
-        for col in columns:
-            if col['name'] not in descriptions:
-                descriptions[col['name']] = f"{col['name']}字段"
-        
-        return descriptions

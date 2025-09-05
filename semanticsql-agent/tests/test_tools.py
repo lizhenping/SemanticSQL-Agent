@@ -15,7 +15,7 @@ from tools.validation_tools.sql_execution_tool import SQLExecutionTool
 from tools.reflection_tools.sql_reflection_tool import SQLReflectionTool
 from config.settings import Settings
 from utils.database import DatabaseManager
-from config.database import DatabaseConfig, DatabaseType
+from utils.database_config import DatabaseConfig, DatabaseType
 
 
 class TestBaseTool:

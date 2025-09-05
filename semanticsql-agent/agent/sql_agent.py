@@ -14,7 +14,7 @@ from langchain.callbacks.base import BaseCallbackHandler
 
 from agent.base_agent import BaseAgent
 from config.settings import Settings
-from config.database import DatabaseConfig
+from utils.database_config import DatabaseConfig
 from utils.memory import DatabaseAnalysisMemory
 from utils.database import DatabaseManager
 from models.training import TrainingDataResult

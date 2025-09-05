@@ -26,14 +26,8 @@ from .agent import (
     AgentExecution
 )
 
-# 分析模型
-from .analysis import (
-    DomainAnalysis,
-    FieldClassification,
-    ColumnMeaning,
-    TableMeaning,
-    ERRelation
-)
+# 注意：分析相关模型已按就近原则移动到各自的工具文件中
+# 如需使用，请直接从对应工具导入
 
 # 训练数据模型
 from .training import (
@@ -71,12 +65,7 @@ __all__ = [
     "AgentStep",
     "AgentExecution",
     
-    # 分析
-    "DomainAnalysis",
-    "FieldClassification",
-    "ColumnMeaning",
-    "TableMeaning",
-    "ERRelation",
+    # 分析模型已移至工具文件中
     
     # 训练
     "GeneratedExample",

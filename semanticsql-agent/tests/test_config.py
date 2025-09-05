@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 
 from config.settings import Settings
-from config.database import DatabaseConfig, DatabaseType
+from utils.database_config import DatabaseConfig, DatabaseType
 
 
 class TestConfig:

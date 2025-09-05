@@ -3,15 +3,14 @@
 基于 LangChain BaseTool，参考table_description_pipeline的实现
 """
 
-from typing import Dict, Any, Type, Optional
-from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field, ConfigDict
+from typing import Dict, Any, Type, Optional, List
+from pydantic import BaseModel, Field
 import json
 import logging
 
 from models.exceptions import ToolExecutionError
 from prompts.manager import PromptManager
-from .base_analysis_tool import BaseAnalysisTool
+from ..base_tool import BaseSemanticSQLTool
 
 logger = logging.getLogger(__name__)
 
@@ -21,48 +20,42 @@ class TableMeaningInput(BaseModel):
     pass
 
 
-class TableAnalysisTool(BaseAnalysisTool):
+class TableMeaning(BaseModel):
+    """表业务含义"""
+    table_name: str = Field(description="表名")
+    business_purpose: str = Field(description="业务用途")
+    entity_type: str = Field(description="实体类型")
+    relationships: List[str] = Field(default_factory=list, description="关联关系")
+
+
+class TableAnalysisTool(BaseSemanticSQLTool):
     """表业务含义分析工具"""
     
     name: str = "table_analysis"
-    description: str = "使用LLM分析每个表的业务职责和含义。无需参数，自动从记忆中获取数据"
+    description: str = "分析每个表的业务职责和含义。无需参数，自动从记忆中获取数据"
     args_schema: Type[BaseModel] = TableMeaningInput
     
-    # 定义必需的字段
-    llm: Optional[ChatOpenAI] = Field(default=None, exclude=True)
-    prompt_manager: Optional[PromptManager] = Field(default=None, exclude=True)
-    
-    # Pydantic v2配置
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    
-    def __init__(self, llm: ChatOpenAI, **kwargs):
+    def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.llm = llm
-        self.prompt_manager = PromptManager()
+        object.__setattr__(self, 'prompt_manager', PromptManager())
     
-    def _run(
-        self,
-        schema_info: Dict[str, Any] = None,
-        domain_info: Dict[str, Any] = None,
-        column_meanings: Dict[str, Any] = None
-    ,
-        **kwargs  # 接受额外的参数如 verbose
-    ) -> Dict[str, Any]:
+    def _run(self, **kwargs) -> str:
         """执行表含义分析"""
         try:
-            # 从参数或memory获取数据
-            schema_info = schema_info or self.get_schema_info()
-            domain_info = domain_info or self.get_domain_info()
-            column_meanings = column_meanings or self.get_column_meanings()
+            # 从记忆中获取数据
+            schema_info = self.get_from_memory("schema_extraction")
+            domain_info = self.get_from_memory("domain_analysis")
+            column_meanings = self.get_from_memory("column_meaning_analysis")
             
             if not schema_info:
                 raise ToolExecutionError(
                     tool_name=self.name,
-                    reason="未找到数据库结构信息，请先执行schema_extraction"
+                    message="无法获取数据库结构信息，请先运行schema_extraction工具",
+                    details="需要先提取数据库结构才能进行表含义分析"
                 )
             
-            # 批量生成表描述
-            table_descriptions = self._generate_table_descriptions(
+            # 基于规则生成表描述
+            table_descriptions = self._generate_table_descriptions_by_rules(
                 schema_info,
                 domain_info,
                 column_meanings
@@ -78,159 +71,77 @@ class TableAnalysisTool(BaseAnalysisTool):
             # 保存到记忆
             self.save_to_memory("table_meaning_analysis", result)
             
-            return result
+            return json.dumps(result, ensure_ascii=False)
             
         except Exception as e:
+            self.logger.error(f"表含义分析失败: {e}")
             raise ToolExecutionError(
                 tool_name=self.name,
-                reason=f"表含义分析失败: {str(e)}"
+                message=f"表含义分析执行失败: {str(e)}",
+                details=str(e)
             )
     
-    def _generate_table_descriptions(
+    def _generate_table_descriptions_by_rules(
         self,
         schema_info: Dict[str, Any],
         domain_info: Dict[str, Any],
         column_meanings: Dict[str, Any]
     ) -> Dict[str, str]:
-        """批量生成表描述"""
+        """基于规则生成表描述"""
         table_descriptions = {}
         tables = schema_info.get("tables", {})
         
-        # 获取列描述
-        col_descriptions = {}
-        if column_meanings:
-            col_descriptions = column_meanings.get("column_descriptions", {})
+        domain_type = domain_info.get("domain_type", "未知") if domain_info else "未知"
         
-        # 批量处理（每批10个表）
-        batch_size = 10
-        table_list = list(tables.items())
-        
-        for i in range(0, len(table_list), batch_size):
-            batch = table_list[i:i + batch_size]
-            
-            # 准备批次数据
-            batch_tables = []
-            for table_name, table_info in batch:
-                # 收集该表的列描述
-                table_col_descriptions = {}
-                for col_name in table_info.get("columns", {}):
-                    col_key = f"{table_name}.{col_name}"
-                    if col_key in col_descriptions:
-                        table_col_descriptions[col_name] = col_descriptions[col_key]
-                
-                batch_tables.append({
-                    "name": table_name,
-                    "info": table_info,
-                    "column_descriptions": table_col_descriptions
-                })
-            
-            # 使用LLM生成该批次的表描述
-            batch_descriptions = self._generate_batch_descriptions(
-                batch_tables,
-                domain_info
+        for table_name, table_info in tables.items():
+            # 基于表名和列信息推断业务含义
+            description = self._infer_table_purpose(
+                table_name, 
+                table_info, 
+                domain_type
             )
-            
-            # 更新结果
-            table_descriptions.update(batch_descriptions)
+            table_descriptions[table_name] = description
         
         return table_descriptions
     
-    def _generate_batch_descriptions(
+    def _infer_table_purpose(
         self,
-        batch_tables: list,
-        domain_info: Dict[str, Any]
-    ) -> Dict[str, str]:
-        """为一批表生成描述"""
-        # 准备提示词数据
-        tables_info = []
-        for table_data in batch_tables:
-            table_info = {
-                "name": table_data["name"],
-                "columns": [],
-                "row_count": table_data["info"].get("row_count", 0),
-                "comment": table_data["info"].get("comment", "")
-            }
-            
-            # 添加列信息
-            columns = table_data["info"].get("columns", {})
-            for col_name, col_info in columns.items():
-                col_desc = table_data["column_descriptions"].get(col_name, "")
-                table_info["columns"].append({
-                    "name": col_name,
-                    "type": col_info["type"],
-                    "description": col_desc
-                })
-            
-            tables_info.append(table_info)
+        table_name: str,
+        table_info: Dict[str, Any],
+        domain_type: str
+    ) -> str:
+        """基于规则推断表的业务用途"""
+        table_name_lower = table_name.lower()
+        columns = table_info.get("columns", {})
         
-        prompt_data = {
-            "tables": tables_info,
-            "domain_type": domain_info.get("domain_type", "未知") if domain_info else "未知",
-            "domain_description": domain_info.get("domain_description", "") if domain_info else ""
-        }
+        # 基于表名推断
+        if any(keyword in table_name_lower for keyword in ["user", "customer", "client", "member"]):
+            return f"{table_name}表：存储用户/客户基础信息，包含用户身份标识和相关属性"
+        elif any(keyword in table_name_lower for keyword in ["order", "transaction", "payment"]):
+            return f"{table_name}表：记录交易订单信息，包含订单状态、金额等业务数据"
+        elif any(keyword in table_name_lower for keyword in ["product", "item", "goods", "commodity"]):
+            return f"{table_name}表：管理商品/产品信息，包含商品属性和分类数据"
+        elif any(keyword in table_name_lower for keyword in ["log", "audit", "history"]):
+            return f"{table_name}表：记录系统日志或历史数据，用于审计和追踪"
+        elif any(keyword in table_name_lower for keyword in ["config", "setting", "param"]):
+            return f"{table_name}表：存储系统配置参数，管理应用设置信息"
+        elif table_name_lower.endswith("_info"):
+            base_name = table_name_lower[:-5]
+            return f"{table_name}表：存储{base_name}相关的详细信息数据"
+        elif table_name_lower.endswith("_detail"):
+            base_name = table_name_lower[:-7]
+            return f"{table_name}表：记录{base_name}的详细明细数据"
         
-        # 渲染提示词
-        prompt = self.prompt_manager.get_analysis_prompt(
-            "table_description", **prompt_data
-        )
+        # 基于列名推断
+        col_names = [col.lower() for col in columns.keys()]
+        if any("name" in col for col in col_names):
+            if any("price" in col or "amount" in col for col in col_names):
+                return f"{table_name}表：业务实体表，包含名称和价格信息，可能是商品或服务相关"
+            else:
+                return f"{table_name}表：基础信息表，主要存储名称等标识信息"
+        elif any("time" in col or "date" in col for col in col_names):
+            return f"{table_name}表：时间相关的业务数据表，记录事件发生的时间信息"
         
-        # 调用LLM
-        response = self.llm.invoke(prompt)
-        
-        # 解析响应
-        return self._parse_table_descriptions(response.content, batch_tables)
+        # 默认描述
+        return f"{table_name}表：{domain_type}领域的业务数据表"
     
-    def _parse_table_descriptions(self, response: str, batch_tables: list) -> Dict[str, str]:
-        """解析表描述响应"""
-        descriptions = {}
-        
-        try:
-            # 尝试解析JSON
-            result = json.loads(response)
-            if isinstance(result, dict):
-                return result
-        except json.JSONDecodeError:
-            pass
-        
-        # 文本解析
-        lines = response.split('\n')
-        current_table = None
-        current_desc = []
-        
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            
-            # 查找表名
-            found_table = False
-            for table_data in batch_tables:
-                table_name = table_data["name"]
-                if table_name in line and (":" in line or "：" in line):
-                    # 保存之前的表描述
-                    if current_table and current_desc:
-                        descriptions[current_table] = " ".join(current_desc)
-                    
-                    # 开始新表
-                    current_table = table_name
-                    # 提取描述
-                    desc_part = line.split(":" if ":" in line else "：", 1)[1].strip()
-                    current_desc = [desc_part] if desc_part else []
-                    found_table = True
-                    break
-            
-            # 如果不是新表，添加到当前描述
-            if not found_table and current_table and line:
-                current_desc.append(line)
-        
-        # 保存最后一个表的描述
-        if current_table and current_desc:
-            descriptions[current_table] = " ".join(current_desc)
-        
-        # 确保所有表都有描述
-        for table_data in batch_tables:
-            table_name = table_data["name"]
-            if table_name not in descriptions:
-                descriptions[table_name] = f"{table_name}表"
-        
-        return descriptions

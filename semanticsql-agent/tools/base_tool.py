@@ -1,26 +1,21 @@
 """
 基础工具类 - 基于 LangChain BaseTool
-参考pipeline的简洁设计，去除冗余验证
+简化设计，提供记忆访问功能
 """
-from abc import abstractmethod
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from langchain.tools import BaseTool
-from pydantic import BaseModel
 import logging
 
 
 class BaseSemanticSQLTool(BaseTool):
     """SemanticSQL工具基类
     
-    所有工具的基类，提供通用功能：
-    - 日志记录
-    - 记忆访问
-    - 错误处理
+    提供记忆访问功能，让工具能够从Agent记忆中获取和保存数据
     """
     
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        # 使用object.__setattr__避开Pydantic验证
+        # Use object.__setattr__ to bypass Pydantic validation for these internal attributes
         object.__setattr__(self, 'logger', logging.getLogger(self.__class__.__name__))
         object.__setattr__(self, '_agent_memory', None)
     
@@ -57,60 +52,38 @@ class BaseSemanticSQLTool(BaseTool):
             except Exception as e:
                 self.logger.warning(f"Failed to save to memory: {e}")
     
-    @abstractmethod
-    def _run(self, *args, **kwargs) -> Any:
-        """执行工具的核心逻辑"""
-        pass
+    def get_schema_info(self) -> Dict[str, Any]:
+        """获取数据库结构信息"""
+        return self.get_from_memory("schema_info")
+    
+    def get_domain_info(self) -> Dict[str, Any]:
+        """获取领域信息"""
+        return self.get_from_memory("domain_info")
+    
+    def get_field_classification(self) -> Dict[str, Any]:
+        """获取字段分类信息"""
+        return self.get_from_memory("field_classification")
+    
+    def get_column_meanings(self) -> Dict[str, Any]:
+        """获取列含义信息"""
+        return self.get_from_memory("column_meanings")
+    
+    def get_table_meanings(self) -> Dict[str, Any]:
+        """获取表含义信息"""
+        return self.get_from_memory("table_meanings")
+    
+    def get_er_relations(self) -> Dict[str, Any]:
+        """获取ER关系信息"""
+        return self.get_from_memory("er_relations")
     
     def run(self, *args, **kwargs) -> Any:
         """执行工具并清理输出"""
-        from utils.thinking_parser import ThinkingOutputParser
-        
-        # 记录工具调用
         self.logger.info(f"Tool '{self.name}' called with args: {args}, kwargs: {kwargs}")
         
         try:
             result = self._run(*args, **kwargs)
-            
-            # 记录成功执行
             self.logger.info(f"Tool '{self.name}' executed successfully")
-            
-            parser = ThinkingOutputParser()
-            
-            # 如果结果是字符串，使用parser清理
-            if isinstance(result, str):
-                parsed = parser.parse(result)
-                if parsed['has_thinking']:
-                    self.logger.debug(f"Tool thinking: {parsed['thinking'][:100]}...")
-                result = parsed['answer']
-            elif isinstance(result, dict):
-                # 递归清理字典中的字符串值
-                result = self._clean_dict_with_parser(result, parser)
-            
             return result
-            
         except Exception as e:
             self.logger.error(f"Tool '{self.name}' failed with error: {str(e)}")
             raise
-    
-    def _clean_dict_with_parser(self, d: dict, parser) -> dict:
-        """使用parser递归清理字典中的thinking标签"""
-        cleaned = {}
-        for key, value in d.items():
-            if isinstance(value, str):
-                parsed = parser.parse(value)
-                cleaned[key] = parsed['answer']
-            elif isinstance(value, dict):
-                cleaned[key] = self._clean_dict_with_parser(value, parser)
-            elif isinstance(value, list):
-                cleaned[key] = [
-                    parser.parse(item)['answer'] if isinstance(item, str) else item
-                    for item in value
-                ]
-            else:
-                cleaned[key] = value
-        return cleaned
-    
-    async def _arun(self, *args, **kwargs) -> Any:
-        """异步执行（默认调用同步方法）"""
-        return self.run(*args, **kwargs)
