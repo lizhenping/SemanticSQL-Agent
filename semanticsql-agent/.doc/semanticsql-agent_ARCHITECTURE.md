@@ -16,7 +16,7 @@ SemanticSQL Agent 采用**极简+自主+记忆驱动**的创新架构，突破�
 **2. 自主原则 (Autonomous Principle)** 
 - **工具完全自主**：每个工具在`_run`方法中完全控制执行逻辑、存储时机和返回格式
 - **智能体自主决策**：ReAct循环中LLM根据记忆状态动态选择工具
-- **无外部编排**：没有预定义的执行流水线，完全依靠智能决策
+- **Agent自主决策**：Agent内部通过ReAct模式自主决策工具调用顺序，无需预定义工作流
 
 **3. 记忆驱动 (Memory-Driven Principle)**
 - **Neo4j三元组记忆**：所有分析结果以三元组形式存储，形成知识图谱
@@ -294,6 +294,7 @@ class AgentState(TypedDict):
     """极简状态设计 - 只有2个核心字段"""
     current_input: str                        # 用户输入  
     database_params: Optional[Dict[str, Any]] # 数据库参数
+    # 注意：记忆管理在各个工具内部进行，不在AgentState中维护
 
 class SemanticSQLReActAgent:
     """SQL生成智能体 - 基于官方API，专注业务完成逻辑"""
@@ -325,8 +326,8 @@ class SemanticSQLReActAgent:
         # 1. 创建提示词模板
         prompt = create_semantic_sql_prompt()
         
-        # 2. 创建记忆增强的ReAct Agent
-        agent = create_memory_enhanced_react_agent(
+        # 2. 创建标准ReAct Agent
+        agent = create_react_agent(
             llm=self.llm,
             tools=self.tools,
             prompt=prompt,

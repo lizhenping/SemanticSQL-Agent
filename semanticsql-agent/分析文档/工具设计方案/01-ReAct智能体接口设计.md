@@ -114,10 +114,10 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain.agents.format_scratchpad import format_log_to_str
 from langchain_core.tools.render import render_text_description
 
-def create_memory_enhanced_react_agent(llm, tools, prompt, output_parser=None):
+def create_react_agent(llm, tools, prompt, output_parser=None):
                                      
     """
-    创建支持记忆增强的ReAct Agent - 基于官方create_react_agent逻辑
+    创建标准ReAct Agent - 基于官方create_react_agent逻辑
     
     Args:
         llm: 语言模型
@@ -149,20 +149,18 @@ def create_memory_enhanced_react_agent(llm, tools, prompt, output_parser=None):
     if output_parser is None:
         output_parser = SemanticSQLOutputParser()
     
-    def enhanced_agent_scratchpad(x):
+    def agent_scratchpad(x):
         """
-        增强版 agent_scratchpad - 支持Neo4J记忆注入
-        你可以在这里添加自己的记忆注入逻辑
+        标准 agent_scratchpad - 格式化推理历史
+        Neo4j记忆管理在各个工具内部进行
         """
         # 获取标准推理历史（官方逻辑）
-        standard_scratchpad = format_log_to_str(x["intermediate_steps"])
-
-        return standard_scratchpad
+        return format_log_to_str(x["intermediate_steps"])
     
     # 构建agent（官方RunnablePassthrough.assign模式）
     agent = (
         RunnablePassthrough.assign(
-            agent_scratchpad=enhanced_agent_scratchpad,
+            agent_scratchpad=agent_scratchpad,
         )
         | prompt
         | output_parser
@@ -214,8 +212,8 @@ class SemanticSQLReActAgent:
         # 1. 创建提示词模板
         prompt = create_semantic_sql_prompt()
         
-        # 2. 创建记忆增强的ReAct Agent
-        agent = create_memory_enhanced_react_agent(
+        # 2. 创建标准ReAct Agent
+        agent = create_react_agent(
             llm=self.llm,
             tools=self.tools,
             prompt=prompt,
@@ -250,7 +248,7 @@ class SemanticSQLReActAgent:
 
 ```python
 from langchain_openai import ChatOpenAI
-from langchain_community.llms.tongyi import Tongyi
+# 移除Tongyi导入，只保留OpenAI
 
 # 6.1 SemanticSQL 专用工具集成
 def get_semantic_sql_tools():
@@ -276,9 +274,7 @@ def get_semantic_sql_tools():
         SQLValidationTool,
         SQLExecutionTool,
         # 反思工具组
-        SQLReflectionTool,
-        # 思考工具组
-        SequentialThinkingTool
+        SQLReflectionTool
     )
     
     # 创建工具实例
@@ -300,9 +296,8 @@ def get_semantic_sql_tools():
         SQLValidationTool(),
         SQLExecutionTool(),
         
-        # 反思和思考工具（深度分析）
-        SQLReflectionTool(),
-        SequentialThinkingTool()
+        # 反思工具（深度分析）
+        SQLReflectionTool()
     ]
     
     return tools
@@ -364,12 +359,11 @@ def create_semantic_sql_agent(
             verbose=True
         )
         
-        # 通义千问配置
+        # 自定义LLM配置
         agent = create_semantic_sql_agent(
-            config_type="tongyi",
+            config_type="custom",
             llm_config={
-                "model": "qwen-turbo",
-                "api_key": "your-dashscope-key"
+                "custom_llm": your_custom_llm_instance
             }
         )
     """
