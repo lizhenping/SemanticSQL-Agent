@@ -25,7 +25,7 @@ SemanticSQL Agent 采用**极简+自主+记忆驱动**的创新架构，是一�
 #### 🔧 四大核心原则
 
 **1. 极简原则 (Minimalist Principle)**
-- **极简状态管理**：`AgentState`只有2个字段（`current_input`, `database_params`）
+- **极简状态管理**：`AgentState`只有2个字段（`current_input`, `database_params`），记忆通过Neo4j独立管理
 - **极简工具基类**：`BaseSemanticSQLTool`只有2个核心方法
 - **极简接口设计**：去除所有不必要的抽象层和复杂管理
 
@@ -71,13 +71,13 @@ SemanticSQL Agent 采用**极简+自主+记忆驱动**的创新架构，是一�
 
 ```python
 # 极简的用户调用 - 基于SemanticSQLReActAgent
-from semanticsql_agent import create_semantic_sql_agent
+from agent.sql_agent import create_semantic_sql_agent
 
 # 创建智能体
 agent = create_semantic_sql_agent(
     config_type="openai",
     llm_config={
-        "model": "qwen-turbo",
+        "model": "gpt-4",
         "api_key": settings.llm_api_key,
         "base_url": settings.llm_base_url,
         "temperature": 0.7
@@ -227,16 +227,16 @@ class BaseSemanticSQLTool(BaseTool):
 
 **scenario_operation_tool**：
 - **功能**：生成场景操作组合，为问题生成提供场景指导
-- **依贖**：需要domain_analysis和table_analysis工具的记忆
+- **依赖**：需要domain_analysis和table_analysis工具的记忆
 - **记忆片段**：[(场景类型, 适用操作, SQL操作组合)]
 **question_generation_tool**：
 - **功能**：基于业务理解生成自然语言问题，生成问题类型三元组
-- **依贖**：需要domain_analysis和table_analysis工具的记忆
+- **依赖**：需要domain_analysis和table_analysis工具的记忆
 - **记忆片段**：[(问题文本, 问题类型, 类型分类)]
 
 **sql_generation_tool**：
 - **功能**：基于问题和关系信息生成SQL，同时执行验证
-- **依贖**：需要question_generation和er_analysis工具的记忆
+- **依赖**：需要question_generation和er_analysis工具的记忆
 - **记忆片段**：[(问题文本, 对应SQL, SQL语句), (SQL执行结果, 包含数据, 结果集), (SQL执行状态, 执行成功, true/false)]
 
 #### 3.2.3 反思工具组（Reflection Tools）
@@ -333,21 +333,21 @@ class DomainAnalysisTool(BaseSemanticSQLTool):
 每个工具管理自己的记忆片段:
 
 schema_extraction → Neo4j存储 (source_tool="schema_extraction")
-├── (电商数据库, 包含表, users)
-├── (电商数据库, 包含表, orders)
-├── (users, 包含字段, id)
-├── (users, 包含字段, username)
-└── (orders, 包含字段, user_id)
+├── (电商数据库, has_table, users)
+├── (电商数据库, has_table, orders)
+├── (users, has_column, id)
+├── (users, has_column, username)
+└── (orders, has_column, user_id)
 
 domain_analysis → Neo4j存储 (source_tool="domain_analysis") 
-├── (用户管理域, 包含实体, 用户)
-├── (订单管理域, 包含实体, 订单)
-└── (用户管理域, 关联域, 订单管理域)
+├── (用户管理域, contains, 用户)
+├── (订单管理域, contains, 订单)
+└── (用户管理域, related_to, 订单管理域)
 
 field_analysis → Neo4j存储 (source_tool="field_analysis")
-├── (id, 字段类型, 标识符)
-├── (username, 字段类型, 维度)
-└── (amount, 字段类型, 度量)
+├── (id, field_type, 标识符)
+├── (username, field_type, 维度)
+└── (amount, field_type, 度量)
 
 ... 更多8个工具的记忆片段
 ```
@@ -362,10 +362,14 @@ domain_analysis.get_memory_by_source_tool("schema_extraction")
 │   → 获取字段信息进行语义分类
 ├── column_analysis.get_memory_by_source_tool("domain_analysis") 
 │   → 基于业务域信息分析列含义
-├── question_generation.get_memory_by_source_tool("domain_analysis", "table_analysis")
+├── question_generation.get_memory_by_source_tool("domain_analysis")
 │   → 基于业务理解生成问题
-└── sql_generation.get_memory_by_source_tool("question_generation", "er_analysis")
-    → 基于问题和关系信息生成SQL
+├── question_generation.get_memory_by_source_tool("table_analysis")
+│   → 获取表职责信息
+├── sql_generation.get_memory_by_source_tool("question_generation")
+│   → 基于问题生成SQL
+└── sql_generation.get_memory_by_source_tool("er_analysis")
+    → 获取关系信息生成SQL
 ```
 
 ### 4.3 SemanticTriple 数据模型
@@ -439,8 +443,8 @@ class SemanticSQLReActAgent:
         # 1. 创建提示词模板
         prompt = create_semantic_sql_prompt()
         
-        # 2. 创建记忆增强的ReAct Agent
-        agent = create_memory_enhanced_react_agent(
+        # 2. 创建标准ReAct Agent
+        agent = create_react_agent(
             llm=self.llm,
             tools=self.tools,
             prompt=prompt,
@@ -575,7 +579,7 @@ print(f"生成结果: {result['output']}")
 
 ### 7.1 提示词分层设计
 
-**系统采用分层的Jinja2模板管理**：
+**系统采用分层的PromptTemplate管理**：
 - **系统级**：Agent的主要工作指导
 - **工具级**：每个工具的专用提示词
 - **分析级**：数据库分析的专业指导
@@ -607,8 +611,45 @@ print(f"生成结果: {result['output']}")
 
 ## 8. 配置和使用
 
-### 8.1 配置文件
+### 8.1 配置管理
 
+**基于标准配置类的配置管理**：
+```python
+from dataclasses import dataclass
+from typing import Optional
+
+@dataclass
+class SemanticSQLConfig:
+    """语义SQL智能体配置"""
+    
+    # LLM配置
+    llm_provider: str = "openai"
+    llm_model: str = "gpt-4"
+    llm_api_key: str = ""
+    llm_base_url: str = "https://api.openai.com/v1"
+    llm_temperature: float = 0.7
+    
+    # Neo4j配置
+    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = ""
+    
+    # Agent配置
+    max_iterations: int = 15
+    verbose: bool = True
+    
+    @classmethod
+    def from_env(cls) -> 'SemanticSQLConfig':
+        """从环境变量加载配置"""
+        import os
+        return cls(
+            llm_api_key=os.getenv("SEMANTIC_SQL_LLM_API_KEY", ""),
+            neo4j_password=os.getenv("SEMANTIC_SQL_NEO4J_PASSWORD", ""),
+            # ... 其他环境变量
+        )
+```
+
+**配置文件示例**：
 ```yaml
 # config.yaml - 极简配置
 database:
@@ -756,7 +797,7 @@ Observation: 语法正确，修正成功
 
 **Agent自主处理策略**：
 - 简单错误：直接重新调用相应工具
-- 复杂错误：先调用 sequential_thinking 深度分析
+- 复杂错误：通过增强反思提示进行深度分析
 - 多次失败：可能需要重新分析数据库某些方面
 
 ## 10. 部署和运维
