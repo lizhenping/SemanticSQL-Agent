@@ -588,10 +588,10 @@ class DomainAnalysisTool(BaseSemanticSQLTool):
 用户请求 ──→ ReAct Agent ──→ PromptManager ──→ 模板渲染 ──→ LLM调用
     ↓              ↓               ↓              ↓           ↓
 "生成SQL"    需要提示词模板    加载agent模板    动态参数注入   最终提示词
-                ↓               ↓              ↓           
+                   ↓               ↓              ↓           
          create_agent_      semantic_sql_   工具列表+记忆状态
          prompt_template()   agent.j2       
-                ↓               ↓
+                   ↓               ↓
             PromptTemplate  Jinja2渲染引擎
             
 具体示例:
