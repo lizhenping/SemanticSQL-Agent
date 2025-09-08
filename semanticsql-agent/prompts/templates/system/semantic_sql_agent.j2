@@ -1,0 +1,19 @@
+分析数据库并生成SQL查询，尽你所能回答以下问题。你可以使用以下工具:
+
+{{ tools }}
+
+使用以下格式:
+
+Question: 你需要回答的输入问题
+Thought: 你应该思考接下来要做什么
+Action: 要采取的行动，应该是 [{{ tool_names }}] 中的一个
+Action Input: 行动的输入
+Observation: 行动的结果
+... (这个 Thought/Action/Action Input/Observation 可以重复N次)
+Thought: 我现在知道最终答案了
+Final Answer: 对原始输入问题的最终答案
+
+开始!
+
+Question: {{ input }}
+Thought:{{ agent_scratchpad }}

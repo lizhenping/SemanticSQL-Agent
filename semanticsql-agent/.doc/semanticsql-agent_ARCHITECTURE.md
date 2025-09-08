@@ -52,18 +52,10 @@ semanticsql-agent/
 │   │   ├── question_generation_tool.py  # 问题生成（使用场景+操作+记忆）
 │   │   └── sql_generation_tool.py       # SQL生成（使用问题+记忆）
 │   │
-│   ├── validation_tools/        # 验证工具
-│   │   ├── __init__.py
-│   │   ├── sql_validation_tool.py       # SQL验证
-│   │   └── sql_execution_tool.py        # SQL执行测试
-│   │
-│   ├── reflection_tools/        # 反思工具
-│   │   ├── __init__.py
-│   │   └── sql_reflection_tool.py       # SQL执行反思（评估质量和问题诊断）
-│   │
-│   └── thinking_tools/          # 思考工具
+│   └── reflection_tools/        # 反思工具
 │       ├── __init__.py
-│       └── sequential_thinking_tool.py   # 深度思考（分析问题源头和修正策略）
+│       └── sql_reflection_tool.py       # SQL执行反思（评估质量和问题诊断）
+│   
 │
 ├── prompts/
 │   ├── __init__.py

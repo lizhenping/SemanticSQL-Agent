@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 from jinja2 import Environment, FileSystemLoader, Template
-from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
+from langchain.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate, PromptTemplate
 
 
 class PromptManager:
@@ -57,16 +57,18 @@ class PromptManager:
         template = self.get_template(template_path)
         return template.render(**kwargs)
     
-    def get_system_prompt(self, **kwargs) -> str:
+    def get_system_prompt(self, template_name: str = "main", **kwargs) -> str:
         """获取系统提示词
         
         Args:
+            template_name: 模板名称，默认为'main'，可指定为'semantic_sql_agent'等
             **kwargs: 模板变量
             
         Returns:
             系统提示词字符串
         """
-        return self.render_template('system/main.j2', **kwargs)
+        template_path = f'system/{template_name}.j2'
+        return self.render_template(template_path, **kwargs)
     
     def get_tool_prompt(self, tool_name: str, **kwargs) -> str:
         """获取工具提示词
@@ -103,6 +105,25 @@ class PromptManager:
             return self.render_template(template_path, **kwargs)
         except:
             return ""
+    
+    def create_agent_prompt_template(self, agent_type: str = "semantic_sql_agent", **kwargs) -> PromptTemplate:
+        """创建智能体专用的ReAct格式PromptTemplate
+        
+        Args:
+            agent_type: 智能体类型，默认为'semantic_sql_agent'
+            **kwargs: 模板变量
+            
+        Returns:
+            LangChain PromptTemplate，专门用于ReAct Agent
+        """
+        # 获取智能体系统提示词
+        template_content = self.get_system_prompt(template_name=agent_type, **kwargs)
+        
+        # 创建PromptTemplate，包含ReAct所需的输入变量
+        return PromptTemplate(
+            template=template_content,
+            input_variables=["input", "agent_scratchpad", "tools", "tool_names"]
+        )
     
     def create_agent_prompt(self, **kwargs) -> ChatPromptTemplate:
         """创建Agent提示词模板

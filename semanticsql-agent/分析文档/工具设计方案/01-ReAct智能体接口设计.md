@@ -5,7 +5,7 @@
 
 # 1. 核心状态管理 (agent/state.py)
 # =============================================================================
-
+```python
 from typing import List, Dict, Any, Optional, Union
 from typing_extensions import TypedDict
 
@@ -14,12 +14,12 @@ class AgentState(TypedDict):
     """智能体状态 - 极简设计"""
     current_input: str                        # 用户输入
     database_params: Optional[Dict[str, Any]] # 数据库连接参数
-
+```
 
 # =============================================================================
 # 2. 业务完成解析器 (agent/parsers.py)
 # =============================================================================
-
+```python
 import re
 from langchain.agents.agent import AgentAction, AgentFinish
 from langchain.agents.output_parsers.base import AgentOutputParser
@@ -92,45 +92,24 @@ class SemanticSQLOutputParser(AgentOutputParser):
     @property
     def _type(self) -> str:
         return "semantic_sql_react_parser"
-
+```
 # =============================================================================
-# 3. Prompt模板管理
+# 3. Prompt模板管理 - 基于Jinja2统一管理
 # =============================================================================
-
+```python
 from langchain_core.prompts import PromptTemplate
-
-# SemanticSQL专用ReAct模板 - 基于官方格式
-SEMANTIC_SQL_REACT_PROMPT = """分析数据库并生成SQL查询，尽你所能回答以下问题。你可以使用以下工具:
-
-{tools}
-
-使用以下格式:
-
-Question: 你需要回答的输入问题
-Thought: 你应该思考接下来要做什么
-Action: 要采取的行动，应该是 [{tool_names}] 中的一个
-Action Input: 行动的输入
-Observation: 行动的结果
-... (这个 Thought/Action/Action Input/Observation 可以重复N次)
-Thought: 我现在知道最终答案了
-Final Answer: 对原始输入问题的最终答案
-
-开始!
-
-Question: {input}
-Thought:{agent_scratchpad}"""
+from prompts.manager import PromptManager
 
 def create_semantic_sql_prompt():
-    """创建SemanticSQL的ReAct格式提示词模板"""
-    return PromptTemplate(
-        template=SEMANTIC_SQL_REACT_PROMPT,
-        input_variables=["input", "agent_scratchpad", "tools", "tool_names"]
-    )
+    """创建SemanticSQL的ReAct格式提示词模板 - 使用PromptManager"""
+    prompt_manager = PromptManager()
+    return prompt_manager.create_agent_prompt_template(agent_type="semantic_sql_agent")
+```
 
 # =============================================================================
 # 4. 记忆增强的ReAct Agent创建函数
 # =============================================================================
-
+```python
 from langchain_core.runnables import RunnablePassthrough
 from langchain.agents.format_scratchpad import format_log_to_str
 from langchain_core.tools.render import render_text_description
@@ -190,12 +169,13 @@ def create_memory_enhanced_react_agent(llm, tools, prompt, output_parser=None):
     )
     
     return agent
-
+```
 
 # =============================================================================
 # 5. 主智能体实现 (agent/sql_agent.py)
 # =============================================================================
 
+```python
 from langchain.agents import AgentExecutor
 from typing import List
 
@@ -263,11 +243,12 @@ class SemanticSQLReActAgent:
             执行结果字典
         """
         return self.agent_executor.invoke({"input": user_input})
-
+```
 # =============================================================================
 # 6. 工具集成和LLM配置
 # =============================================================================
 
+```python
 from langchain_openai import ChatOpenAI
 from langchain_community.llms.tongyi import Tongyi
 
@@ -409,3 +390,4 @@ def create_semantic_sql_agent(
         tools=tools,
         **agent_kwargs
     )
+```
