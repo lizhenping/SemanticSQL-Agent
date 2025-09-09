@@ -34,6 +34,28 @@ from typing import List, Optional
 import os
 
 
+def safe_getenv_int(env_var: str, default: str) -> int:
+    """安全地从环境变量获取整数值，处理空字符串情况"""
+    value = os.getenv(env_var)
+    if value is None or value.strip() == "":
+        return int(default)
+    try:
+        return int(value)
+    except ValueError:
+        return int(default)
+
+
+def safe_getenv_float(env_var: str, default: str) -> float:
+    """安全地从环境变量获取浮点数值，处理空字符串情况"""
+    value = os.getenv(env_var)
+    if value is None or value.strip() == "":
+        return float(default)
+    try:
+        return float(value)
+    except ValueError:
+        return float(default)
+
+
 class Settings(BaseModel):
     """Global application settings"""
 
@@ -57,11 +79,11 @@ class Settings(BaseModel):
         description="LLM API key",
     )
     llm_temperature: float = Field(
-        default=float(os.getenv("SEMANTICSQL_LLM_TEMPERATURE", "0.1")),
+        default=safe_getenv_float("SEMANTICSQL_LLM_TEMPERATURE", "0.1"),
         description="LLM temperature for creativity",
     )
     llm_max_tokens: int = Field(
-        default=int(os.getenv("SEMANTICSQL_LLM_MAX_TOKENS", "28000")),
+        default=safe_getenv_int("SEMANTICSQL_LLM_MAX_TOKENS", "28000"),
         description="Maximum tokens for LLM",
     )
     llm_timeout: int = 30
@@ -87,11 +109,11 @@ class Settings(BaseModel):
         description="Database type",
     )
     db_host: str = Field(
-        default=os.getenv("SEMANTICSQL_DB_HOST", "http://127.0.0.1"),
+        default=os.getenv("SEMANTICSQL_DB_HOST", "127.0.0.1"),
         description="Database host - REQUIRED in production",
     )
     db_port: int = Field(
-        default=int(os.getenv("SEMANTICSQL_DB_PORT", "13306")),
+        default=safe_getenv_int("SEMANTICSQL_DB_PORT", "13306"),
         description="Database port",
     )
     db_database: str = Field(

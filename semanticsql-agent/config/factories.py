@@ -114,6 +114,20 @@ class DatabaseFactory:
                     "Database", 
                     f"缺少必需配置: {', '.join(missing_fields)}"
                 )
+            
+            # 验证主机格式 - 不能包含协议前缀
+            if settings.db_host.startswith(('http://', 'https://', 'ftp://', 'mysql://')):
+                raise AgentInitializationError(
+                    "Database",
+                    f"无效的主机格式: '{settings.db_host}' - 数据库主机不应包含协议前缀，请使用纯主机名或IP"
+                )
+            
+            # 验证端口范围
+            if not (1 <= settings.db_port <= 65535):
+                raise AgentInitializationError(
+                    "Database",
+                    f"无效的端口号: {settings.db_port} - 端口范围应为1-65535"
+                )
         
         try:
             # 构建连接参数
@@ -139,8 +153,20 @@ class DatabaseFactory:
             
         except Exception as e:
             error_msg = f"数据库连接失败: {str(e)}"
+            config_info = f"配置信息: {settings.db_type}://{settings.db_host}:{settings.db_port}/{settings.db_database}"
+            
             logger.error(f"❌ {error_msg}")
-            raise AgentInitializationError("Database", error_msg)
+            logger.error(f"📊 {config_info}")
+            
+            # 提供详细的错误分析
+            if "invalid literal for int" in str(e):
+                enhanced_msg = f"{error_msg} - 可能的原因: 环境变量包含空字符串或非数字值"
+            elif "protocol" in str(e).lower() or "invalid" in str(e).lower():
+                enhanced_msg = f"{error_msg} - 可能的原因: 主机格式不正确，请检查是否包含协议前缀"
+            else:
+                enhanced_msg = error_msg
+                
+            raise AgentInitializationError("Database", f"{enhanced_msg} | {config_info}")
 
 
 class MemoryFactory:
