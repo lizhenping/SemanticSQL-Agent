@@ -20,16 +20,18 @@ from .generation_tools import (
 )
 
 # 验证工具
-from .validation_tools import (
-    SQLValidationTool,
-    SQLExecutionTool
-)
+# TODO: 创建validation_tools模块
+# from .validation_tools import (
+#     SQLValidationTool,
+#     SQLExecutionTool
+# )
 
 # 反思工具
 from .reflection_tools import SQLReflectionTool
 
 # 思考工具
-from .thinking_tools import SequentialThinkingTool
+# TODO: 创建thinking_tools模块
+# from .thinking_tools import SequentialThinkingTool
 
 __all__ = [
     # 分析工具
@@ -44,10 +46,10 @@ __all__ = [
     "QuestionGenerationTool",
     "SQLGenerationTool",
     # 验证工具
-    "SQLValidationTool",
-    "SQLExecutionTool",
+    # "SQLValidationTool",
+    # "SQLExecutionTool",
     # 反思工具
     "SQLReflectionTool",
     # 思考工具
-    "SequentialThinkingTool"
+    # "SequentialThinkingTool"
 ]
