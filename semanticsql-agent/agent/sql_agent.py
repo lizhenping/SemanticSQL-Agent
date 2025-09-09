@@ -177,39 +177,10 @@ class SemanticSQLReActAgent:
             """
             return format_log_to_str(x["intermediate_steps"])
         
-        def filter_think_content(llm_output):
-            """过滤LLM输出中的think内容 - 通用过滤器
-            
-            Args:
-                llm_output: LLM原始输出
-                
-            Returns:
-                过滤后的输出
-            """
-            import re
-            
-            # 如果输入是ChatGeneration或AIMessage对象，提取文本内容
-            if hasattr(llm_output, 'content'):
-                text = llm_output.content
-                # 保持原对象结构，只替换content
-                filtered_content = self._clean_think_content(text)
-                llm_output.content = filtered_content
-                return llm_output
-            elif hasattr(llm_output, 'text'):
-                text = llm_output.text
-                llm_output.text = self._clean_think_content(text)
-                return llm_output
-            elif isinstance(llm_output, str):
-                return self._clean_think_content(llm_output)
-            else:
-                return llm_output
         
         # 构建agent（官方RunnablePassthrough.assign模式）
         # 绑定停止序列确保LLM在正确位置停止
         llm_with_stop = llm.bind(stop=["\nObservation:", "\nObservation"])
-        
-        # 创建think内容过滤器
-        think_filter = RunnableLambda(filter_think_content)
         
         agent = (
             RunnablePassthrough.assign(
@@ -217,8 +188,7 @@ class SemanticSQLReActAgent:
             )
             | prompt
             | llm_with_stop  # 使用带停止序列的LLM
-            | think_filter   # 过滤think内容
-            | output_parser
+            | output_parser  # 解析器内部会过滤think内容
         )
         
         return agent
@@ -282,6 +252,48 @@ class SemanticSQLReActAgent:
             return False
         
         return self.memory_manager.clear_all()
+    
+    def _clean_think_content(self, text: str) -> str:
+        """清理文本中的think内容
+        
+        Args:
+            text: 原始文本
+            
+        Returns:
+            清理后的文本
+        """
+        import re
+        
+        if not isinstance(text, str):
+            return text
+        
+        # 1. 过滤 <think>...</think> 标签及其内容
+        cleaned_text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+        
+        # 2. 过滤其他think变种标签
+        cleaned_text = re.sub(r'<thought>.*?</thought>', '', cleaned_text, flags=re.DOTALL)
+        
+        # 3. 过滤详细的中文分析内容，保留标准ReAct格式
+        lines = cleaned_text.split('\n')
+        filtered_lines = []
+        
+        for line in lines:
+            line = line.strip()
+            # 跳过过长的中文分析行（非标准ReAct格式）
+            if (line.startswith('Thought:') and 
+                len(line) > 100 and 
+                '工具' in line and 
+                'Action' not in line):
+                # 替换为简化版本
+                filtered_lines.append('Thought: 分析问题并选择合适的工具')
+            elif line:
+                filtered_lines.append(line)
+        
+        # 4. 清理多余的空行
+        result = '\n'.join(filtered_lines)
+        result = re.sub(r'\n\s*\n\s*\n', '\n\n', result)  # 最多保留一个空行
+        
+        return result.strip()
 
 
 # ========== 工厂函数 ==========

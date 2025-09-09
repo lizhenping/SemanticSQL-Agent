@@ -43,7 +43,7 @@ class SemanticSQLOutputParser(AgentOutputParser):
         """
         
         # 预处理：过滤掉LLM输出中的think内容
-        llm_output = self._filter_think_content(llm_output)
+        llm_output = self._clean_think_content(llm_output)
         
         # 1. 检查是否包含 Final Answer（官方ReAct结束信号）
         if "Final Answer:" in llm_output:
@@ -194,6 +194,48 @@ Final Answer: 给用户的最终答案
 - Action Input应该是工具需要的输入参数
 - 当生成SQL时，请在Final Answer中提供清晰的SQL代码块
 """
+    
+    def _clean_think_content(self, text: str) -> str:
+        """清理文本中的think内容
+        
+        Args:
+            text: 原始文本
+            
+        Returns:
+            清理后的文本
+        """
+        import re
+        
+        if not isinstance(text, str):
+            return text
+        
+        # 1. 过滤 <think>...</think> 标签及其内容
+        cleaned_text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+        
+        # 2. 过滤其他think变种标签
+        cleaned_text = re.sub(r'<thought>.*?</thought>', '', cleaned_text, flags=re.DOTALL)
+        
+        # 3. 过滤详细的中文分析内容，保留标准ReAct格式
+        lines = cleaned_text.split('\n')
+        filtered_lines = []
+        
+        for line in lines:
+            line = line.strip()
+            # 跳过过长的中文分析行（非标准ReAct格式）
+            if (line.startswith('Thought:') and 
+                len(line) > 100 and 
+                '工具' in line and 
+                'Action' not in line):
+                # 替换为简化版本
+                filtered_lines.append('Thought: 分析问题并选择合适的工具')
+            elif line:
+                filtered_lines.append(line)
+        
+        # 4. 清理多余的空行
+        result = '\n'.join(filtered_lines)
+        result = re.sub(r'\n\s*\n\s*\n', '\n\n', result)  # 最多保留一个空行
+        
+        return result.strip()
     
     @property
     def _type(self) -> str:
