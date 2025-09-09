@@ -7,7 +7,7 @@ from typing import List, Dict, Any, Optional
 import logging
 
 from langchain.agents import AgentExecutor
-from langchain_core.runnables import RunnablePassthrough
+from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 from langchain.agents.format_scratchpad import format_log_to_str
 from langchain_core.tools.render import render_text_description
 from langchain_openai import ChatOpenAI
@@ -177,9 +177,39 @@ class SemanticSQLReActAgent:
             """
             return format_log_to_str(x["intermediate_steps"])
         
+        def filter_think_content(llm_output):
+            """过滤LLM输出中的think内容 - 通用过滤器
+            
+            Args:
+                llm_output: LLM原始输出
+                
+            Returns:
+                过滤后的输出
+            """
+            import re
+            
+            # 如果输入是ChatGeneration或AIMessage对象，提取文本内容
+            if hasattr(llm_output, 'content'):
+                text = llm_output.content
+                # 保持原对象结构，只替换content
+                filtered_content = self._clean_think_content(text)
+                llm_output.content = filtered_content
+                return llm_output
+            elif hasattr(llm_output, 'text'):
+                text = llm_output.text
+                llm_output.text = self._clean_think_content(text)
+                return llm_output
+            elif isinstance(llm_output, str):
+                return self._clean_think_content(llm_output)
+            else:
+                return llm_output
+        
         # 构建agent（官方RunnablePassthrough.assign模式）
         # 绑定停止序列确保LLM在正确位置停止
         llm_with_stop = llm.bind(stop=["\nObservation:", "\nObservation"])
+        
+        # 创建think内容过滤器
+        think_filter = RunnableLambda(filter_think_content)
         
         agent = (
             RunnablePassthrough.assign(
@@ -187,6 +217,7 @@ class SemanticSQLReActAgent:
             )
             | prompt
             | llm_with_stop  # 使用带停止序列的LLM
+            | think_filter   # 过滤think内容
             | output_parser
         )
         
