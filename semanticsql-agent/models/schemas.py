@@ -223,7 +223,7 @@ class DatabaseInfo(BaseModel):
     
     name: str = Field(description="数据库名称")
     tables: List[str] = Field(default_factory=list, description="表名列表")
-    schema_info: Dict[str, List[Dict[str, Any]]] = Field(default_factory=dict, description="表结构信息")
+    schema_info: Dict[str, Dict[str, Any]] = Field(default_factory=dict, description="表结构信息")
     connection_params: Dict[str, Any] = Field(default_factory=dict, description="连接参数")
 
 

@@ -339,13 +339,12 @@ class DatabaseManager:
             return False
     
     def get_connection_info(self) -> Dict[str, Any]:
-        """获取连接信息"""
+        """获取当前连接的基础信息"""
         return {
-            "type": self.db_type,
             "host": self.host,
             "port": self.port,
             "database": self.database,
-            "connected": self.test_connection()
+            "type": self.db_type
         }
     
     def close(self) -> None:
