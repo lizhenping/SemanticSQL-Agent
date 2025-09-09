@@ -36,14 +36,16 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
     # 数据库管理器（可选注入）
     database_manager: Optional[DatabaseManager] = Field(default=None, exclude=True)
     
-    def __init__(self, database_manager: Optional[DatabaseManager] = None, **kwargs):
+    def __init__(self, memory_manager: Optional['Neo4jMemoryManager'] = None, 
+                 database_manager: Optional[DatabaseManager] = None, **kwargs):
         """
         初始化Schema提取工具
         
         Args:
+            memory_manager: Neo4j记忆管理器实例
             database_manager: 可选的数据库管理器实例
         """
-        super().__init__(**kwargs)
+        super().__init__(memory_manager=memory_manager, **kwargs)
         # 使用object.__setattr__避免Pydantic验证问题
         object.__setattr__(self, 'database_manager', database_manager)
     
