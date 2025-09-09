@@ -18,6 +18,7 @@ from utils.memory import Neo4jMemoryManager
 from utils.database import DatabaseManager
 from models.exceptions import AgentExecutionError, AgentInitializationError
 from prompts.manager import PromptManager
+from config.factories import ComponentFactory
 
 # 新工具系统导入 - 基于BaseSemanticSQLTool
 from tools.analysis_tools.schema_extraction_tool import create_schema_extraction_tool
@@ -62,10 +63,19 @@ class SemanticSQLReActAgent:
         """
         self.logger = logging.getLogger(self.__class__.__name__)
         
-        # 核心组件初始化
-        self.llm = llm or self._create_default_llm()
-        self.memory_manager = memory_manager or self._create_default_memory_manager()
-        self.database_manager = database_manager
+        # 核心组件初始化 - 使用统一配置工厂
+        if llm is None and memory_manager is None and database_manager is None:
+            # 如果没有传入任何组件，使用工厂统一创建
+            components = ComponentFactory.create_all_components()
+            self.llm = components["llm"]
+            self.memory_manager = components["memory_manager"] 
+            self.database_manager = components["database_manager"]
+        else:
+            # 如果有部分组件传入，按需创建缺失的组件
+            self.llm = llm or self._create_default_llm()
+            self.memory_manager = memory_manager or self._create_default_memory_manager()
+            self.database_manager = database_manager
+            
         self.max_iterations = max_iterations
         self.verbose = verbose
         
@@ -78,21 +88,14 @@ class SemanticSQLReActAgent:
         self.logger.info(f"✅ SemanticSQL Agent初始化完成 - {len(self.tools)}个工具")
     
     def _create_default_llm(self) -> ChatOpenAI:
-        """创建默认LLM实例"""
-        return ChatOpenAI(
-            model="gpt-4",
-            temperature=0.7,
-            max_tokens=2000
-        )
+        """创建默认LLM实例 - 使用统一配置，避免硬编码"""
+        from config.factories import LLMFactory
+        return LLMFactory.create_llm()
     
     def _create_default_memory_manager(self) -> Neo4jMemoryManager:
-        """创建默认的Neo4j记忆管理器 - 使用正确的密码配置"""
-        return Neo4jMemoryManager(
-            neo4j_uri="bolt://localhost:7687",
-            neo4j_user="neo4j",
-            neo4j_password="88888888",  # 使用正确的密码
-            use_fallback=True  # 允许fallback，避免连接失败时崩溃
-        )
+        """创建默认的Neo4j记忆管理器 - 使用统一配置，避免硬编码"""
+        from config.factories import MemoryFactory
+        return MemoryFactory.create_memory_manager()
     
     def _create_semantic_sql_tools(self) -> List:
         """创建完整的SemanticSQL工具集 - 基于新的BaseSemanticSQLTool"""
@@ -398,8 +401,9 @@ def create_semantic_sql_agent(
         if not database_manager.initialize():
             raise AgentInitializationError("DatabaseManager", "数据库连接失败")
     
-    # 3. 创建记忆管理器
-    memory_manager = Neo4jMemoryManager()
+    # 3. 创建记忆管理器 - 使用统一配置工厂
+    from config.factories import MemoryFactory
+    memory_manager = MemoryFactory.create_memory_manager()
     
     # 4. 创建智能体实例
     return SemanticSQLReActAgent(

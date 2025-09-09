@@ -55,44 +55,53 @@ class Neo4jMemoryManager:
     """
     
     def __init__(self, 
-                 neo4j_uri: str = "bolt://localhost:7687",
+                 neo4j_uri: str = "",
                  neo4j_user: str = "neo4j", 
                  neo4j_password: str = "",
-                 use_fallback: bool = True):
+                 use_fallback: bool = False):
         """
-        初始化Neo4j记忆管理器
+        初始化Neo4j记忆管理器 - 强制fail-fast原则
         
         Args:
             neo4j_uri: Neo4j连接URI
             neo4j_user: 用户名
             neo4j_password: 密码
-            use_fallback: 是否在连接失败时使用内存后备存储
+            use_fallback: 是否在连接失败时使用内存后备存储（默认False，强制fail-fast）
         """
         self.logger = logging.getLogger(__name__)
         self.use_fallback = use_fallback
         self.neo4j_graph = None
-        self.fallback_storage = {}  # 内存后备存储
+        self.fallback_storage = {} if use_fallback else None
         
-        # 尝试连接Neo4j - 使用LangChain Neo4jGraph (需要APOC)
-        if NEO4J_AVAILABLE and neo4j_password:
-            try:
-                self.neo4j_graph = Neo4jGraph(
-                    url=neo4j_uri,
-                    username=neo4j_user,
-                    password=neo4j_password
-                )
-                # 测试连接
-                self.neo4j_graph.query("MATCH (n) RETURN count(n) LIMIT 1")
-                self.logger.info("✅ Neo4j连接成功")
-            except Exception as e:
-                self.logger.warning(f"⚠️ Neo4j连接失败: {e}")
-                if not use_fallback:
-                    raise MemoryConnectionError("Neo4j", {
-                        "uri": neo4j_uri,
-                        "user": neo4j_user,
-                        "error": str(e)
-                    })
-                self.logger.info("📦 使用内存后备存储")
+        # 检查Neo4j依赖
+        if not NEO4J_AVAILABLE:
+            raise MemoryConnectionError("Neo4j", {
+                "error": "Neo4j依赖不可用，请安装langchain-neo4j或langchain-community"
+            })
+        
+        # 强制尝试连接Neo4j - 移除密码空检查
+        try:
+            self.neo4j_graph = Neo4jGraph(
+                url=neo4j_uri,
+                username=neo4j_user,
+                password=neo4j_password
+            )
+            # 测试连接
+            self.neo4j_graph.query("MATCH (n) RETURN count(n) LIMIT 1")
+            self.logger.info("✅ Neo4j连接成功")
+        except Exception as e:
+            error_msg = f"Neo4j连接失败: {e}"
+            self.logger.error(f"❌ {error_msg}")
+            
+            if not use_fallback:
+                raise MemoryConnectionError("Neo4j", {
+                    "uri": neo4j_uri,
+                    "user": neo4j_user,
+                    "error": str(e)
+                })
+            else:
+                self.logger.warning("📦 使用内存后备存储")
+                self.fallback_storage = {}
     
     def store_triples(self, 
                      triples: Union[List[SemanticTriple], TripleCollection], 
@@ -471,7 +480,7 @@ def create_memory_manager(neo4j_uri: Optional[str] = None,
         neo4j_uri=neo4j_uri or "bolt://localhost:7687",
         neo4j_user=neo4j_user or "neo4j",
         neo4j_password=neo4j_password or "",
-        use_fallback=True
+        use_fallback=False
     )
 
 

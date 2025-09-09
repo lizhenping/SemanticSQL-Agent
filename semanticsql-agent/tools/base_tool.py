@@ -85,8 +85,17 @@ class BaseSemanticSQLTool(BaseTool):
             ]
         """
         if not self.memory_manager:
-            self.logger.warning(f"⚠️ {self.name}: 记忆管理器未配置，无法查询记忆")
-            return []
+            from config.settings import get_settings
+            settings = get_settings()
+            if settings.fail_fast:
+                raise_dependency_error(
+                    self.name,
+                    "memory_manager",
+                    "记忆管理器未配置，请在Agent初始化时提供memory_manager"
+                )
+            else:
+                self.logger.warning(f"⚠️ {self.name}: 记忆管理器未配置，无法查询记忆")
+                return []
         
         try:
             results = self.memory_manager.query_by_source_tool(source_tool, limit)
@@ -329,7 +338,13 @@ def batch_create_tools(tool_configs: List[Dict[str, Any]],
             tool = create_tool_with_memory(tool_class, memory_manager, **tool_kwargs)
             tools.append(tool)
         except Exception as e:
-            logging.getLogger(__name__).warning(f"⚠️ 跳过工具 {tool_class.__name__}: {e}")
+            from config.settings import get_settings
+            settings = get_settings()
+            if settings.fail_fast:
+                logging.getLogger(__name__).error(f"❌ 工具创建失败: {tool_class.__name__}: {e}")
+                raise ToolInitializationError(tool_class.__name__, str(e))
+            else:
+                logging.getLogger(__name__).warning(f"⚠️ 跳过工具 {tool_class.__name__}: {e}")
     
     logging.getLogger(__name__).info(f"📦 批量创建完成: {len(tools)} 个工具")
     return tools
