@@ -9,12 +9,24 @@ from datetime import datetime
 import uuid
 
 try:
-    from langchain_community.graphs import Neo4jGraph
-    from langchain_community.graphs.graph_document import GraphDocument, Node, Relationship
+    # 优先使用新的langchain-neo4j包
+    from langchain_neo4j import Neo4jGraph
     NEO4J_AVAILABLE = True
+    LANGCHAIN_NEO4J_NEW = True
 except ImportError:
-    # 如果Neo4j不可用，使用内存存储作为后备
-    NEO4J_AVAILABLE = False
+    try:
+        # 备用旧的langchain_community包
+        from langchain_community.graphs import Neo4jGraph
+        NEO4J_AVAILABLE = True
+        LANGCHAIN_NEO4J_NEW = False
+    except ImportError:
+        NEO4J_AVAILABLE = False
+        LANGCHAIN_NEO4J_NEW = False
+        Neo4jGraph = None
+
+try:
+    from langchain_community.graphs.graph_document import GraphDocument, Node, Relationship
+except ImportError:
     Node = None
     Relationship = None
     GraphDocument = None
@@ -61,7 +73,7 @@ class Neo4jMemoryManager:
         self.neo4j_graph = None
         self.fallback_storage = {}  # 内存后备存储
         
-        # 尝试连接Neo4j
+        # 尝试连接Neo4j - 使用LangChain Neo4jGraph (需要APOC)
         if NEO4J_AVAILABLE and neo4j_password:
             try:
                 self.neo4j_graph = Neo4jGraph(

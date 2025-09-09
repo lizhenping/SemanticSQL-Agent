@@ -64,7 +64,7 @@ class SemanticSQLReActAgent:
         
         # 核心组件初始化
         self.llm = llm or self._create_default_llm()
-        self.memory_manager = memory_manager or Neo4jMemoryManager()
+        self.memory_manager = memory_manager or self._create_default_memory_manager()
         self.database_manager = database_manager
         self.max_iterations = max_iterations
         self.verbose = verbose
@@ -83,6 +83,15 @@ class SemanticSQLReActAgent:
             model="gpt-4",
             temperature=0.7,
             max_tokens=2000
+        )
+    
+    def _create_default_memory_manager(self) -> Neo4jMemoryManager:
+        """创建默认的Neo4j记忆管理器 - 使用正确的密码配置"""
+        return Neo4jMemoryManager(
+            neo4j_uri="bolt://localhost:7687",
+            neo4j_user="neo4j",
+            neo4j_password="88888888",  # 使用正确的密码
+            use_fallback=True  # 允许fallback，避免连接失败时崩溃
         )
     
     def _create_semantic_sql_tools(self) -> List:
