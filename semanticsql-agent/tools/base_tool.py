@@ -166,7 +166,7 @@ class BaseSemanticSQLTool(BaseTool):
     # ========== 内部辅助方法 ==========
     def _clear_generated_triples(self) -> None:
         """清空当前执行生成的三元组 - 工具开始执行时调用"""
-        self._generated_triples = []
+        object.__setattr__(self, '_generated_triples', [])
         self.logger.debug(f"🧹 {self.name}: 清空三元组缓存")
     
     def _persist_triples(self) -> bool:

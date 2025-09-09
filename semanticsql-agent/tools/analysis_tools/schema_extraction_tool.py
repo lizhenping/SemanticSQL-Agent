@@ -63,8 +63,8 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
         self._log_execution_start(input_text)
         
         try:
-            # 2. 解析输入参数
-            extraction_params = self._parse_input(input_text)
+            # 2. 解析输入参数 - 直接在_run中处理
+            extraction_params = self._parse_input_inline(input_text)
             
             # 3. 获取或创建数据库管理器
             db_manager = self._get_database_manager(extraction_params)
@@ -90,17 +90,17 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
             return f"❌ {error_msg}"
     
     # ========== 核心业务逻辑 ==========
-    def _parse_input(self, tool_input) -> Dict[str, Any]:
-        """解析输入参数"""
+    def _parse_input_inline(self, input_text: str) -> Dict[str, Any]:
+        """解析输入参数 - 内联版本，避免与LangChain BaseTool冲突"""
         try:
             # 如果输入已经是字典，直接返回
-            if isinstance(tool_input, dict):
-                return tool_input
+            if isinstance(input_text, dict):
+                return input_text
                 
             # 如果是字符串，尝试解析JSON格式的输入
-            input_text = str(tool_input)
-            if input_text.strip().startswith('{'):
-                return json.loads(input_text)
+            text = str(input_text)
+            if text.strip().startswith('{'):
+                return json.loads(text)
         except json.JSONDecodeError:
             pass
         
