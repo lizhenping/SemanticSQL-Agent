@@ -11,7 +11,7 @@ from datetime import datetime
 
 from pydantic import Field
 from tools.base_tool import BaseSemanticSQLTool
-from utils.database import DatabaseManager, create_database_manager
+from utils.database import DatabaseManager
 from models.exceptions import raise_tool_error
 
 
@@ -126,13 +126,10 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
         if self.database_manager:
             return self.database_manager
         
-        # 从配置中获取数据库参数
-        if "database_params" in config:
-            return create_database_manager(config["database_params"])
-        
+        # 未提供数据库管理器时的错误处理
         raise_tool_error(
             self.name, 
-            "未找到数据库连接信息，请提供database_params或注入DatabaseManager"
+            "未找到数据库连接信息，请通过构造函数注入DatabaseManager"
         )
     
     def _extract_mysql_metadata(self, db_manager: DatabaseManager, config: Dict[str, Any]) -> Dict[str, Any]:
@@ -460,23 +457,17 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
 # ========== 便利函数 ==========
 def create_schema_extraction_tool(
     memory_manager: Optional['Neo4jMemoryManager'] = None,
-    database_manager: Optional['DatabaseManager'] = None,
-    database_params: Optional[Dict[str, Any]] = None
+    database_manager: Optional['DatabaseManager'] = None
 ) -> SchemaExtractionTool:
     """创建Schema提取工具的便利函数
     
     Args:
         memory_manager: Neo4j记忆管理器
         database_manager: 数据库管理器
-        database_params: 数据库连接参数（向后兼容）
         
     Returns:
         配置好的Schema提取工具
     """
-    # 处理向后兼容的database_params
-    if database_params and not database_manager:
-        database_manager = create_database_manager(database_params)
-    
     return SchemaExtractionTool(
         memory_manager=memory_manager,
         database_manager=database_manager

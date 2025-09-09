@@ -215,14 +215,23 @@ class SemanticSQLReActAgent:
         
         Args:
             user_input: 用户输入
-            database_params: 数据库参数（可选）
+            database_params: 数据库参数 [DEPRECATED - 使用Settings统一配置]
             
         Returns:
             执行结果字典
         """
+        # 废弃警告
+        if database_params is not None:
+            import warnings
+            warnings.warn(
+                "database_params parameter is deprecated. Database configuration is handled via Settings.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+        
         try:
-            # 创建Agent状态
-            state = create_agent_state(user_input, database_params)
+            # 创建Agent状态（忽略废弃的database_params）
+            state = create_agent_state(user_input, None)
             
             # 构建执行参数
             params = {
@@ -311,7 +320,7 @@ class SemanticSQLReActAgent:
 # ========== 工厂函数 ==========
 
 def create_llm(config_type="openai", **kwargs) -> ChatOpenAI:
-    """创建语言模型实例 - 支持多种LLM
+    """创建语言模型实例 - DEPRECATED: 使用 LLMFactory.create_llm() 代替
     
     Args:
         config_type: LLM类型 ("openai")
@@ -320,18 +329,15 @@ def create_llm(config_type="openai", **kwargs) -> ChatOpenAI:
     Returns:
         语言模型实例
     """
+    import warnings
+    warnings.warn(
+        "create_llm() is deprecated. Use config.factories.LLMFactory.create_llm() instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
     
-    if config_type == "openai":
-        return ChatOpenAI(
-            model=kwargs.get("model", "Qwen3-14B"),
-            api_key=kwargs.get("api_key"),
-            base_url=kwargs.get("base_url"),
-            temperature=kwargs.get("temperature", 0.7),
-            max_tokens=kwargs.get("max_tokens", 2000)
-        )
-    else:
-        # 支持自定义LLM
-        return kwargs.get("custom_llm")
+    from config.factories import LLMFactory
+    return LLMFactory.create_llm()
 
 
 def create_semantic_sql_agent(
@@ -339,14 +345,16 @@ def create_semantic_sql_agent(
     llm_config: Optional[Dict[str, Any]] = None, 
     database_config: Optional[Dict[str, Any]] = None,
     tools: Optional[List] = None,
+    settings: Optional['Settings'] = None,
     **agent_kwargs
 ) -> SemanticSQLReActAgent:
-    """创建完整配置的SemanticSQL智能体 - 集成LLM和工具
+    """创建完整配置的SemanticSQL智能体 - 推荐使用统一Settings配置
     
     Args:
-        config_type: LLM类型 ("openai")
-        llm_config: LLM配置字典
-        database_config: 数据库配置字典
+        settings: 统一配置实例 (推荐方式)
+        config_type: LLM类型 ("openai") [DEPRECATED]
+        llm_config: LLM配置字典 [DEPRECATED - 使用settings]
+        database_config: 数据库配置字典 [DEPRECATED - 使用settings]
         tools: 工具列表（可选，默认使用完整SemanticSQL工具集）
         **agent_kwargs: 智能体其他参数
         
@@ -354,33 +362,53 @@ def create_semantic_sql_agent(
         配置完整的SemanticSQL智能体实例
         
     Example:
-        # OpenAI配置
+        # 推荐方式：使用统一Settings
+        from config.settings import get_settings
+        settings = get_settings()
         agent = create_semantic_sql_agent(
-            config_type="openai",
-            llm_config={
-                "model": "gpt-4",
-                "api_key": "your-openai-key",
-                "temperature": 0.7
-            },
-            database_config={
-                "host": "localhost",
-                "port": 3306,
-                "database": "test_db",
-                "user": "root",
-                "password": "password"
-            },
+            settings=settings,
             max_iterations=15,
             verbose=True
         )
+        
+        # 兼容方式（将被废弃）
+        agent = create_semantic_sql_agent(
+            config_type="openai",
+            llm_config={"model": "gpt-4", "temperature": 0.7},
+            database_config={"host": "localhost", "database": "test_db"}
+        )
     """
     
-    # 1. 创建LLM实例
+    
+    # 优先使用统一Settings配置
+    if settings is not None:
+        # 使用Settings配置（推荐方式）
+        from config.factories import ComponentFactory
+        components = ComponentFactory.create_all_components(settings)
+        
+        return SemanticSQLReActAgent(
+            llm=components["llm"],
+            tools=tools,
+            memory_manager=components["memory_manager"],
+            database_manager=components["database_manager"],
+            **agent_kwargs
+        )
+    
+    # 向后兼容：使用传统字典配置（将废弃）
+    import warnings
+    warnings.warn(
+        "Using llm_config/database_config is deprecated. Use 'settings' parameter instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
+    
+    # 1. 创建LLM实例（兼容模式）
     if llm_config is None:
         llm_config = {}
         
     llm = create_llm(config_type=config_type, **llm_config)
     
-    # 2. 创建数据库管理器（如果提供了配置）
+    # 2. 创建数据库管理器（兼容模式）
     database_manager = None
     if database_config:
         from utils.database_config import DatabaseConfig
@@ -401,7 +429,7 @@ def create_semantic_sql_agent(
         if not database_manager.initialize():
             raise AgentInitializationError("DatabaseManager", "数据库连接失败")
     
-    # 3. 创建记忆管理器 - 使用统一配置工厂
+    # 3. 创建记忆管理器（兼容模式）
     from config.factories import MemoryFactory
     memory_manager = MemoryFactory.create_memory_manager()
     

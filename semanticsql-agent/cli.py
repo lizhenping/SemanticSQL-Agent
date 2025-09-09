@@ -175,12 +175,11 @@ def generate(ctx, count: int, output: str, database: Optional[str], config: Opti
         
         # 使用新架构的invoke方法
         result = agent.invoke(
-            user_input=generation_task,
-            database_params=database_data
+            user_input=generation_task
         )
         
         # 模拟数据生成结果（实际应该从Agent执行结果中提取）
-        generated_samples = simulate_training_data_generation(count, database_data['database'])
+        generated_samples = simulate_training_data_generation(count, settings.db_database)
         
         # 保存结果
         save_training_data(generated_samples, output, format)
@@ -236,22 +235,14 @@ def analyze(ctx, database: str, output: Optional[str], config: Optional[str]):
     
     # 加载配置
     config_path = config or ctx.obj.get('config_path')
-    settings_data, database_data = load_configuration(ctx, config_path, database)
+    settings = load_configuration(ctx, config_path, database)
     
     # 创建Agent
     click.echo("🔧 初始化分析Agent...")
     
     try:
         agent = create_semantic_sql_agent(
-            config_type="openai",
-            llm_config={
-                "model": settings_data["llm_model"],
-                "api_key": settings_data["llm_api_key"],
-                "base_url": settings_data["llm_base_url"],
-                "temperature": settings_data["llm_temperature"],
-                "max_tokens": settings_data["llm_max_tokens"]
-            },
-            database_config=database_data,
+            settings=settings,
             max_iterations=10,
             verbose=ctx.obj.get('verbose', False)
         )
@@ -269,8 +260,7 @@ def analyze(ctx, database: str, output: Optional[str], config: Optional[str]):
         analysis_task = f"请全面分析数据库 {database} 的结构、领域特征和业务模式"
         
         result = agent.invoke(
-            user_input=analysis_task,
-            database_params=database_data
+            user_input=analysis_task
         )
         
         click.echo("✅ 分析完成！")
