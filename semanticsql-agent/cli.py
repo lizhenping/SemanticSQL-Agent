@@ -84,32 +84,8 @@ def cli(ctx, config: Optional[str], verbose: bool):
         click.echo("🔍 详细模式已启用")
 
 
-def load_configuration(ctx, config_path: Optional[str], database: Optional[str]) -> 'Settings':
+def load_configuration(ctx) -> 'Settings':
     """加载配置信息 - 使用统一Settings，不重复定义配置"""
-    from config.settings import get_settings
-    
-    # 获取统一配置
-    settings = get_settings()
-    
-    # 从配置文件加载覆盖（如果存在）  
-    if config_path and Path(config_path).exists():
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config_data = yaml.safe_load(f)
-            
-        # 简单的配置文件支持 - 直接设置环境变量让Settings重新加载
-        import os
-        yaml_settings = config_data.get('settings', {})
-        for key, value in yaml_settings.items():
-            # 映射到环境变量
-            env_key = f"SEMANTICSQL_{key.upper()}"
-            os.environ[env_key] = str(value)
-    
-    # 处理数据库名覆盖
-    if database:
-        import os
-        os.environ["SEMANTICSQL_DB_DATABASE"] = database
-        
-    # 重新获取Settings以应用覆盖
     from config.settings import Settings
     return Settings()  # 重新创建以获取最新环境变量
 
@@ -135,8 +111,8 @@ def generate(ctx, count: int, output: str, database: Optional[str], config: Opti
     click.echo("=" * 60)
     
     # 加载统一配置
-    config_path = config or ctx.obj.get('config_path')
-    settings = load_configuration(ctx, config_path, database)
+
+    settings = load_configuration(ctx)
     
     # 显示配置信息
     if ctx.obj.get('verbose'):
