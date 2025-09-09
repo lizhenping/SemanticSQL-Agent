@@ -36,16 +36,10 @@ class ERAnalysisTool(BaseSemanticSQLTool):
         # 使用object.__setattr__避免Pydantic验证问题
         object.__setattr__(self, 'relationship_patterns', self._init_relationship_patterns())
     
-    def _run(self, input_text: str) -> str:
-        """
-        执行ER关系分析 - 完全自主实现
-        
-        Args:
-            input_text: 输入文本，通常包含分析参数
-            
-        Returns:
-            自定义格式的执行结果字符串
-        """
+    def _run(self, *args, **kwargs) -> str:
+        """执行工具分析"""
+        # 提取输入文本
+        input_text = args[0] if args else kwargs.get('input', '')
         # 1. 清空上次执行的三元组
         self._clear_generated_triples()
         self._log_execution_start(input_text)

@@ -45,7 +45,7 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
         # 使用object.__setattr__避免Pydantic验证问题
         object.__setattr__(self, 'database_manager', database_manager)
     
-    def _run(self, input_text: str) -> str:
+    def _run(self, *args, **kwargs) -> str:
         """
         执行数据库结构提取 - 完全自主实现
         
@@ -55,6 +55,9 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
         Returns:
             自定义格式的执行结果字符串
         """
+        # 提取输入文本
+        input_text = args[0] if args else kwargs.get('input', '')
+        
         # 1. 清空上次执行的三元组
         self._clear_generated_triples()
         self._log_execution_start(input_text)
@@ -87,10 +90,15 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
             return f"❌ {error_msg}"
     
     # ========== 核心业务逻辑 ==========
-    def _parse_input(self, input_text: str) -> Dict[str, Any]:
+    def _parse_input(self, tool_input) -> Dict[str, Any]:
         """解析输入参数"""
         try:
-            # 尝试解析JSON格式的输入
+            # 如果输入已经是字典，直接返回
+            if isinstance(tool_input, dict):
+                return tool_input
+                
+            # 如果是字符串，尝试解析JSON格式的输入
+            input_text = str(tool_input)
             if input_text.strip().startswith('{'):
                 return json.loads(input_text)
         except json.JSONDecodeError:
