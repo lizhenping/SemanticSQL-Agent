@@ -1,438 +1,385 @@
 """
-SQL Agent - SQL 生成智能体
-优化版本：单一职责，类型安全，无状态设计
+SemanticSQL ReAct Agent - 基于LangChain官方API的极简重构
+完全重构：去除复杂继承，基于设计文档的革命性简化
 """
 
 from typing import List, Dict, Any, Optional
-from dataclasses import dataclass
-import json
 import logging
-import uuid
-from datetime import datetime
 
-from langchain.tools import BaseTool
-from langchain_core.memory import BaseMemory
-from langchain.callbacks.base import BaseCallbackHandler
+from langchain.agents import AgentExecutor
+from langchain_core.runnables import RunnablePassthrough
+from langchain.agents.format_scratchpad import format_log_to_str
+from langchain_core.tools.render import render_text_description
+from langchain_openai import ChatOpenAI
 
-from agent.base_agent import BaseAgent
-from config.settings import Settings
-from utils.database_config import DatabaseConfig
-from utils.memory import DatabaseAnalysisMemory
+from agent.state import AgentState, create_agent_state, extract_database_info
+from agent.parsers import SemanticSQLOutputParser
+from utils.memory import Neo4jMemoryManager
 from utils.database import DatabaseManager
-from models.training import TrainingDataResult
-from models.exceptions import AgentExecutionError
+from models.exceptions import AgentExecutionError, AgentInitializationError
 from prompts.manager import PromptManager
 
-# 工具导入（按类别分组）
-from tools.analysis_tools.schema_extraction_tool import SchemaExtractionTool
-from tools.analysis_tools.domain_analysis_tool import DomainAnalysisTool
-from tools.analysis_tools.field_analysis_tool import FieldAnalysisTool
-from tools.analysis_tools.column_analysis_tool import ColumnAnalysisTool
-from tools.analysis_tools.table_analysis_tool import TableAnalysisTool
-from tools.analysis_tools.er_analysis_tool import ERAnalysisTool
-
-from tools.generation_tools.scenario_operation_tool import ScenarioOperationTool
-from tools.generation_tools.question_generation_tool import QuestionGenerationTool
-from tools.generation_tools.sql_generation_tool import SQLGenerationTool
-
-from tools.validation_tools.sql_validation_tool import SQLValidationTool
-from tools.validation_tools.sql_execution_tool import SQLExecutionTool
-
-from tools.reflection_tools.sql_reflection_tool import SQLReflectionTool
-from tools.thinking_tools.sequential_thinking_tool import SequentialThinkingTool
+# 新工具系统导入 - 基于BaseSemanticSQLTool
+from tools.analysis_tools.schema_extraction_tool import create_schema_extraction_tool
+from tools.analysis_tools.domain_analysis_tool import create_domain_analysis_tool
+from tools.analysis_tools.field_analysis_tool import create_field_analysis_tool
+from tools.analysis_tools.column_analysis_tool import create_column_analysis_tool
+from tools.analysis_tools.table_analysis_tool import create_table_analysis_tool
+from tools.analysis_tools.er_analysis_tool import create_er_analysis_tool
 
 
-# ========== 类型安全的数据容器 ==========
-@dataclass
-class TrainingExample:
-    """训练样例数据结构"""
-    id: str
-    scenario: Dict[str, Any]
-    question: str
-    sql: str
-    operations: List[str]
-    tables: List[str]
-    timestamp: str
-    validation: Dict[str, Any]
-    quality_score: float
-
-
-@dataclass
-class ServiceContainer:
-    """类型安全的服务容器"""
-    database_manager: DatabaseManager
-    prompt_manager: PromptManager
-    settings: Settings
-
-
-class SQLAgent(BaseAgent):
-    """SQL 生成智能体 - 专注于 SQL 生成和工具协调
-    
-    职责：
-    - 管理和协调各种分析和生成工具
-    - 执行 SQL 生成工作流
-    - 提供统一的工具访问接口
+class SemanticSQLReActAgent:
+    """SQL生成智能体 - 基于官方API，专注业务完成逻辑
     
     设计原则：
-    - 单一职责：只负责工具协调和 SQL 生成
-    - 无状态设计：通过参数传递数据而非存储状态
-    - 类型安全：使用强类型容器而非字典
+    - 极简架构：去除复杂继承，直接使用LangChain官方API
+    - 2字段状态：只有current_input和database_params
+    - 工具自主：所有业务逻辑在工具的_run()方法中完成
+    - 记忆驱动：工具间通过Neo4j记忆系统协作
+    
+    核心职责：
+    - 创建和管理AgentExecutor
+    - 提供标准invoke接口
+    - 管理工具集和记忆系统
     """
-
-    def __init__(
-        self,
-        settings: Settings,
-        db_config: DatabaseConfig,
-        callbacks: Optional[List[BaseCallbackHandler]] = None,
-    ):
-        """初始化 SQL Agent
+    
+    def __init__(self, 
+                 llm: Optional[ChatOpenAI] = None,
+                 tools: Optional[List] = None,
+                 memory_manager: Optional[Neo4jMemoryManager] = None,
+                 database_manager: Optional[DatabaseManager] = None,
+                 max_iterations: int = 15,
+                 verbose: bool = True):
+        """初始化SemanticSQL智能体
         
         Args:
-            settings: 系统配置
-            db_config: 数据库配置
-            callbacks: LangChain 回调处理器列表
+            llm: 语言模型实例
+            tools: 工具列表（可选，默认使用完整SemanticSQL工具集）
+            memory_manager: Neo4j记忆管理器（可选）
+            database_manager: 数据库管理器（可选）
+            max_iterations: 最大迭代次数
+            verbose: 是否显示详细执行过程
         """
-        # 初始化服务容器
-        self.services = self._create_service_container(settings, db_config)
+        self.logger = logging.getLogger(self.__class__.__name__)
         
-        # 保存额外回调
-        self.extra_callbacks = callbacks or []
+        # 核心组件初始化
+        self.llm = llm or self._create_default_llm()
+        self.memory_manager = memory_manager or Neo4jMemoryManager()
+        self.database_manager = database_manager
+        self.max_iterations = max_iterations
+        self.verbose = verbose
         
-        # 调用父类初始化
-        super().__init__(settings, db_config)
+        # 工具系统初始化
+        self.tools = tools or self._create_semantic_sql_tools()
         
-        # 创建训练数据生成器（委托模式）
-        self.training_generator = TrainingDataGenerator(self)
+        # 创建智能体执行器
+        self.agent_executor = self._create_agent_executor()
         
-        self.logger = logging.getLogger(__name__)
+        self.logger.info(f"✅ SemanticSQL Agent初始化完成 - {len(self.tools)}个工具")
     
-    def _create_service_container(self, settings: Settings, db_config: DatabaseConfig) -> ServiceContainer:
-        """创建类型安全的服务容器"""
-        db_manager = DatabaseManager(db_config)
-        if not db_manager.initialize():
-            raise AgentExecutionError(
-                step="initialization", 
-                reason="Failed to initialize database connection"
-            )
-        
-        return ServiceContainer(
-            database_manager=db_manager,
-            prompt_manager=PromptManager(),
-            settings=settings
+    def _create_default_llm(self) -> ChatOpenAI:
+        """创建默认LLM实例"""
+        return ChatOpenAI(
+            model="gpt-4",
+            temperature=0.7,
+            max_tokens=2000
         )
-
-    # ========== 工具管理（按功能分组）==========
-    def _initialize_tools(self) -> List[BaseTool]:
-        """初始化所有工具 - 使用服务容器统一管理依赖"""
-        analysis_tools = self._create_analysis_tools()
-        generation_tools = self._create_generation_tools()
-        validation_tools = self._create_validation_tools()
-        reflection_tools = self._create_reflection_tools()
+    
+    def _create_semantic_sql_tools(self) -> List:
+        """创建完整的SemanticSQL工具集 - 基于新的BaseSemanticSQLTool"""
+        tools = []
         
-        all_tools = analysis_tools + generation_tools + validation_tools + reflection_tools
-        self.logger.info(f"Initialized {len(all_tools)} tools")
-        return all_tools
+        try:
+            # 分析工具组 - 基于新架构的完全自主工具
+            analysis_tools = [
+                create_schema_extraction_tool(
+                    memory_manager=self.memory_manager,
+                    database_manager=self.database_manager
+                ),
+                create_domain_analysis_tool(memory_manager=self.memory_manager),
+                create_field_analysis_tool(memory_manager=self.memory_manager),
+                create_column_analysis_tool(memory_manager=self.memory_manager),
+                create_table_analysis_tool(memory_manager=self.memory_manager),
+                create_er_analysis_tool(memory_manager=self.memory_manager)
+            ]
+            tools.extend(analysis_tools)
+            
+            self.logger.info(f"📊 创建了 {len(analysis_tools)} 个分析工具")
+            
+            # TODO: 后续在Phase 2中会添加其他工具组
+            # generation_tools = self._create_generation_tools()
+            # validation_tools = self._create_validation_tools() 
+            # reflection_tools = self._create_reflection_tools()
+            
+        except Exception as e:
+            self.logger.error(f"❌ 工具创建失败: {e}")
+            raise AgentInitializationError("SemanticSQLAgent", f"工具创建失败: {e}")
+        
+        return tools
     
-    def _create_analysis_tools(self) -> List[BaseTool]:
-        """创建分析工具集"""
-        return [
-            SchemaExtractionTool(db_manager=self.services.database_manager),
-            DomainAnalysisTool(llm=self.llm),
-            FieldAnalysisTool(llm=self.llm, db_manager=self.services.database_manager),
-            ColumnAnalysisTool(llm=self.llm),
-            TableAnalysisTool(llm=self.llm),
-            ERAnalysisTool(llm=self.llm, db_manager=self.services.database_manager),
-        ]
+    def _create_agent_executor(self) -> AgentExecutor:
+        """创建AgentExecutor - 使用官方API和自定义解析器"""
+        
+        # 1. 创建提示词模板
+        prompt = self._create_semantic_sql_prompt()
+        
+        # 2. 创建标准ReAct Agent
+        agent = self._create_react_agent(
+            llm=self.llm,
+            tools=self.tools,
+            prompt=prompt,
+            output_parser=SemanticSQLOutputParser()
+        )
+        
+        # 3. 创建AgentExecutor（官方API）
+        return AgentExecutor(
+            agent=agent,
+            tools=self.tools,
+            verbose=self.verbose,
+            max_iterations=self.max_iterations,
+            handle_parsing_errors=True,
+            return_intermediate_steps=True
+        )
     
-    def _create_generation_tools(self) -> List[BaseTool]:
-        """创建生成工具集"""
-        return [
-            ScenarioOperationTool(),
-            QuestionGenerationTool(llm=self.llm),
-            SQLGenerationTool(llm=self.llm, db_manager=self.services.database_manager),
-        ]
-    
-    def _create_validation_tools(self) -> List[BaseTool]:
-        """创建验证工具集"""
-        return [
-            SQLValidationTool(db_manager=self.services.database_manager),
-            SQLExecutionTool(db_manager=self.services.database_manager),
-        ]
-    
-    def _create_reflection_tools(self) -> List[BaseTool]:
-        """创建反思工具集"""
-        return [
-            SQLReflectionTool(llm=self.llm),
-            SequentialThinkingTool(llm=self.llm)
-        ]
-
-    def _initialize_memory(self) -> BaseMemory:
-        """初始化记忆系统"""
-        return DatabaseAnalysisMemory()
-    
-    # ========== 训练数据生成接口 ==========
-    def generate_training_data(self, output_file: str = "training_data.jsonl") -> List[Dict[str, Any]]:
-        """生成训练数据 - 委托给专门的生成器
+    def _create_react_agent(self, llm, tools, prompt, output_parser=None):
+        """创建标准ReAct Agent - 基于官方create_react_agent逻辑
         
         Args:
-            output_file: 输出文件路径
+            llm: 语言模型
+            tools: 工具列表
+            prompt: 提示词模板
+            output_parser: 输出解析器
             
         Returns:
-            生成的训练样例列表
+            Agent实例
         """
-        return self.training_generator.generate_training_data(output_file)
+        
+        # 验证必需变量（官方逻辑）
+        missing_vars = {"tools", "tool_names", "agent_scratchpad"}.difference(
+            prompt.input_variables + list(prompt.partial_variables)
+        )
+        if missing_vars:
+            raise ValueError(f"Prompt missing required variables: {missing_vars}")
+
+        # 设置工具信息（官方逻辑）
+        prompt = prompt.partial(
+            tools=render_text_description(list(tools)),
+            tool_names=", ".join([t.name for t in tools]),
+        )
+        
+        # 使用自定义输出解析器
+        if output_parser is None:
+            output_parser = SemanticSQLOutputParser()
+        
+        def agent_scratchpad(x):
+            """标准 agent_scratchpad - 格式化推理历史
+            Neo4j记忆管理在各个工具内部进行
+            """
+            return format_log_to_str(x["intermediate_steps"])
+        
+        # 构建agent（官方RunnablePassthrough.assign模式）
+        agent = (
+            RunnablePassthrough.assign(
+                agent_scratchpad=agent_scratchpad,
+            )
+            | prompt
+            | llm  # 直接使用llm而不是绑定停止序列
+            | output_parser
+        )
+        
+        return agent
     
-    # ========== 资源清理 ==========
-    def __del__(self):
-        """清理资源"""
-        if hasattr(self, "services") and self.services and self.services.database_manager:
-            self.services.database_manager.close()
+    def _create_semantic_sql_prompt(self):
+        """创建SemanticSQL的ReAct格式提示词模板"""
+        prompt_manager = PromptManager()
+        return prompt_manager.create_agent_prompt_template(agent_type="semantic_sql_agent")
+    
+    def invoke(self, user_input: str, database_params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """标准invoke接口 - 兼容官方API
+        
+        Args:
+            user_input: 用户输入
+            database_params: 数据库参数（可选）
+            
+        Returns:
+            执行结果字典
+        """
+        try:
+            # 创建Agent状态
+            state = create_agent_state(user_input, database_params)
+            
+            # 构建执行参数
+            params = {
+                "input": user_input,
+                **extract_database_info(state)
+            }
+            
+            self.logger.info(f"🚀 开始执行任务: {user_input[:100]}...")
+            
+            # 执行Agent
+            result = self.agent_executor.invoke(params)
+            
+            self.logger.info(f"✅ 任务执行完成")
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"❌ 任务执行失败: {e}")
+            raise AgentExecutionError("invoke", str(e))
+    
+    # ========== 便利方法 ==========
+    def get_tool_names(self) -> List[str]:
+        """获取所有工具名称"""
+        return [tool.name for tool in self.tools]
+    
+    def get_memory_stats(self) -> Dict[str, Any]:
+        """获取记忆系统统计"""
+        if not self.memory_manager:
+            return {"status": "no_memory_manager"}
+        
+        return {
+            "total_triples": getattr(self.memory_manager, 'count_triples', lambda: 0)(),
+            "sources": getattr(self.memory_manager, 'get_source_tools', lambda: [])(),
+            "status": "active"
+        }
+    
+    def clear_memory(self) -> bool:
+        """清空记忆系统"""
+        if not self.memory_manager:
+            return False
+        
+        return self.memory_manager.clear_all()
 
 
-class TrainingDataGenerator:
-    """训练数据生成器 - 专门负责训练数据的生成和处理
+# ========== 工厂函数 ==========
+
+def create_llm(config_type="openai", **kwargs) -> ChatOpenAI:
+    """创建语言模型实例 - 支持多种LLM
     
-    职责：
-    - 从 Agent 执行结果中提取训练样例
-    - 格式化和验证训练数据
-    - 保存训练数据到文件
-    
-    设计原则：
-    - 单一职责：只处理训练数据相关逻辑
-    - 类型安全：使用强类型数据结构
-    - 方法拆分：每个方法不超过30行
+    Args:
+        config_type: LLM类型 ("openai")
+        **kwargs: LLM配置参数
+        
+    Returns:
+        语言模型实例
     """
     
-    def __init__(self, agent: SQLAgent):
-        """初始化训练数据生成器
+    if config_type == "openai":
+        return ChatOpenAI(
+            model=kwargs.get("model", "gpt-4"),
+            api_key=kwargs.get("api_key"),
+            base_url=kwargs.get("base_url"),
+            temperature=kwargs.get("temperature", 0.7),
+            max_tokens=kwargs.get("max_tokens", 2000)
+        )
+    else:
+        # 支持自定义LLM
+        return kwargs.get("custom_llm")
+
+
+def create_semantic_sql_agent(
+    config_type="openai", 
+    llm_config: Optional[Dict[str, Any]] = None, 
+    database_config: Optional[Dict[str, Any]] = None,
+    tools: Optional[List] = None,
+    **agent_kwargs
+) -> SemanticSQLReActAgent:
+    """创建完整配置的SemanticSQL智能体 - 集成LLM和工具
+    
+    Args:
+        config_type: LLM类型 ("openai")
+        llm_config: LLM配置字典
+        database_config: 数据库配置字典
+        tools: 工具列表（可选，默认使用完整SemanticSQL工具集）
+        **agent_kwargs: 智能体其他参数
         
-        Args:
-            agent: SQL Agent 实例
-        """
-        self.agent = agent
-        self.logger = logging.getLogger(__name__ + '.TrainingDataGenerator')
+    Returns:
+        配置完整的SemanticSQL智能体实例
+        
+    Example:
+        # OpenAI配置
+        agent = create_semantic_sql_agent(
+            config_type="openai",
+            llm_config={
+                "model": "gpt-4",
+                "api_key": "your-openai-key",
+                "temperature": 0.7
+            },
+            database_config={
+                "host": "localhost",
+                "port": 3306,
+                "database": "test_db",
+                "user": "root",
+                "password": "password"
+            },
+            max_iterations=15,
+            verbose=True
+        )
+    """
+    
+    # 1. 创建LLM实例
+    if llm_config is None:
+        llm_config = {}
+        
+    llm = create_llm(config_type=config_type, **llm_config)
+    
+    # 2. 创建数据库管理器（如果提供了配置）
+    database_manager = None
+    if database_config:
+        from utils.database_config import DatabaseConfig
+        db_config = DatabaseConfig(**database_config)
+        
+        # 将DatabaseConfig转换为DatabaseManager所需的字典格式
+        db_params = {
+            "host": db_config.host,
+            "port": db_config.port,
+            "database": db_config.database,
+            "username": db_config.username,
+            "password": db_config.password,
+            "type": db_config.type.value,
+            "charset": db_config.charset
+        }
+        
+        database_manager = DatabaseManager(db_params)
+        if not database_manager.initialize():
+            raise AgentInitializationError("DatabaseManager", "数据库连接失败")
+    
+    # 3. 创建记忆管理器
+    memory_manager = Neo4jMemoryManager()
+    
+    # 4. 创建智能体实例
+    return SemanticSQLReActAgent(
+        llm=llm,
+        tools=tools,
+        memory_manager=memory_manager,
+        database_manager=database_manager,
+        **agent_kwargs
+    )
+
+
+# ========== 向后兼容性包装 ==========
+
+class SQLAgent:
+    """向后兼容的SQLAgent包装器"""
+    
+    def __init__(self, *args, **kwargs):
+        self.logger = logging.getLogger(__name__)
+        self.logger.warning("🔄 SQLAgent已重构为SemanticSQLReActAgent，建议使用新接口")
+        
+        # 创建新的智能体实例
+        self.react_agent = create_semantic_sql_agent(**kwargs)
+    
+    def run(self, task: str, **kwargs) -> Dict[str, Any]:
+        """兼容旧接口的run方法"""
+        result = self.react_agent.invoke(task, **kwargs)
+        
+        # 转换为旧格式
+        return {
+            "success": True,
+            "result": result.get("output", result),
+            "agent_type": "SemanticSQLReActAgent"
+        }
     
     def generate_training_data(self, output_file: str = "training_data.jsonl") -> List[Dict[str, Any]]:
-        """生成训练数据主流程
-        
-        Args:
-            output_file: 输出文件路径
-            
-        Returns:
-            生成的训练样例列表
-        """
-        self.logger.info("Starting training data generation (Agent自主模式)")
-        
-        # 执行生成任务
-        agent_result = self._execute_generation_task()
-        
-        # 提取和处理样例
-        examples = self._process_generation_result(agent_result)
-        
-        # 保存到文件
-        self._save_training_data(examples, output_file)
-        
-        self.logger.info(f"Generation completed: {len(examples)} samples generated")
-        return examples
-    
-    def _execute_generation_task(self) -> Dict[str, Any]:
-        """执行Agent生成任务"""
-        task = "请生成高质量的NL2SQL训练数据集，覆盖所有场景组合"
-        result = self.agent.run(task)
-        
-        if not result["success"]:
-            raise AgentExecutionError(
-                step="generation", 
-                reason=result.get("error", "生成失败")
-            )
-        
-        return result
-    
-    def _process_generation_result(self, agent_result: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """处理Agent生成结果"""
-        output = agent_result.get("result", {})
-        return self._extract_all_samples(output)
-
-    # ========== 样例提取和处理（按流程顺序拆分）==========
-    def _extract_all_samples(self, agent_output: Any) -> List[Dict[str, Any]]:
-        """从 Agent 输出中提取生成的样例 - 主协调方法"""
-        if not hasattr(self.agent.callback_handler, "get_trajectories"):
-            return []
-        
-        trajectories = self.agent.callback_handler.get_trajectories()
-        return self._parse_trajectories(trajectories)
-    
-    def _parse_trajectories(self, trajectories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """解析执行轨迹，提取训练样例"""
-        examples = []
-        current_example = {}
-        current_scenario = {}
-        
-        for trajectory in trajectories:
-            if trajectory["type"] == "action":
-                tool_name = trajectory["tool"]
-                tool_output = trajectory.get("output", {})
-                
-                # 更新当前样例和场景
-                self._process_tool_output(
-                    tool_name, tool_output, current_example, current_scenario
-                )
-                
-                # 检查是否完成一个样例
-                if self._is_example_complete(tool_name, tool_output, current_example):
-                    formatted_example = self._format_training_example(current_example)
-                    examples.append(formatted_example)
-                    current_example = {}  # 重置
-        
-        return examples
-    
-    def _process_tool_output(
-        self, 
-        tool_name: str, 
-        tool_output: Dict[str, Any], 
-        current_example: Dict[str, Any], 
-        current_scenario: Dict[str, Any]
-    ) -> None:
-        """处理单个工具的输出"""
-        if tool_name == "scenario_operation_generation":
-            self._process_scenario_output(tool_output, current_example, current_scenario)
-        elif tool_name == "question_generation":
-            self._process_question_output(tool_output, current_example, current_scenario)
-        elif tool_name == "sql_generation":
-            self._process_sql_output(tool_output, current_example)
-        elif tool_name == "sql_validation":
-            self._process_validation_output(tool_output, current_example)
-        elif tool_name == "sql_execution":
-            self._process_execution_output(tool_output, current_example)
-        elif tool_name == "sql_reflection":
-            self._process_reflection_output(tool_output, current_example)
-    
-    def _process_scenario_output(
-        self, 
-        tool_output: Dict[str, Any], 
-        current_example: Dict[str, Any], 
-        current_scenario: Dict[str, Any]
-    ) -> None:
-        """处理场景生成工具输出"""
-        if "combinations" in tool_output:
-            # 处理get_all_combinations模式
-            current_example["all_combinations"] = tool_output.get("combinations", [])
-            current_example["total_combinations"] = tool_output.get("total_combinations", 0)
-        elif "combination" in tool_output:
-            # 处理get_single_combination模式
-            combo = tool_output.get("combination", {})
-            scenario_info = combo.get("scenario", {})
-            current_scenario.update({
-                "id": combo.get("combination_id", ""),
-                "category": scenario_info.get("main_name", ""),
-                "business_purpose": scenario_info.get("main_description", ""),
-                "difficulty": scenario_info.get("complexity", "medium"),
-            })
-            current_example["operations"] = combo.get("operations", [])
-    
-    def _process_question_output(
-        self, 
-        tool_output: Dict[str, Any], 
-        current_example: Dict[str, Any], 
-        current_scenario: Dict[str, Any]
-    ) -> None:
-        """处理问题生成工具输出"""
-        current_example["question"] = tool_output.get("question", "")
-        current_example["scenario"] = current_scenario.copy()
-    
-    def _process_sql_output(self, tool_output: Dict[str, Any], current_example: Dict[str, Any]) -> None:
-        """处理SQL生成工具输出"""
-        current_example["sql"] = tool_output.get("sql", "")
-        current_example["tables"] = tool_output.get("tables_used", [])
-    
-    def _process_validation_output(self, tool_output: Dict[str, Any], current_example: Dict[str, Any]) -> None:
-        """处理SQL验证工具输出"""
-        if "validation" not in current_example:
-            current_example["validation"] = {}
-        current_example["validation"]["syntax_valid"] = tool_output.get("valid", False)
-    
-    def _process_execution_output(self, tool_output: Dict[str, Any], current_example: Dict[str, Any]) -> None:
-        """处理SQL执行工具输出"""
-        if "validation" not in current_example:
-            current_example["validation"] = {}
-        
-        validation = current_example["validation"]
-        validation["execution_success"] = tool_output.get("success", False)
-        validation["row_count"] = tool_output.get("row_count", 0)
-        
-        if tool_output.get("data"):
-            validation["result_sample"] = tool_output["data"][:3]
-    
-    def _process_reflection_output(self, tool_output: Dict[str, Any], current_example: Dict[str, Any]) -> None:
-        """处理SQL反思工具输出"""
-        current_example["quality_score"] = tool_output.get("overall_score", 0.0)
-    
-    def _is_example_complete(
-        self, 
-        tool_name: str, 
-        tool_output: Dict[str, Any], 
-        current_example: Dict[str, Any]
-    ) -> bool:
-        """检查当前样例是否完整"""
-        # 反思工具输出后，检查是否应该保存样例
-        if tool_name == "sql_reflection":
-            needs_revision = tool_output.get("needs_revision", True)
-            has_question = "question" in current_example
-            has_sql = "sql" in current_example
-            return not needs_revision and has_question and has_sql
-        
-        return False
-
-    # ========== 数据格式化和保存 ==========
-    def _format_training_example(self, raw_example: Dict[str, Any]) -> Dict[str, Any]:
-        """格式化训练样例为标准格式"""
-        return {
-            "id": self._generate_example_id(),
-            "scenario": raw_example.get("scenario", {}),
-            "question": raw_example.get("question", ""),
-            "sql": raw_example.get("sql", ""),
-            "operations": raw_example.get("operations", []),
-            "tables": raw_example.get("tables", []),
-            "timestamp": datetime.now().isoformat(),
-            "validation": self._get_default_validation(raw_example),
-            "quality_score": raw_example.get("quality_score", 0.0),
-        }
-    
-    def _generate_example_id(self) -> str:
-        """生成唯一的样例ID"""
-        timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-        unique_suffix = uuid.uuid4().hex[:8]
-        return f"q_{timestamp}_{unique_suffix}"
-    
-    def _get_default_validation(self, raw_example: Dict[str, Any]) -> Dict[str, Any]:
-        """获取默认验证结果"""
-        default = {
-            "syntax_valid": False, 
-            "execution_success": False, 
-            "row_count": 0
-        }
-        return raw_example.get("validation", default)
-
-    def _save_training_data(self, examples: List[Dict[str, Any]], output_file: str) -> None:
-        """保存训练数据到文件
-        
-        Args:
-            examples: 训练样例列表
-            output_file: 输出文件路径
-        """
-        with open(output_file, "w", encoding="utf-8") as f:
-            if output_file.endswith(".jsonl"):
-                self._save_as_jsonl(f, examples)
-            else:
-                self._save_as_json(f, examples)
-        
-        self.logger.info(f"Saved {len(examples)} examples to {output_file}")
-    
-    def _save_as_jsonl(self, file_handle, examples: List[Dict[str, Any]]) -> None:
-        """保存为JSONL格式"""
-        for example in examples:
-            file_handle.write(json.dumps(example, ensure_ascii=False) + "\n")
-    
-    def _save_as_json(self, file_handle, examples: List[Dict[str, Any]]) -> None:
-        """保存为JSON格式"""
-        json.dump(examples, file_handle, ensure_ascii=False, indent=2)
+        """兼容的训练数据生成方法"""
+        self.logger.warning("训练数据生成功能需要在新架构中重新实现")
+        return []

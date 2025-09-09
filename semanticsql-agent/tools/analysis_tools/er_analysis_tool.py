@@ -1,643 +1,783 @@
 """
-ER关系分析工具 - 优化版本
-简化设计，移除过度异常处理，按就近原则组织代码
+ER关系分析工具 - 极简架构重构版本
+基于新的BaseSemanticSQLTool，实现完全自主的ER关系分析
 """
 
-from typing import Dict, Any, Type, List, Tuple
-from enum import Enum
+from typing import Dict, Any, List, Optional
 import json
-from dataclasses import dataclass
-from pydantic import BaseModel, Field
+import re
 
-from models.exceptions import ToolExecutionError
-from prompts.manager import PromptManager
-from ..base_tool import BaseSemanticSQLTool
-
-
-# ========== 工具内部数据模型（就近原则）==========
-class ERAnalysisInput(BaseModel):
-    """ER关系分析输入参数"""
-    include_physical: bool = Field(default=True, description="是否分析物理关系")
-    include_logical: bool = Field(default=True, description="是否分析逻辑关系")
-    include_semantic: bool = Field(default=True, description="是否分析语义关系")
-
-
-class RelationType(str, Enum):
-    """关系类型枚举"""
-    FOREIGN_KEY = "foreign_key"      # 物理外键关系
-    ONE_TO_ONE = "one_to_one"        # 一对一关系
-    ONE_TO_MANY = "one_to_many"      # 一对多关系
-    MANY_TO_MANY = "many_to_many"    # 多对多关系
-    INHERITANCE = "inheritance"      # 继承关系
-    COMPOSITION = "composition"      # 组合关系
-    AGGREGATION = "aggregation"      # 聚合关系
-    DEPENDENCY = "dependency"        # 依赖关系
-
-
-class CardinalityType(str, Enum):
-    """基数约束类型"""
-    ONE_TO_ONE = "1:1"
-    ONE_TO_MANY = "1:N"
-    MANY_TO_ONE = "N:1"
-    MANY_TO_MANY = "M:N"
-    ZERO_TO_ONE = "0:1"
-    ZERO_TO_MANY = "0:N"
-
-
-@dataclass
-class PhysicalRelation:
-    """物理关系信息"""
-    source_table: str
-    target_table: str
-    source_columns: List[str]
-    target_columns: List[str]
-    constraint_name: str
-    relation_type: RelationType = RelationType.FOREIGN_KEY
-
-
-class LogicalRelation(BaseModel):
-    """逻辑关系信息"""
-    source_entity: str
-    target_entity: str
-    relation_type: RelationType
-    cardinality: CardinalityType
-    relation_name: str
-    description: str
-    confidence: float = 0.8
-
-
-class SemanticRelation(BaseModel):
-    """语义关系信息"""
-    source_concept: str
-    target_concept: str
-    semantic_type: str  # "is-a", "has-a", "uses", "contains", etc.
-    business_description: str
-    domain_context: str
-    strength: float = 0.5  # 关系强度
+from tools.base_tool import BaseSemanticSQLTool
+from models.schemas import PredicateType, EntityType
+from models.exceptions import raise_tool_error, raise_dependency_error
 
 
 class ERAnalysisTool(BaseSemanticSQLTool):
-    """
-ER关系分析工具 - 优化版本
+    """ER关系分析工具 - 极简重构版本
     
     职责：
-    - 分析数据库表之间的物理关系（外键约束）
-    - 推断逻辑关系（业务关联）
-    - 分析语义关系（概念关联）
-    - 构建实体关系矩阵
+    - 基于数据库结构和表语义进行ER关系分析
+    - 识别表间的物理关系、逻辑关系和语义关系
+    - 构建完整的实体关系图谱
+    - 为后续工具提供关系知识上下文
     
     设计原则：
-    - 单一职责：专注ER关系分析
-    - 方法拆分：每个方法<30行
-    - 类型安全：使用枚举和数据类
-    - 简化异常：让异常自然传播
+    - 依赖记忆：基于schema_extraction、table_analysis工具的结果
+    - 智能推断：结合外键约束和业务语义推断关系
+    - 三元组输出：结构化关系知识表示
     """
     
     name: str = "er_analysis"
-    description: str = "分析数据库表之间的物理、逻辑和语义关系"
-    args_schema: Type[BaseModel] = ERAnalysisInput
+    description: str = "分析数据库表间的ER关系，构建实体关系图谱"
     
     def __init__(self, **kwargs):
+        """初始化ER分析工具"""
         super().__init__(**kwargs)
-        object.__setattr__(self, 'prompt_manager', PromptManager())
-
-    def _run(self, include_physical: bool = True, include_logical: bool = True, 
-             include_semantic: bool = True, **kwargs) -> str:
-        """执行ER关系分析 - 主流程"""
-        # 获取分析上下文
-        analysis_context = self._gather_analysis_context()
+        # 使用object.__setattr__避免Pydantic验证问题
+        object.__setattr__(self, 'relationship_patterns', self._init_relationship_patterns())
+    
+    def _run(self, input_text: str) -> str:
+        """
+        执行ER关系分析 - 完全自主实现
+        
+        Args:
+            input_text: 输入文本，通常包含分析参数
+            
+        Returns:
+            自定义格式的执行结果字符串
+        """
+        # 1. 清空上次执行的三元组
+        self._clear_generated_triples()
+        self._log_execution_start(input_text)
+        
+        try:
+            # 2. 检查依赖：需要schema_extraction和table_analysis工具的结果
+            self._check_dependencies(["schema_extraction", "table_analysis"])
+            
+            # 3. 获取依赖分析结果
+            analysis_context = self._gather_analysis_context()
+            
+            # 4. 分析ER关系
+            er_analysis = self._analyze_er_relationships(analysis_context)
+            
+            # 5. 生成ER关系三元组
+            self._generate_er_triples(er_analysis, analysis_context)
+            
+            # 6. 持久化三元组到记忆系统
+            self._persist_triples()
+            
+            # 7. 构建执行结果
+            result_message = self._build_result_message(er_analysis)
+            
+            self._log_execution_end(f"分析了 {er_analysis['total_relationships']} 个关系")
+            return result_message
+            
+        except Exception as e:
+            error_msg = f"ER关系分析失败: {str(e)}"
+            self.logger.error(f"❌ {self.name}: {error_msg}")
+            return f"❌ {error_msg}"
+    
+    # ========== 核心业务逻辑 ==========
+    def _gather_analysis_context(self) -> Dict[str, Any]:
+        """收集分析上下文"""
+        # 获取基础结构信息
+        schema_memory = self.get_memory_by_source_tool("schema_extraction")
+        schema_info = self._extract_schema_info(schema_memory)
+        
+        # 获取表语义分析结果
+        table_memory = self.get_memory_by_source_tool("table_analysis")
+        table_semantics = self._extract_table_semantics(table_memory)
+        
+        # 尝试获取领域信息（可选）
+        domain_memory = self.get_memory_by_source_tool("domain_analysis")
+        domain_info = self._extract_domain_info(domain_memory) if domain_memory else {"primary_domain": "通用业务"}
+        
+        # 尝试获取列分析信息（可选）
+        column_memory = self.get_memory_by_source_tool("column_analysis")
+        column_info = self._extract_column_info(column_memory) if column_memory else {}
+        
+        return {
+            "schema_info": schema_info,
+            "table_semantics": table_semantics,
+            "domain_info": domain_info,
+            "column_info": column_info
+        }
+    
+    def _extract_schema_info(self, schema_memory: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """从记忆中提取结构信息"""
+        if not schema_memory:
+            raise_dependency_error(self.name, "schema_extraction", "数据库结构信息")
+        
+        # 从三元组中重建结构信息
+        tables = set()
+        table_columns = {}
+        foreign_key_relationships = []
+        database_name = "unknown"
+        
+        for triple in schema_memory:
+            subject = triple.get("subject", "")
+            predicate = triple.get("predicate", "")
+            obj = triple.get("object", "")
+            
+            if predicate == PredicateType.HAS_TABLE.value:
+                database_name = subject
+                tables.add(obj)
+            elif predicate == PredicateType.HAS_COLUMN.value:
+                table_name = subject
+                column_name = obj
+                if table_name not in table_columns:
+                    table_columns[table_name] = []
+                table_columns[table_name].append(column_name)
+            elif predicate == PredicateType.REFERENCES.value:
+                # 外键关系：source -> target
+                if "." in subject and "." in obj:
+                    source_parts = subject.split(".", 1)
+                    target_parts = obj.split(".", 1)
+                    if len(source_parts) == 2 and len(target_parts) == 2:
+                        foreign_key_relationships.append({
+                            "source_table": source_parts[0],
+                            "source_column": source_parts[1], 
+                            "target_table": target_parts[0],
+                            "target_column": target_parts[1]
+                        })
+        
+        return {
+            "database_name": database_name,
+            "tables": list(tables),
+            "table_columns": table_columns,
+            "foreign_key_relationships": foreign_key_relationships
+        }
+    
+    def _extract_table_semantics(self, table_memory: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """从记忆中提取表语义信息"""
+        table_entity_types = {}
+        table_business_purposes = {}
+        table_entities = {}
+        table_importance = {}
+        table_dependencies = []
+        
+        for triple in table_memory:
+            subject = triple.get("subject", "")
+            predicate = triple.get("predicate", "")
+            obj = triple.get("object", "")
+            
+            if predicate == "has_entity_type":
+                table_entity_types[subject] = obj
+            elif predicate == "has_business_purpose":
+                table_business_purposes[subject] = obj
+            elif predicate == "represents_entity":
+                table_entities[subject] = obj
+            elif predicate == "has_importance_level":
+                table_importance[subject] = obj
+            elif predicate == "depends_on":
+                table_dependencies.append({"source": subject, "target": obj})
+        
+        return {
+            "table_entity_types": table_entity_types,
+            "table_business_purposes": table_business_purposes,
+            "table_entities": table_entities,
+            "table_importance": table_importance,
+            "table_dependencies": table_dependencies
+        }
+    
+    def _extract_domain_info(self, domain_memory: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """从记忆中提取领域信息"""
+        primary_domain = "通用业务"
+        core_entities = []
+        
+        for triple in domain_memory:
+            subject = triple.get("subject", "")
+            predicate = triple.get("predicate", "")
+            obj = triple.get("object", "")
+            
+            if predicate == PredicateType.BELONGS_TO.value:
+                primary_domain = obj
+            elif predicate == PredicateType.CONTAINS.value:
+                core_entities.append(obj)
+        
+        return {
+            "primary_domain": primary_domain,
+            "core_entities": core_entities
+        }
+    
+    def _extract_column_info(self, column_memory: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """从记忆中提取列信息"""
+        column_entities = {}
+        
+        for triple in column_memory:
+            subject = triple.get("subject", "")
+            predicate = triple.get("predicate", "")
+            obj = triple.get("object", "")
+            
+            if predicate == "belongs_to_entity":
+                column_entities[subject] = obj
+        
+        return {
+            "column_entities": column_entities
+        }
+    
+    def _init_relationship_patterns(self) -> Dict[str, Dict[str, Any]]:
+        """初始化关系模式库"""
+        return {
+            "一对多关系": {
+                "indicators": ["foreign_key", "parent_child", "master_detail"],
+                "cardinality": "1:N",
+                "description_template": "{parent}实体与{child}实体之间的一对多关系",
+                "strength": 0.9
+            },
+            "多对多关系": {
+                "indicators": ["junction_table", "many_foreign_keys", "bridge"],
+                "cardinality": "M:N",
+                "description_template": "{entity1}实体与{entity2}实体之间的多对多关系",
+                "strength": 0.8
+            },
+            "组合关系": {
+                "indicators": ["detail_table", "line_item", "composition"],
+                "cardinality": "1:N",
+                "description_template": "{whole}实体组合包含{part}实体",
+                "strength": 0.85
+            },
+            "聚合关系": {
+                "indicators": ["aggregation", "grouping", "collection"],
+                "cardinality": "1:N",
+                "description_template": "{container}实体聚合{contained}实体",
+                "strength": 0.7
+            },
+            "依赖关系": {
+                "indicators": ["reference", "lookup", "dependency"],
+                "cardinality": "N:1",
+                "description_template": "{dependent}实体依赖{independent}实体",
+                "strength": 0.6
+            },
+            "继承关系": {
+                "indicators": ["inheritance", "is_a", "subtype"],
+                "cardinality": "1:1",
+                "description_template": "{child}实体继承{parent}实体",
+                "strength": 0.9
+            }
+        }
+    
+    def _analyze_er_relationships(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """分析ER关系"""
+        schema_info = context["schema_info"]
+        table_semantics = context["table_semantics"]
+        domain_info = context["domain_info"]
+        column_info = context["column_info"]
+        
+        tables = schema_info["tables"]
+        foreign_key_relationships = schema_info["foreign_key_relationships"]
+        table_entity_types = table_semantics["table_entity_types"]
+        table_entities = table_semantics["table_entities"]
+        table_dependencies = table_semantics["table_dependencies"]
         
         # 分析物理关系
-        physical_relations = []
-        if include_physical:
-            physical_relations = self._analyze_physical_relations(analysis_context)
+        physical_relationships = self._analyze_physical_relationships(
+            foreign_key_relationships, table_entities
+        )
         
         # 分析逻辑关系
-        logical_relations = []
-        if include_logical:
-            logical_relations = self._analyze_logical_relations(analysis_context, physical_relations)
+        logical_relationships = self._analyze_logical_relationships(
+            physical_relationships, table_semantics, domain_info
+        )
         
         # 分析语义关系
-        semantic_relations = []
-        if include_semantic:
-            semantic_relations = self._analyze_semantic_relations(analysis_context, logical_relations)
-        
-        # 构建关系矩阵
-        relationship_matrix = self._build_relationship_matrix(physical_relations, logical_relations)
-        
-        # 构建分析结果
-        result = self._build_analysis_result(
-            physical_relations, logical_relations, semantic_relations, 
-            relationship_matrix, analysis_context
+        semantic_relationships = self._analyze_semantic_relationships(
+            logical_relationships, table_entity_types, domain_info
         )
         
-        # 保存并返回
-        self.save_to_memory("er_relations", result)
-        return json.dumps(result, ensure_ascii=False)
-
-    # ========== 核心分析逻辑 ==========
-    def _gather_analysis_context(self) -> Dict[str, Any]:
-        """获取分析上下文"""
-        context = {
-            "schema_info": self.get_from_memory("schema_extraction"),
-            "column_meanings": self.get_from_memory("column_meanings"),
-            "table_meanings": self.get_from_memory("table_meanings"),
-            "domain_info": self.get_from_memory("domain_analysis")
-        }
-        
-        if not context["schema_info"]:
-            raise ToolExecutionError(
-                tool_name=self.name,
-                reason="无法获取数据库结构信息，需要先运行schema_extraction工具"
-            )
-        
-        return context
-    
-    def _analyze_physical_relations(self, analysis_context: Dict[str, Any]) -> List[PhysicalRelation]:
-        """分析物理关系（外键约束）"""
-        physical_relations = []
-        schema_info = analysis_context["schema_info"]
-        tables = schema_info.get("tables", {})
-        
-        for table_name, table_info in tables.items():
-            foreign_keys = table_info.get("foreign_keys", [])
-            for fk in foreign_keys:
-                relation = PhysicalRelation(
-                    source_table=table_name,
-                    target_table=fk.get("referred_table", ""),
-                    source_columns=fk.get("constrained_columns", []),
-                    target_columns=fk.get("referred_columns", []),
-                    constraint_name=fk.get("constraint_name", "")
-                )
-                physical_relations.append(relation)
-        
-        return physical_relations
-
-    def _analyze_logical_relations(self, analysis_context: Dict[str, Any], 
-                                 physical_relations: List[PhysicalRelation]) -> List[LogicalRelation]:
-        """分析逻辑关系（业务关联）"""
-        logical_relations = []
-        
-        # 基于物理关系生成逻辑关系
-        for physical in physical_relations:
-            logical = self._create_logical_from_physical(physical, analysis_context)
-            logical_relations.append(logical)
-        
-        # 推断隐式逻辑关系（没有外键但可能存在业务关联）
-        implicit_relations = self._infer_implicit_logical_relations(analysis_context)
-        logical_relations.extend(implicit_relations)
-        
-        return logical_relations
-    
-    def _create_logical_from_physical(self, physical: PhysicalRelation, 
-                                    analysis_context: Dict[str, Any]) -> LogicalRelation:
-        """从物理关系创建逻辑关系"""
-        # 推断基数约束
-        cardinality = self._infer_cardinality(physical, analysis_context)
-        
-        # 生成关系名称
-        relation_name = f"{physical.source_table}_references_{physical.target_table}"
-        
-        # 生成描述
-        description = self._generate_logical_description(physical, analysis_context)
-        
-        return LogicalRelation(
-            source_entity=physical.source_table,
-            target_entity=physical.target_table,
-            relation_type=RelationType.ONE_TO_MANY,  # 大多数外键都是多对一
-            cardinality=cardinality,
-            relation_name=relation_name,
-            description=description,
-            confidence=0.9
-        )
-    
-    def _infer_cardinality(self, physical: PhysicalRelation, 
-                          analysis_context: Dict[str, Any]) -> CardinalityType:
-        """推断基数约束"""
-        # 简化实现：大多数情况下外键都是多对一
-        # 实际实现中可以根据字段特征、索引信息等进行更精确的推断
-        
-        # 如果源字段是唯一索引，可能是一对一关系
-        if len(physical.source_columns) == 1 and physical.source_columns[0].endswith("_id"):
-            source_col = physical.source_columns[0]
-            if source_col in ["user_id", "customer_id"] and "profile" in physical.source_table.lower():
-                return CardinalityType.ONE_TO_ONE
-        
-        return CardinalityType.MANY_TO_ONE
-    
-    def _generate_logical_description(self, physical: PhysicalRelation, 
-                                    analysis_context: Dict[str, Any]) -> str:
-        """生成逻辑关系描述"""
-        source_col = ", ".join(physical.source_columns)
-        target_col = ", ".join(physical.target_columns)
-        
-        # 基于表语义生成更有意义的描述
-        table_meanings = analysis_context.get("table_meanings", {})
-        source_meaning = table_meanings.get(physical.source_table, {}).get("business_purpose", physical.source_table)
-        target_meaning = table_meanings.get(physical.target_table, {}).get("business_purpose", physical.target_table)
-        
-        return f"{source_meaning}通过{source_col}字段引用{target_meaning}的{target_col}"
-    
-    def _infer_implicit_logical_relations(self, analysis_context: Dict[str, Any]) -> List[LogicalRelation]:
-        """推断隐式逻辑关系（没有外键但可能存在业务关联）"""
-        implicit_relations = []
-        schema_info = analysis_context["schema_info"]
-        tables = schema_info.get("tables", {})
-        
-        # 基于表名和字段名推断隐式关系
-        table_names = list(tables.keys())
-        
-        for i, table1 in enumerate(table_names):
-            for table2 in table_names[i+1:]:
-                implicit_relation = self._check_implicit_relation(table1, table2, tables)
-                if implicit_relation:
-                    implicit_relations.append(implicit_relation)
-        
-        return implicit_relations
-    
-    def _check_implicit_relation(self, table1: str, table2: str, 
-                               tables: Dict[str, Any]) -> LogicalRelation:
-        """检查两个表之间的隐式关系"""
-        # 简化实现：基于表名相似性推断
-        if self._are_tables_semantically_related(table1, table2):
-            return LogicalRelation(
-                source_entity=table1,
-                target_entity=table2,
-                relation_type=RelationType.DEPENDENCY,
-                cardinality=CardinalityType.MANY_TO_MANY,
-                relation_name=f"{table1}_related_to_{table2}",
-                description=f"{table1}与{table2}在业务上可能存在关联",
-                confidence=0.3
-            )
-        return None
-    
-    def _are_tables_semantically_related(self, table1: str, table2: str) -> bool:
-        """判断两个表是否在语义上相关"""
-        # 简化实现：基于关键词匹配
-        related_pairs = [
-            (["user", "customer", "member"], ["order", "transaction", "purchase"]),
-            (["product", "item", "goods"], ["order", "cart", "inventory"]),
-            (["category", "type"], ["product", "item"]),
-            (["address", "location"], ["user", "customer", "store"])
-        ]
-        
-        table1_lower = table1.lower()
-        table2_lower = table2.lower()
-        
-        for group1, group2 in related_pairs:
-            if (any(kw in table1_lower for kw in group1) and 
-                any(kw in table2_lower for kw in group2)) or \
-               (any(kw in table1_lower for kw in group2) and 
-                any(kw in table2_lower for kw in group1)):
-                return True
-        
-        return False
-
-    def _analyze_semantic_relations(self, analysis_context: Dict[str, Any], 
-                                  logical_relations: List[LogicalRelation]) -> List[SemanticRelation]:
-        """分析语义关系（概念关联）"""
-        semantic_relations = []
-        domain_info = analysis_context.get("domain_info", {})
-        domain_type = domain_info.get("primary_domain", "unknown") if domain_info else "unknown"
-        
-        # 基于逻辑关系生成语义关系
-        for logical in logical_relations:
-            semantic = self._create_semantic_from_logical(logical, domain_type)
-            if semantic:
-                semantic_relations.append(semantic)
-        
-        # 添加基于领域的语义关系
-        domain_semantics = self._generate_domain_semantic_relations(analysis_context)
-        semantic_relations.extend(domain_semantics)
-        
-        return semantic_relations
-    
-    def _create_semantic_from_logical(self, logical: LogicalRelation, domain_type: str) -> SemanticRelation:
-        """从逻辑关系创建语义关系"""
-        # 推断语义关系类型
-        semantic_type = self._infer_semantic_type(logical)
-        
-        # 生成业务描述
-        business_description = self._generate_semantic_description(logical, semantic_type, domain_type)
-        
-        # 推断概念名称
-        source_concept = self._infer_concept_name(logical.source_entity)
-        target_concept = self._infer_concept_name(logical.target_entity)
-        
-        return SemanticRelation(
-            source_concept=source_concept,
-            target_concept=target_concept,
-            semantic_type=semantic_type,
-            business_description=business_description,
-            domain_context=domain_type,
-            strength=logical.confidence * 0.8
-        )
-    
-    def _infer_semantic_type(self, logical: LogicalRelation) -> str:
-        """推断语义关系类型"""
-        source_lower = logical.source_entity.lower()
-        target_lower = logical.target_entity.lower()
-        
-        # 包含/组成关系
-        if "detail" in source_lower or "item" in source_lower:
-            return "has-a"
-        
-        # 归属关系
-        if any(kw in target_lower for kw in ["user", "customer", "owner"]):
-            return "belongs-to"
-        
-        # 使用关系
-        if any(kw in source_lower for kw in ["log", "history", "audit"]):
-            return "uses"
-        
-        # 依赖关系
-        if logical.relation_type == RelationType.DEPENDENCY:
-            return "depends-on"
-        
-        # 默认关联关系
-        return "relates-to"
-    
-    def _generate_semantic_description(self, logical: LogicalRelation, 
-                                     semantic_type: str, domain_type: str) -> str:
-        """生成语义关系描述"""
-        descriptions = {
-            "has-a": f"在{domain_type}领域中，{logical.source_entity}包含或拥有{logical.target_entity}的信息",
-            "belongs-to": f"在{domain_type}领域中，{logical.source_entity}属于或归{logical.target_entity}所有",
-            "uses": f"在{domain_type}领域中，{logical.source_entity}使用或记录{logical.target_entity}的活动",
-            "depends-on": f"在{domain_type}领域中，{logical.source_entity}的存在依赖于{logical.target_entity}",
-            "relates-to": f"在{domain_type}领域中，{logical.source_entity}与{logical.target_entity}存在业务关联"
-        }
-        return descriptions.get(semantic_type, descriptions["relates-to"])
-    
-    def _infer_concept_name(self, entity_name: str) -> str:
-        """推断概念名称"""
-        concept_mappings = {
-            "user": "用户概念",
-            "customer": "客户概念", 
-            "order": "订单概念",
-            "product": "商品概念",
-            "payment": "支付概念",
-            "category": "分类概念"
-        }
-        
-        entity_lower = entity_name.lower()
-        for keyword, concept in concept_mappings.items():
-            if keyword in entity_lower:
-                return concept
-        
-        return f"{entity_name}概念"
-    
-    def _generate_domain_semantic_relations(self, analysis_context: Dict[str, Any]) -> List[SemanticRelation]:
-        """生成领域特定的语义关系"""
-        domain_relations = []
-        domain_info = analysis_context.get("domain_info", {})
-        
-        if not domain_info:
-            return domain_relations
-        
-        primary_domain = domain_info.get("primary_domain", "")
-        schema_info = analysis_context["schema_info"]
-        tables = list(schema_info.get("tables", {}).keys())
-        
-        # 针对特定领域生成语义关系
-        if primary_domain == "电商":
-            domain_relations.extend(self._generate_ecommerce_semantic_relations(tables))
-        elif primary_domain == "财务":
-            domain_relations.extend(self._generate_finance_semantic_relations(tables))
-        
-        return domain_relations
-    
-    def _generate_ecommerce_semantic_relations(self, tables: List[str]) -> List[SemanticRelation]:
-        """生成电商领域的语义关系"""
-        relations = []
-        
-        # 查找电商相关表
-        user_tables = [t for t in tables if any(kw in t.lower() for kw in ["user", "customer"])]
-        product_tables = [t for t in tables if any(kw in t.lower() for kw in ["product", "item"])]
-        order_tables = [t for t in tables if any(kw in t.lower() for kw in ["order", "purchase"])]
-        
-        # 生成领域特定关系
-        if user_tables and order_tables:
-            for user_table in user_tables:
-                for order_table in order_tables:
-                    relations.append(SemanticRelation(
-                        source_concept="用户概念",
-                        target_concept="订单概念",
-                        semantic_type="creates",
-                        business_description=f"电商领域中，用户创建和管理订单",
-                        domain_context="电商",
-                        strength=0.9
-                    ))
-        
-        return relations
-    
-    def _generate_finance_semantic_relations(self, tables: List[str]) -> List[SemanticRelation]:
-        """生成财务领域的语义关系"""
-        relations = []
-        
-        # 查找财务相关表
-        account_tables = [t for t in tables if "account" in t.lower()]
-        transaction_tables = [t for t in tables if any(kw in t.lower() for kw in ["transaction", "payment"])]
-        
-        if account_tables and transaction_tables:
-            relations.append(SemanticRelation(
-                source_concept="账户概念",
-                target_concept="交易概念",
-                semantic_type="executes",
-                business_description="财务领域中，账户执行各种交易操作",
-                domain_context="财务",
-                strength=0.9
-            ))
-        
-        return relations
-
-    def _build_relationship_matrix(self, physical_relations: List[PhysicalRelation], 
-                                 logical_relations: List[LogicalRelation]) -> Dict[str, Dict[str, str]]:
-        """构建关系矩阵"""
-        matrix = {}
-        
-        # 添加物理关系
-        for physical in physical_relations:
-            if physical.source_table not in matrix:
-                matrix[physical.source_table] = {}
-            matrix[physical.source_table][physical.target_table] = "FK"
-        
-        # 添加逻辑关系
-        for logical in logical_relations:
-            if logical.source_entity not in matrix:
-                matrix[logical.source_entity] = {}
-            
-            current = matrix[logical.source_entity].get(logical.target_entity, "")
-            if current:
-                matrix[logical.source_entity][logical.target_entity] = f"{current}+{logical.cardinality.value}"
-            else:
-                matrix[logical.source_entity][logical.target_entity] = logical.cardinality.value
-        
-        return matrix
-
-    # ========== 结果构建和统计 ==========
-    def _build_analysis_result(self, physical_relations: List[PhysicalRelation],
-                             logical_relations: List[LogicalRelation],
-                             semantic_relations: List[SemanticRelation],
-                             relationship_matrix: Dict[str, Dict[str, str]],
-                             analysis_context: Dict[str, Any]) -> Dict[str, Any]:
-        """构建分析结果"""
-        # 转换为字典格式以支持JSON序列化
-        physical_dicts = self._convert_physical_to_dicts(physical_relations)
-        logical_dicts = [logical.dict() for logical in logical_relations]
-        semantic_dicts = [semantic.dict() for semantic in semantic_relations]
-        
-        # 生成统计信息
-        statistics = self._calculate_relationship_statistics(
-            physical_relations, logical_relations, semantic_relations
+        # 分析关系强度和重要性
+        relationship_strength = self._calculate_relationship_strength(
+            physical_relationships + logical_relationships
         )
         
-        # 识别关键实体
-        key_entities = self._identify_key_entities(physical_relations, logical_relations)
-        
-        domain_info = analysis_context.get("domain_info", {})
+        # 构建关系图谱
+        relationship_graph = self._build_relationship_graph(
+            physical_relationships + logical_relationships
+        )
         
         return {
-            "relationships": {
-                "physical": physical_dicts,
-                "logical": logical_dicts,
-                "semantic": semantic_dicts
-            },
-            "entities": self._extract_entities_info(analysis_context),
-            "relationship_matrix": relationship_matrix,
-            "key_entities": key_entities,
-            "statistics": statistics,
-            "domain_context": domain_info.get("primary_domain", "unknown") if domain_info else "unknown",
-            "analysis_summary": self._generate_analysis_summary(statistics, analysis_context)
-        }
-    
-    def _convert_physical_to_dicts(self, physical_relations: List[PhysicalRelation]) -> List[Dict[str, Any]]:
-        """转换物理关系为字典"""
-        return [{
-            "source_table": rel.source_table,
-            "target_table": rel.target_table,
-            "source_columns": rel.source_columns,
-            "target_columns": rel.target_columns,
-            "constraint_name": rel.constraint_name,
-            "relation_type": rel.relation_type.value
-        } for rel in physical_relations]
-    
-    def _calculate_relationship_statistics(self, physical_relations: List[PhysicalRelation],
-                                         logical_relations: List[LogicalRelation],
-                                         semantic_relations: List[SemanticRelation]) -> Dict[str, Any]:
-        """计算关系统计信息"""
-        return {
-            "total_physical_relations": len(physical_relations),
-            "total_logical_relations": len(logical_relations),
-            "total_semantic_relations": len(semantic_relations),
-            "has_foreign_keys": len(physical_relations) > 0,
-            "relationship_density": self._calculate_relationship_density(physical_relations, logical_relations),
-            "complexity_level": self._assess_relationship_complexity(physical_relations, logical_relations, semantic_relations),
-            "cardinality_distribution": self._calculate_cardinality_distribution(logical_relations),
-            "high_confidence_relations": len([r for r in logical_relations if r.confidence > 0.8])
-        }
-    
-    def _calculate_relationship_density(self, physical_relations: List[PhysicalRelation],
-                                      logical_relations: List[LogicalRelation]) -> float:
-        """计算关系密度"""
-        total_relations = len(physical_relations) + len(logical_relations)
-        
-        # 获取所有涉及的表数量
-        all_tables = set()
-        for rel in physical_relations:
-            all_tables.add(rel.source_table)
-            all_tables.add(rel.target_table)
-        for rel in logical_relations:
-            all_tables.add(rel.source_entity)
-            all_tables.add(rel.target_entity)
-        
-        table_count = len(all_tables)
-        if table_count <= 1:
-            return 0.0
-        
-        # 可能的最大关系数（全连通图）
-        max_possible_relations = table_count * (table_count - 1)
-        return total_relations / max_possible_relations if max_possible_relations > 0 else 0.0
-    
-    def _assess_relationship_complexity(self, physical_relations: List[PhysicalRelation],
-                                      logical_relations: List[LogicalRelation],
-                                      semantic_relations: List[SemanticRelation]) -> str:
-        """评估关系复杂度"""
-        total_relations = len(physical_relations) + len(logical_relations) + len(semantic_relations)
-        
-        if total_relations == 0:
-            return "无关系"
-        elif total_relations <= 3:
-            return "简单"
-        elif total_relations <= 10:
-            return "中等"
-        elif total_relations <= 20:
-            return "复杂"
-        else:
-            return "高度复杂"
-    
-    def _calculate_cardinality_distribution(self, logical_relations: List[LogicalRelation]) -> Dict[str, int]:
-        """计算基数约束分布"""
-        distribution = {}
-        
-        for relation in logical_relations:
-            cardinality = relation.cardinality.value
-            distribution[cardinality] = distribution.get(cardinality, 0) + 1
-        
-        return distribution
-    
-    def _identify_key_entities(self, physical_relations: List[PhysicalRelation],
-                             logical_relations: List[LogicalRelation]) -> List[str]:
-        """识别关键实体（关系数量最多的表）"""
-        entity_counts = {}
-        
-        # 统计每个表的关系数量
-        for rel in physical_relations:
-            entity_counts[rel.source_table] = entity_counts.get(rel.source_table, 0) + 1
-            entity_counts[rel.target_table] = entity_counts.get(rel.target_table, 0) + 1
-        
-        for rel in logical_relations:
-            entity_counts[rel.source_entity] = entity_counts.get(rel.source_entity, 0) + 1
-            entity_counts[rel.target_entity] = entity_counts.get(rel.target_entity, 0) + 1
-        
-        # 返回关系数量最多的前3个实体
-        sorted_entities = sorted(entity_counts.items(), key=lambda x: x[1], reverse=True)
-        return [entity for entity, count in sorted_entities[:3] if count > 1]
-    
-    def _extract_entities_info(self, analysis_context: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-        """提取实体信息"""
-        entities = {}
-        schema_info = analysis_context["schema_info"]
-        table_meanings = analysis_context.get("table_meanings", {})
-        
-        for table_name, table_info in schema_info.get("tables", {}).items():
-            entity_info = {
-                "name": table_name,
-                "column_count": len(table_info.get("columns", [])),
-                "has_primary_key": len(table_info.get("primary_keys", [])) > 0,
-                "foreign_key_count": len(table_info.get("foreign_keys", [])),
-                "business_purpose": table_meanings.get(table_name, {}).get("business_purpose", "")
+            "physical_relationships": physical_relationships,
+            "logical_relationships": logical_relationships,
+            "semantic_relationships": semantic_relationships,
+            "relationship_strength": relationship_strength,
+            "relationship_graph": relationship_graph,
+            "total_relationships": len(physical_relationships) + len(logical_relationships) + len(semantic_relationships),
+            "domain": domain_info["primary_domain"],
+            "analysis_details": {
+                "tables_analyzed": len(tables),
+                "foreign_keys_found": len(foreign_key_relationships),
+                "high_strength_relationships": len([r for r in relationship_strength if r["strength"] > 0.8])
             }
-            entities[table_name] = entity_info
-        
-        return entities
+        }
     
-    def _generate_analysis_summary(self, statistics: Dict[str, Any], 
-                                 analysis_context: Dict[str, Any]) -> str:
-        """生成分析摘要"""
-        total_relations = (statistics["total_physical_relations"] + 
-                         statistics["total_logical_relations"] + 
-                         statistics["total_semantic_relations"])
+    def _analyze_physical_relationships(self, foreign_key_relationships: List[Dict],
+                                      table_entities: Dict[str, str]) -> List[Dict[str, Any]]:
+        """分析物理关系（基于外键约束）"""
+        physical_relationships = []
         
-        table_count = len(analysis_context["schema_info"].get("tables", {}))
+        for fk in foreign_key_relationships:
+            source_table = fk["source_table"]
+            target_table = fk["target_table"]
+            source_column = fk["source_column"]
+            target_column = fk["target_column"]
+            
+            source_entity = table_entities.get(source_table, source_table)
+            target_entity = table_entities.get(target_table, target_table)
+            
+            relationship = {
+                "type": "physical",
+                "relationship_id": f"{source_table}_fk_{target_table}",
+                "source_table": source_table,
+                "target_table": target_table,
+                "source_entity": source_entity,
+                "target_entity": target_entity,
+                "source_column": source_column,
+                "target_column": target_column,
+                "cardinality": "N:1",  # 外键通常是多对一
+                "relationship_type": "foreign_key",
+                "description": f"{source_entity}通过{source_column}引用{target_entity}的{target_column}",
+                "strength": 0.95,  # 物理关系强度最高
+                "confidence": 1.0
+            }
+            
+            physical_relationships.append(relationship)
         
-        return (f"共分析{table_count}个表，发现{total_relations}个关系："
-                f"{statistics['total_physical_relations']}个物理关系、"
-                f"{statistics['total_logical_relations']}个逻辑关系、"
-                f"{statistics['total_semantic_relations']}个语义关系，"
-                f"复杂度为{statistics['complexity_level']}")
+        return physical_relationships
     
-    async def _arun(self, include_physical: bool = True, include_logical: bool = True, 
-                   include_semantic: bool = True, **kwargs) -> str:
-        """异步执行（当前实现为同步）"""
-        return self._run(include_physical, include_logical, include_semantic, **kwargs)
+    def _analyze_logical_relationships(self, physical_relationships: List[Dict],
+                                     table_semantics: Dict[str, Any],
+                                     domain_info: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """分析逻辑关系（基于业务语义）"""
+        logical_relationships = []
+        table_entity_types = table_semantics["table_entity_types"]
+        table_dependencies = table_semantics["table_dependencies"]
+        
+        # 基于物理关系推断逻辑关系
+        for physical in physical_relationships:
+            source_table = physical["source_table"]
+            target_table = physical["target_table"]
+            source_entity_type = table_entity_types.get(source_table, "普通业务表")
+            target_entity_type = table_entity_types.get(target_table, "普通业务表")
+            
+            # 根据实体类型推断逻辑关系类型
+            logical_type = self._infer_logical_relationship_type(
+                source_entity_type, target_entity_type, source_table, target_table
+            )
+            
+            logical_relationship = {
+                "type": "logical",
+                "relationship_id": f"{source_table}_logical_{target_table}",
+                "source_table": source_table,
+                "target_table": target_table,
+                "source_entity": physical["source_entity"],
+                "target_entity": physical["target_entity"],
+                "logical_type": logical_type["type"],
+                "cardinality": logical_type["cardinality"],
+                "description": logical_type["description"],
+                "strength": logical_type["strength"],
+                "confidence": 0.8,
+                "business_meaning": self._generate_business_meaning(
+                    physical, logical_type, domain_info["primary_domain"]
+                )
+            }
+            
+            logical_relationships.append(logical_relationship)
+        
+        # 分析隐式逻辑关系（没有外键但有业务关联）
+        implicit_relationships = self._analyze_implicit_logical_relationships(
+            table_semantics, domain_info
+        )
+        logical_relationships.extend(implicit_relationships)
+        
+        return logical_relationships
+    
+    def _infer_logical_relationship_type(self, source_type: str, target_type: str,
+                                       source_table: str, target_table: str) -> Dict[str, Any]:
+        """推断逻辑关系类型"""
+        source_table_lower = source_table.lower()
+        target_table_lower = target_table.lower()
+        
+        # 组合关系：明细表到主表
+        if source_type == "明细子表" and target_type in ["主数据表", "交易事务表"]:
+            return {
+                "type": "组合关系",
+                "cardinality": "N:1",
+                "description": f"{source_table}是{target_table}的组成部分",
+                "strength": 0.9
+            }
+        
+        # 依赖关系：事务表到主数据表
+        if source_type == "交易事务表" and target_type == "主数据表":
+            return {
+                "type": "依赖关系", 
+                "cardinality": "N:1",
+                "description": f"{source_table}依赖{target_table}的主数据",
+                "strength": 0.85
+            }
+        
+        # 参考关系：业务表到字典表
+        if target_type == "字典码表":
+            return {
+                "type": "参考关系",
+                "cardinality": "N:1",
+                "description": f"{source_table}参考{target_table}的码表数据",
+                "strength": 0.7
+            }
+        
+        # 关联关系：关联表
+        if source_type == "关联映射表":
+            return {
+                "type": "多对多关系",
+                "cardinality": "M:N",
+                "description": f"{source_table}维护多对多关联关系",
+                "strength": 0.8
+            }
+        
+        # 默认一对多关系
+        return {
+            "type": "一对多关系",
+            "cardinality": "1:N",
+            "description": f"{target_table}与{source_table}之间的一对多关系",
+            "strength": 0.6
+        }
+    
+    def _generate_business_meaning(self, physical: Dict[str, Any], logical_type: Dict[str, Any],
+                                 domain: str) -> str:
+        """生成业务含义"""
+        source_entity = physical["source_entity"]
+        target_entity = physical["target_entity"]
+        relationship_type = logical_type["type"]
+        
+        meaning_templates = {
+            "组合关系": f"在{domain}业务中，{source_entity}是{target_entity}的重要组成部分",
+            "依赖关系": f"在{domain}业务中，{source_entity}的业务流程依赖于{target_entity}的基础数据",
+            "参考关系": f"在{domain}业务中，{source_entity}需要参考{target_entity}的标准化数据",
+            "多对多关系": f"在{domain}业务中，{source_entity}与{target_entity}之间存在复杂的关联关系",
+            "一对多关系": f"在{domain}业务中，一个{target_entity}可以关联多个{source_entity}"
+        }
+        
+        return meaning_templates.get(relationship_type, 
+                                   f"在{domain}业务中，{source_entity}与{target_entity}存在业务关联")
+    
+    def _analyze_implicit_logical_relationships(self, table_semantics: Dict[str, Any],
+                                              domain_info: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """分析隐式逻辑关系"""
+        implicit_relationships = []
+        table_dependencies = table_semantics["table_dependencies"]
+        table_entities = table_semantics["table_entities"]
+        
+        # 基于表依赖关系生成隐式逻辑关系
+        for dep in table_dependencies:
+            source_table = dep["source"]
+            target_table = dep["target"]
+            
+            implicit_relationship = {
+                "type": "logical",
+                "relationship_id": f"{source_table}_implicit_{target_table}",
+                "source_table": source_table,
+                "target_table": target_table,
+                "source_entity": table_entities.get(source_table, source_table),
+                "target_entity": table_entities.get(target_table, target_table),
+                "logical_type": "业务依赖",
+                "cardinality": "N:1",
+                "description": f"{source_table}在业务上依赖{target_table}",
+                "strength": 0.6,
+                "confidence": 0.7,
+                "business_meaning": f"在{domain_info['primary_domain']}业务中，{source_table}的业务逻辑依赖{target_table}"
+            }
+            
+            implicit_relationships.append(implicit_relationship)
+        
+        return implicit_relationships
+    
+    def _analyze_semantic_relationships(self, logical_relationships: List[Dict],
+                                      table_entity_types: Dict[str, str],
+                                      domain_info: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """分析语义关系"""
+        semantic_relationships = []
+        domain = domain_info["primary_domain"]
+        
+        for logical in logical_relationships:
+            source_table = logical["source_table"]
+            target_table = logical["target_table"]
+            source_entity = logical["source_entity"]
+            target_entity = logical["target_entity"]
+            logical_type = logical["logical_type"]
+            
+            # 推断语义关系类型
+            semantic_type = self._map_logical_to_semantic(logical_type)
+            
+            semantic_relationship = {
+                "type": "semantic",
+                "relationship_id": f"{source_table}_semantic_{target_table}",
+                "source_concept": f"{source_entity}概念",
+                "target_concept": f"{target_entity}概念",
+                "semantic_type": semantic_type,
+                "domain_context": domain,
+                "conceptual_description": self._generate_conceptual_description(
+                    source_entity, target_entity, semantic_type, domain
+                ),
+                "strength": logical["strength"] * 0.8,  # 语义关系强度略低于逻辑关系
+                "abstraction_level": self._determine_abstraction_level(logical_type)
+            }
+            
+            semantic_relationships.append(semantic_relationship)
+        
+        return semantic_relationships
+    
+    def _map_logical_to_semantic(self, logical_type: str) -> str:
+        """将逻辑关系映射为语义关系"""
+        mapping = {
+            "组合关系": "part-of",
+            "依赖关系": "depends-on", 
+            "参考关系": "refers-to",
+            "多对多关系": "associates-with",
+            "一对多关系": "contains",
+            "业务依赖": "relies-on"
+        }
+        
+        return mapping.get(logical_type, "relates-to")
+    
+    def _generate_conceptual_description(self, source_entity: str, target_entity: str,
+                                       semantic_type: str, domain: str) -> str:
+        """生成概念描述"""
+        descriptions = {
+            "part-of": f"在{domain}领域的概念模型中，{source_entity}概念是{target_entity}概念的组成部分",
+            "depends-on": f"在{domain}领域的概念模型中，{source_entity}概念依赖于{target_entity}概念",
+            "refers-to": f"在{domain}领域的概念模型中，{source_entity}概念引用{target_entity}概念",
+            "associates-with": f"在{domain}领域的概念模型中，{source_entity}概念与{target_entity}概念相互关联",
+            "contains": f"在{domain}领域的概念模型中，{target_entity}概念包含{source_entity}概念",
+            "relies-on": f"在{domain}领域的概念模型中，{source_entity}概念依赖{target_entity}概念"
+        }
+        
+        return descriptions.get(semantic_type, 
+                              f"在{domain}领域的概念模型中，{source_entity}概念与{target_entity}概念存在语义关联")
+    
+    def _determine_abstraction_level(self, logical_type: str) -> str:
+        """确定抽象层次"""
+        abstraction_mapping = {
+            "组合关系": "结构层",
+            "依赖关系": "功能层",
+            "参考关系": "数据层",
+            "多对多关系": "关系层",
+            "一对多关系": "层次层",
+            "业务依赖": "业务层"
+        }
+        
+        return abstraction_mapping.get(logical_type, "概念层")
+    
+    def _calculate_relationship_strength(self, relationships: List[Dict]) -> List[Dict[str, Any]]:
+        """计算关系强度"""
+        relationship_strength = []
+        
+        for rel in relationships:
+            strength_info = {
+                "relationship_id": rel["relationship_id"],
+                "source": rel["source_table"],
+                "target": rel["target_table"],
+                "strength": rel["strength"],
+                "confidence": rel["confidence"],
+                "type": rel["type"],
+                "strength_category": self._categorize_strength(rel["strength"])
+            }
+            relationship_strength.append(strength_info)
+        
+        return sorted(relationship_strength, key=lambda x: x["strength"], reverse=True)
+    
+    def _categorize_strength(self, strength: float) -> str:
+        """分类关系强度"""
+        if strength >= 0.9:
+            return "强关系"
+        elif strength >= 0.7:
+            return "中等关系"
+        elif strength >= 0.5:
+            return "弱关系"
+        else:
+            return "微弱关系"
+    
+    def _build_relationship_graph(self, relationships: List[Dict]) -> Dict[str, Any]:
+        """构建关系图谱"""
+        nodes = set()
+        edges = []
+        node_degrees = {}
+        
+        for rel in relationships:
+            source = rel["source_table"]
+            target = rel["target_table"]
+            
+            nodes.add(source)
+            nodes.add(target)
+            
+            edges.append({
+                "source": source,
+                "target": target,
+                "type": rel.get("logical_type", rel.get("relationship_type", "unknown")),
+                "weight": rel["strength"]
+            })
+            
+            # 计算节点度数
+            node_degrees[source] = node_degrees.get(source, 0) + 1
+            node_degrees[target] = node_degrees.get(target, 0) + 1
+        
+        # 识别核心节点（度数最高）
+        core_nodes = sorted(node_degrees.items(), key=lambda x: x[1], reverse=True)[:3]
+        
+        return {
+            "nodes": list(nodes),
+            "edges": edges,
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "core_nodes": [{"node": node, "degree": degree} for node, degree in core_nodes],
+            "graph_density": len(edges) / (len(nodes) * (len(nodes) - 1)) if len(nodes) > 1 else 0.0
+        }
+    
+    def _generate_er_triples(self, analysis: Dict[str, Any], context: Dict[str, Any]) -> None:
+        """生成ER关系三元组"""
+        database_name = context["schema_info"]["database_name"]
+        
+        # 1. 生成物理关系三元组
+        for rel in analysis["physical_relationships"]:
+            self.add_analysis_triple(
+                subject=rel["source_table"],
+                predicate="has_physical_relationship",
+                object=rel["target_table"],
+                subject_type=EntityType.TABLE.value,
+                object_type=EntityType.TABLE.value,
+                confidence=rel["confidence"]
+            )
+            
+            # 关系类型信息
+            self.add_analysis_triple(
+                subject=rel["relationship_id"],
+                predicate="has_cardinality", 
+                object=rel["cardinality"],
+                subject_type="Relationship",
+                object_type="Cardinality",
+                confidence=1.0
+            )
+        
+        # 2. 生成逻辑关系三元组
+        for rel in analysis["logical_relationships"]:
+            self.add_analysis_triple(
+                subject=rel["source_table"],
+                predicate="has_logical_relationship",
+                object=rel["target_table"],
+                subject_type=EntityType.TABLE.value,
+                object_type=EntityType.TABLE.value,
+                confidence=rel["confidence"]
+            )
+            
+            # 逻辑关系类型
+            self.add_analysis_triple(
+                subject=rel["relationship_id"],
+                predicate="has_logical_type",
+                object=rel["logical_type"],
+                subject_type="LogicalRelationship",
+                object_type="LogicalType",
+                confidence=rel["confidence"]
+            )
+            
+            # 业务含义
+            self.add_analysis_triple(
+                subject=rel["relationship_id"],
+                predicate="has_business_meaning",
+                object=rel["business_meaning"],
+                subject_type="LogicalRelationship",
+                object_type="BusinessMeaning",
+                confidence=rel["confidence"]
+            )
+        
+        # 3. 生成语义关系三元组
+        for rel in analysis["semantic_relationships"]:
+            self.add_analysis_triple(
+                subject=rel["source_concept"],
+                predicate="has_semantic_relationship",
+                object=rel["target_concept"],
+                subject_type="Concept",
+                object_type="Concept",
+                confidence=0.8
+            )
+            
+            # 语义类型
+            self.add_analysis_triple(
+                subject=rel["relationship_id"],
+                predicate="has_semantic_type",
+                object=rel["semantic_type"],
+                subject_type="SemanticRelationship",
+                object_type="SemanticType",
+                confidence=0.8
+            )
+        
+        # 4. 生成关系图谱三元组
+        graph = analysis["relationship_graph"]
+        for core_node_info in graph["core_nodes"]:
+            self.add_analysis_triple(
+                subject=database_name,
+                predicate="has_core_entity",
+                object=core_node_info["node"],
+                subject_type=EntityType.DATABASE.value,
+                object_type=EntityType.TABLE.value,
+                confidence=0.9
+            )
+        
+        self.logger.info(f"📝 生成了 {len(self._generated_triples)} 个ER关系三元组")
+    
+    def _build_result_message(self, analysis: Dict[str, Any]) -> str:
+        """构建执行结果消息"""
+        total_relationships = analysis["total_relationships"]
+        physical_count = len(analysis["physical_relationships"])
+        logical_count = len(analysis["logical_relationships"])
+        semantic_count = len(analysis["semantic_relationships"])
+        domain = analysis["domain"]
+        graph = analysis["relationship_graph"]
+        triple_count = len(self._generated_triples)
+        
+        # 构建关系强度统计
+        strength_stats = {}
+        for rel in analysis["relationship_strength"]:
+            category = rel["strength_category"]
+            strength_stats[category] = strength_stats.get(category, 0) + 1
+        
+        strength_desc = []
+        for category, count in strength_stats.items():
+            strength_desc.append(f"  • {category}: {count}个")
+        
+        # 构建核心节点描述
+        core_nodes = graph["core_nodes"]
+        core_desc = ""
+        if core_nodes:
+            core_names = [node["node"] for node in core_nodes[:3]]
+            core_desc = f"\n  • 核心节点: {', '.join(core_names)}"
+        
+        result = f"""✅ ER关系分析完成
+
+🎯 关系分析结果:
+  • 关系总数: {total_relationships}个
+  • 物理关系: {physical_count}个
+  • 逻辑关系: {logical_count}个
+  • 语义关系: {semantic_count}个
+  • 业务域: {domain}
+  • 生成三元组: {triple_count}个{core_desc}
+
+📊 关系强度分布:
+{chr(10).join(strength_desc) if strength_desc else "  • 暂无强度统计"}
+
+🕸️ 关系图谱特征:
+  • 节点数: {graph['node_count']}个表
+  • 边数: {graph['edge_count']}个关系
+  • 图密度: {graph['graph_density']:.3f}
+  
+📈 分析质量:
+  • 分析表数: {analysis['analysis_details']['tables_analyzed']}
+  • 外键发现: {analysis['analysis_details']['foreign_keys_found']}个
+  • 强关系数: {analysis['analysis_details']['high_strength_relationships']}个
+
+💾 ER关系知识已存储到记忆系统，可供后续工具使用"""
+        
+        return result
+
+
+# ========== 便利函数 ==========
+def create_er_analysis_tool(memory_manager: Optional['Neo4jMemoryManager'] = None) -> ERAnalysisTool:
+    """创建ER分析工具的便利函数"""
+    return ERAnalysisTool(memory_manager=memory_manager)

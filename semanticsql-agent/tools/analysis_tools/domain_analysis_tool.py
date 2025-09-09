@@ -1,248 +1,361 @@
 """
-领域分析工具 - 优化版本
-简化设计，移除过度异常处理，按就近原则组织代码
+业务领域分析工具 - 极简架构重构版本
+基于新的BaseSemanticSQLTool，实现完全自主的领域识别
 """
 
-from typing import Dict, Any, Type, List
+from typing import Dict, Any, List, Optional
 import json
-from pydantic import BaseModel, Field
+import re
 
-from models.exceptions import ToolExecutionError
-from prompts.manager import PromptManager
-from ..base_tool import BaseSemanticSQLTool
-
-
-# ========== 工具内部数据模型（就近原则）==========
-class DomainAnalysisInput(BaseModel):
-    """领域分析输入参数"""
-    use_llm: bool = Field(default=False, description="是否使用LLM增强分析")
-
-
-class DomainKeywords(BaseModel):
-    """领域关键词配置"""
-    domain_name: str
-    table_keywords: List[str]
-    column_keywords: List[str]
-    confidence_weight: float = 1.0
-
-
-class DomainMatchResult(BaseModel):
-    """领域匹配结果"""
-    domain_name: str
-    matched_tables: List[str]
-    matched_columns: List[str]
-    match_score: float
-    confidence: float
-
-
-class DomainAnalysisResult(BaseModel):
-    """领域分析结果"""
-    primary_domain: str
-    secondary_domains: List[str]
-    business_concepts: List[str]
-    confidence_score: float
-    domain_description: str
-    key_entities: List[str]
+from tools.base_tool import BaseSemanticSQLTool
+from models.schemas import PredicateType, EntityType
+from models.exceptions import raise_tool_error, raise_dependency_error
 
 
 class DomainAnalysisTool(BaseSemanticSQLTool):
-    """领域分析工具 - 优化版本
+    """业务领域分析工具 - 极简重构版本
     
     职责：
     - 基于数据库结构识别业务领域
-    - 分析表名和字段名的业务语义
-    - 计算领域匹配置信度
+    - 分析表名和字段名的业务语义  
+    - 生成领域-实体关系三元组
+    - 为后续工具提供业务上下文
     
     设计原则：
-    - 单一职责：专注领域识别
-    - 方法拆分：每个方法<30行
-    - 类型安全：使用Pydantic模型
-    - 简化异常：让异常自然传播
+    - 依赖记忆：基于schema_extraction工具的结果
+    - 智能推断：通过关键词匹配和模式识别
+    - 三元组输出：结构化业务知识
     """
     
     name: str = "domain_analysis"
-    description: str = "分析数据库的业务领域，识别主要业务场景和数据特征"
-    args_schema: Type[BaseModel] = DomainAnalysisInput
-
+    description: str = "分析数据库的业务领域，识别主要业务概念和实体关系"
+    
     def __init__(self, **kwargs):
+        """初始化领域分析工具"""
         super().__init__(**kwargs)
-        object.__setattr__(self, 'prompt_manager', PromptManager())
-        object.__setattr__(self, '_domain_keywords', self._initialize_domain_keywords())
-
-    def _run(self, use_llm: bool = False, **kwargs) -> str:
-        """执行领域分析 - 主流程"""
-        # 获取数据库结构信息
-        schema_info = self._get_schema_info()
-        
-        # 分析业务领域
-        domain_matches = self._match_domains_from_schema(schema_info)
-        
-        # 生成分析结果
-        result = self._build_analysis_result(domain_matches, schema_info)
-        
-        # 保存并返回
-        self.save_to_memory("domain_analysis", result)
-        return json.dumps(result, ensure_ascii=False)
+        # 使用object.__setattr__避免Pydantic验证问题
+        object.__setattr__(self, 'domain_keywords', self._init_domain_keywords())
     
-    # ========== 核心分析逻辑 ==========
-    def _get_schema_info(self) -> Dict[str, Any]:
-        """获取数据库结构信息"""
-        schema_info = self.get_from_memory("schema_extraction")
-        if not schema_info:
-            raise ToolExecutionError(
-                tool_name=self.name,
-                reason="无法获取数据库结构信息，需要先运行schema_extraction工具"
-            )
-        return schema_info
+    def _run(self, input_text: str) -> str:
+        """
+        执行业务领域分析 - 完全自主实现
+        
+        Args:
+            input_text: 输入文本，通常包含分析参数
+            
+        Returns:
+            自定义格式的执行结果字符串
+        """
+        # 1. 清空上次执行的三元组
+        self._clear_generated_triples()
+        self._log_execution_start(input_text)
+        
+        try:
+            # 2. 检查依赖：需要schema_extraction工具的结果
+            self._check_dependencies(["schema_extraction"])
+            
+            # 3. 获取数据库结构信息
+            schema_memory = self.get_memory_by_source_tool("schema_extraction")
+            schema_info = self._extract_schema_info(schema_memory)
+            
+            # 4. 分析业务领域
+            domain_analysis = self._analyze_business_domain(schema_info)
+            
+            # 5. 生成领域三元组
+            self._generate_domain_triples(domain_analysis, schema_info)
+            
+            # 6. 持久化三元组到记忆系统
+            self._persist_triples()
+            
+            # 7. 构建执行结果
+            result_message = self._build_result_message(domain_analysis)
+            
+            self._log_execution_end(f"识别出主领域: {domain_analysis['primary_domain']}")
+            return result_message
+            
+        except Exception as e:
+            error_msg = f"领域分析失败: {str(e)}"
+            self.logger.error(f"❌ {self.name}: {error_msg}")
+            return f"❌ {error_msg}"
     
-    def _initialize_domain_keywords(self) -> List[DomainKeywords]:
-        """初始化领域关键词配置"""
-        return [
-            DomainKeywords(
-                domain_name="电商",
-                table_keywords=["order", "product", "customer", "payment", "cart", "shop"],
-                column_keywords=["price", "amount", "quantity", "sku", "order_id"]
-            ),
-            DomainKeywords(
-                domain_name="财务",
-                table_keywords=["account", "transaction", "payment", "invoice", "billing"],
-                column_keywords=["amount", "balance", "cost", "fee", "tax"]
-            ),
-            DomainKeywords(
-                domain_name="人事",
-                table_keywords=["employee", "department", "salary", "attendance", "user"],
-                column_keywords=["salary", "position", "department", "hire_date"]
-            ),
-            DomainKeywords(
-                domain_name="库存",
-                table_keywords=["inventory", "stock", "warehouse", "supplier", "goods"],
-                column_keywords=["stock", "quantity", "supplier", "warehouse"]
-            ),
-            DomainKeywords(
-                domain_name="内容管理",
-                table_keywords=["article", "post", "content", "media", "news"],
-                column_keywords=["title", "content", "author", "publish_date"]
-            )
-        ]
+    # ========== 核心业务逻辑 ==========
+    def _extract_schema_info(self, schema_memory: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """从记忆中提取结构信息"""
+        if not schema_memory:
+            raise_dependency_error(self.name, "schema_extraction", "数据库结构信息")
+        
+        # 从三元组中重建结构信息
+        tables = set()
+        table_columns = {}
+        database_name = "unknown"
+        
+        for triple in schema_memory:
+            subject = triple.get("subject", "")
+            predicate = triple.get("predicate", "")
+            obj = triple.get("object", "")
+            
+            if predicate == PredicateType.HAS_TABLE.value:
+                database_name = subject
+                tables.add(obj)
+            elif predicate == PredicateType.HAS_COLUMN.value:
+                table_name = subject
+                column_name = obj
+                if table_name not in table_columns:
+                    table_columns[table_name] = []
+                table_columns[table_name].append(column_name)
+        
+        return {
+            "database_name": database_name,
+            "tables": list(tables),
+            "table_columns": table_columns
+        }
     
-    def _match_domains_from_schema(self, schema_info: Dict[str, Any]) -> List[DomainMatchResult]:
-        """从数据库结构匹配业务领域"""
-        tables = schema_info.get("tables", {})
+    def _analyze_business_domain(self, schema_info: Dict[str, Any]) -> Dict[str, Any]:
+        """分析业务领域"""
+        tables = schema_info["tables"]
+        table_columns = schema_info["table_columns"]
+        
+        # 1. 匹配各个业务领域
         domain_matches = []
-        
-        for domain_config in self._domain_keywords:
-            match_result = self._match_single_domain(domain_config, tables)
-            if match_result.match_score > 0:
+        for domain_name, keywords in self.domain_keywords.items():
+            match_result = self._match_domain(domain_name, keywords, tables, table_columns)
+            if match_result["score"] > 0:
                 domain_matches.append(match_result)
         
-        # 按匹配得分排序
-        return sorted(domain_matches, key=lambda x: x.match_score, reverse=True)
+        # 2. 按得分排序
+        domain_matches.sort(key=lambda x: x["score"], reverse=True)
+        
+        # 3. 确定主要和次要领域
+        if domain_matches:
+            primary_domain = domain_matches[0]["domain"]
+            secondary_domains = [m["domain"] for m in domain_matches[1:3] if m["score"] > 0.2]
+            confidence = min(0.95, domain_matches[0]["score"] / len(tables))
+        else:
+            primary_domain = "通用业务"
+            secondary_domains = []
+            confidence = 0.1
+        
+        # 4. 识别核心业务实体
+        core_entities = self._identify_core_entities(tables, table_columns)
+        
+        # 5. 提取业务概念
+        business_concepts = self._extract_business_concepts(tables)
+        
+        return {
+            "primary_domain": primary_domain,
+            "secondary_domains": secondary_domains,
+            "confidence": confidence,
+            "core_entities": core_entities,
+            "business_concepts": business_concepts,
+            "domain_matches": domain_matches,
+            "analysis_details": {
+                "total_tables": len(tables),
+                "analyzed_keywords": len(self.domain_keywords)
+            }
+        }
     
-    def _match_single_domain(self, domain_config: DomainKeywords, tables: Dict[str, Any]) -> DomainMatchResult:
-        """匹配单个领域"""
+    def _match_domain(self, domain_name: str, keywords: Dict[str, Any], 
+                     tables: List[str], table_columns: Dict[str, List[str]]) -> Dict[str, Any]:
+        """匹配特定领域"""
+        table_keywords = keywords["tables"]
+        column_keywords = keywords["columns"]
+        
         matched_tables = []
         matched_columns = []
-        table_score = 0
-        column_score = 0
+        score = 0
         
-        for table_name, table_info in tables.items():
-            # 匹配表名
-            if self._match_table_name(table_name, domain_config.table_keywords):
-                matched_tables.append(table_name)
-                table_score += 1
-            
-            # 匹配列名
-            columns = table_info.get("columns", [])
+        # 匹配表名
+        for table in tables:
+            table_lower = table.lower()
+            for keyword in table_keywords:
+                if keyword in table_lower:
+                    matched_tables.append(table)
+                    score += 2.0  # 表名匹配权重高
+                    break
+        
+        # 匹配字段名
+        for table, columns in table_columns.items():
             for column in columns:
-                column_name = column.get("name", "")
-                if self._match_column_name(column_name, domain_config.column_keywords):
-                    matched_columns.append(f"{table_name}.{column_name}")
-                    column_score += 0.5
+                column_lower = column.lower()
+                for keyword in column_keywords:
+                    if keyword in column_lower:
+                        matched_columns.append(f"{table}.{column}")
+                        score += 0.5  # 字段名匹配权重低
+                        break
         
-        match_score = (table_score * 2 + column_score) * domain_config.confidence_weight
-        confidence = min(0.95, match_score / max(1, len(tables)) * 0.8)
-        
-        return DomainMatchResult(
-            domain_name=domain_config.domain_name,
-            matched_tables=matched_tables,
-            matched_columns=matched_columns,
-            match_score=match_score,
-            confidence=confidence
-        )
-    
-    def _match_table_name(self, table_name: str, keywords: List[str]) -> bool:
-        """匹配表名关键词"""
-        table_lower = table_name.lower()
-        return any(keyword in table_lower for keyword in keywords)
-    
-    def _match_column_name(self, column_name: str, keywords: List[str]) -> bool:
-        """匹配列名关键词"""
-        column_lower = column_name.lower()
-        return any(keyword in column_lower for keyword in keywords)
-    
-    def _build_analysis_result(self, domain_matches: List[DomainMatchResult], schema_info: Dict[str, Any]) -> Dict[str, Any]:
-        """构建分析结果"""
-        if not domain_matches:
-            return self._build_default_result(schema_info)
-        
-        # 选择主要领域和次要领域
-        primary_match = domain_matches[0]
-        secondary_domains = [match.domain_name for match in domain_matches[1:3] if match.confidence > 0.2]
-        
-        # 提取业务概念
-        business_concepts = self._extract_business_concepts(domain_matches, schema_info)
-        
-        # 构建结果
         return {
-            "primary_domain": primary_match.domain_name,
-            "secondary_domains": secondary_domains,
-            "business_concepts": business_concepts,
-            "confidence_score": primary_match.confidence,
-            "domain_description": f"基于数据库结构分析，该系统主要属于{primary_match.domain_name}领域",
-            "key_entities": list(schema_info.get("tables", {}).keys())[:8],
-            "match_details": {
-                "matched_tables": primary_match.matched_tables,
-                "matched_columns": primary_match.matched_columns[:10],
-                "match_score": primary_match.match_score
-            },
-            "analysis_summary": f"识别出{len(domain_matches)}个可能的业务领域，主领域为{primary_match.domain_name}"
+            "domain": domain_name,
+            "score": score,
+            "matched_tables": matched_tables,
+            "matched_columns": matched_columns[:10]  # 限制显示数量
         }
     
-    def _build_default_result(self, schema_info: Dict[str, Any]) -> Dict[str, Any]:
-        """构建默认结果（未匹配到特定领域时）"""
-        tables = list(schema_info.get("tables", {}).keys())
-        return {
-            "primary_domain": "通用业务",
-            "secondary_domains": [],
-            "business_concepts": tables[:5],
-            "confidence_score": 0.1,
-            "domain_description": "未能识别出明确的业务领域，可能为通用型数据库",
-            "key_entities": tables[:8],
-            "match_details": {
-                "matched_tables": [],
-                "matched_columns": [],
-                "match_score": 0.0
-            },
-            "analysis_summary": f"分析了{len(tables)}个表，未识别出特定业务领域"
-        }
+    def _identify_core_entities(self, tables: List[str], table_columns: Dict[str, List[str]]) -> List[str]:
+        """识别核心业务实体"""
+        core_entities = []
+        
+        # 基于表名识别实体
+        entity_indicators = ["user", "customer", "product", "order", "account", "item", "content"]
+        
+        for table in tables:
+            table_lower = table.lower()
+            # 去掉常见前缀
+            clean_table = re.sub(r'^(t_|tbl_|tb_)', '', table_lower)
+            
+            # 检查是否为核心实体
+            if any(indicator in clean_table for indicator in entity_indicators):
+                core_entities.append(table)
+            elif len(table_columns.get(table, [])) >= 5:  # 字段较多的表通常是核心实体
+                core_entities.append(table)
+        
+        return core_entities[:8]  # 最多返回8个核心实体
     
-    def _extract_business_concepts(self, domain_matches: List[DomainMatchResult], schema_info: Dict[str, Any]) -> List[str]:
+    def _extract_business_concepts(self, tables: List[str]) -> List[str]:
         """提取业务概念"""
         concepts = set()
         
-        # 从匹配的表名提取概念
-        for match in domain_matches[:2]:
-            concepts.update(match.matched_tables)
+        for table in tables:
+            # 清理表名
+            clean_name = table.lower()
+            clean_name = re.sub(r'^(t_|tbl_|tb_)', '', clean_name)  # 去前缀
+            clean_name = re.sub(r'(_log|_history|_backup)$', '', clean_name)  # 去后缀
+            clean_name = clean_name.replace('_', ' ')
+            
+            # 分割复合词
+            words = clean_name.split()
+            for word in words:
+                if len(word) > 2 and word not in ['id', 'key', 'info', 'data', 'tmp']:
+                    concepts.add(word)
         
-        # 从表名中提取其他概念词
-        for table_name in schema_info.get("tables", {}).keys():
-            # 简单的概念提取：去掉常见前后缀
-            clean_name = table_name.lower().replace("_", " ").replace("t_", "").replace("tbl_", "")
-            if len(clean_name) > 2 and clean_name not in ["id", "key", "info", "data"]:
-                concepts.add(clean_name)
-        
-        return list(concepts)[:10]
+        return list(concepts)[:15]  # 最多返回15个概念
     
-    async def _arun(self, use_llm: bool = False, **kwargs) -> str:
-        """异步执行（当前实现为同步）"""
-        return self._run(use_llm, **kwargs)
+    def _generate_domain_triples(self, analysis: Dict[str, Any], schema_info: Dict[str, Any]) -> None:
+        """生成领域分析三元组"""
+        database_name = schema_info["database_name"]
+        primary_domain = analysis["primary_domain"]
+        
+        # 1. 数据库-领域关系
+        self.add_analysis_triple(
+            subject=database_name,
+            predicate=PredicateType.BELONGS_TO.value,
+            object=primary_domain,
+            subject_type=EntityType.DATABASE.value,
+            object_type=EntityType.DOMAIN.value,
+            confidence=analysis["confidence"]
+        )
+        
+        # 2. 领域-核心实体关系
+        for entity in analysis["core_entities"]:
+            self.add_analysis_triple(
+                subject=primary_domain,
+                predicate=PredicateType.CONTAINS.value,
+                object=entity,
+                subject_type=EntityType.DOMAIN.value,
+                object_type=EntityType.ENTITY.value,
+                confidence=0.8
+            )
+        
+        # 3. 业务概念关系
+        for concept in analysis["business_concepts"][:10]:
+            self.add_analysis_triple(
+                subject=primary_domain,
+                predicate="has_concept",
+                object=concept,
+                subject_type=EntityType.DOMAIN.value,
+                object_type="BusinessConcept",
+                confidence=0.7
+            )
+        
+        # 4. 次要领域关系
+        for secondary_domain in analysis["secondary_domains"]:
+            self.add_analysis_triple(
+                subject=database_name,
+                predicate="has_secondary_domain",
+                object=secondary_domain,
+                subject_type=EntityType.DATABASE.value,
+                object_type=EntityType.DOMAIN.value,
+                confidence=0.6
+            )
+        
+        self.logger.info(f"📝 生成了 {len(self._generated_triples)} 个领域三元组")
+    
+    def _build_result_message(self, analysis: Dict[str, Any]) -> str:
+        """构建执行结果消息"""
+        primary_domain = analysis["primary_domain"]
+        secondary_domains = analysis["secondary_domains"]
+        core_entities = analysis["core_entities"]
+        business_concepts = analysis["business_concepts"]
+        confidence = analysis["confidence"]
+        triple_count = len(self._generated_triples)
+        
+        # 构建次要领域描述
+        secondary_desc = ""
+        if secondary_domains:
+            secondary_desc = f"\n  • 次要领域: {', '.join(secondary_domains)}"
+        
+        # 构建核心实体描述
+        entities_desc = ', '.join(core_entities[:5])
+        if len(core_entities) > 5:
+            entities_desc += f" 等{len(core_entities)}个实体"
+        
+        result = f"""✅ 业务领域分析完成
+
+🎯 领域识别结果:
+  • 主要领域: {primary_domain} (置信度: {confidence:.2f}){secondary_desc}
+  • 核心实体: {entities_desc}
+  • 业务概念: {len(business_concepts)}个概念
+  • 生成三元组: {triple_count}个
+
+📊 分析统计:
+  • 分析表数: {analysis['analysis_details']['total_tables']}
+  • 匹配领域: {len(analysis['domain_matches'])}个
+  
+🔗 关键业务概念:
+  {', '.join(business_concepts[:8])}
+
+💾 领域知识已存储到记忆系统，可供后续工具使用"""
+        
+        return result
+    
+    def _init_domain_keywords(self) -> Dict[str, Dict[str, List[str]]]:
+        """初始化领域关键词库"""
+        return {
+            "电商": {
+                "tables": ["order", "product", "customer", "cart", "payment", "shop", "goods", "merchant"],
+                "columns": ["price", "amount", "quantity", "sku", "order_id", "product_id", "customer_id"]
+            },
+            "财务": {
+                "tables": ["account", "transaction", "payment", "invoice", "billing", "finance", "money"],
+                "columns": ["amount", "balance", "cost", "fee", "tax", "revenue", "profit"]
+            },
+            "人事": {
+                "tables": ["employee", "department", "salary", "attendance", "user", "staff", "hr"],
+                "columns": ["salary", "position", "department", "hire_date", "employee_id", "role"]
+            },
+            "库存": {
+                "tables": ["inventory", "stock", "warehouse", "supplier", "goods", "storage"],
+                "columns": ["stock", "quantity", "supplier_id", "warehouse_id", "inventory"]
+            },
+            "内容管理": {
+                "tables": ["article", "post", "content", "media", "news", "blog", "cms"],
+                "columns": ["title", "content", "author", "publish_date", "category"]
+            },
+            "教育": {
+                "tables": ["student", "course", "teacher", "class", "grade", "exam", "school"],
+                "columns": ["student_id", "course_id", "grade", "score", "teacher_id"]
+            },
+            "医疗": {
+                "tables": ["patient", "doctor", "hospital", "medical", "treatment", "prescription"],
+                "columns": ["patient_id", "doctor_id", "diagnosis", "treatment", "medicine"]
+            },
+            "物流": {
+                "tables": ["shipping", "delivery", "transport", "logistics", "tracking", "express"],
+                "columns": ["tracking_number", "shipping_address", "delivery_date", "courier"]
+            }
+        }
+
+
+# ========== 便利函数 ==========
+def create_domain_analysis_tool(memory_manager: Optional['Neo4jMemoryManager'] = None) -> DomainAnalysisTool:
+    """创建领域分析工具的便利函数"""
+    return DomainAnalysisTool(memory_manager=memory_manager)

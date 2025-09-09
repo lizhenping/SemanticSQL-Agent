@@ -1,0 +1,21 @@
+# SemanticSQL Agent v4.0 配置文件
+# 基于极简+自主+记忆驱动架构
+
+database:
+  database: testdb
+  host: 192.168.200.216
+  password: testpass
+  port: 13306
+  username: testuser
+generation:
+  max_retries: 3
+  validation_enabled: true
+settings:
+  llm_api_key: not-needed
+  llm_base_url: http://127.0.0.1:9991/v1
+  llm_max_tokens: 20000
+  llm_model: Qwen3-14B
+  llm_temperature: 0.7
+  max_steps: 15
+  verbose: true
+

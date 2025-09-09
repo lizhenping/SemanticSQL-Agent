@@ -1,346 +1,428 @@
 """
-Trajectory recording callbacks for agent execution
-Based on LangChain BaseCallbackHandler
+回调处理和轨迹记录 - SemanticSQL Agent执行监控
+基于架构设计的标准回调系统，支持ReAct执行轨迹记录
 """
 
 import logging
-from typing import Dict, Any, Optional, List, Union
+import json
+from typing import Dict, Any, List, Optional, Union
 from datetime import datetime
+from pathlib import Path
 from uuid import UUID
 
 from langchain.callbacks.base import BaseCallbackHandler
-from langchain_core.agents import AgentAction, AgentFinish
+from langchain.schema import AgentAction, AgentFinish, LLMResult
 from langchain_core.outputs import LLMResult
 
-from models.agent import AgentExecution, AgentStep, AgentStepType
-from utils.trajectory import TrajectoryRecorder
+from models.schemas import TrainingExample
+from models.exceptions import raise_tool_error
 
 
-class TrajectoryCallbackHandler(BaseCallbackHandler):
-    """LangChain callback handler for recording execution trajectories"""
+class SemanticSQLCallbackHandler(BaseCallbackHandler):
+    """SemanticSQL Agent专用回调处理器
     
-    def __init__(self, trajectory_recorder: Optional[TrajectoryRecorder] = None):
+    职责：
+    - 记录ReAct执行轨迹
+    - 收集训练数据生成所需信息
+    - 监控工具执行和LLM调用
+    - 支持执行过程的实时监控和调试
+    
+    设计原则：
+    - 轻量级：最小化性能开销
+    - 结构化：标准化的轨迹数据格式
+    - 可扩展：支持不同类型的轨迹记录需求
+    """
+    
+    def __init__(self, 
+                 enable_trajectory: bool = True,
+                 enable_llm_tracking: bool = True,
+                 enable_tool_tracking: bool = True,
+                 output_directory: str = "./trajectories"):
+        """
+        初始化回调处理器
+        
+        Args:
+            enable_trajectory: 是否启用轨迹记录
+            enable_llm_tracking: 是否跟踪LLM调用
+            enable_tool_tracking: 是否跟踪工具调用
+            output_directory: 轨迹输出目录
+        """
         super().__init__()
-        self.recorder = trajectory_recorder
+        
+        self.enable_trajectory = enable_trajectory
+        self.enable_llm_tracking = enable_llm_tracking
+        self.enable_tool_tracking = enable_tool_tracking
+        self.output_directory = Path(output_directory)
+        
+        # 确保输出目录存在
+        self.output_directory.mkdir(parents=True, exist_ok=True)
+        
+        # 轨迹数据存储
+        self.trajectories: List[Dict[str, Any]] = []
+        self.current_session_id: str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.step_counter: int = 0
+        
+        # LLM调用统计
+        self.llm_calls: List[Dict[str, Any]] = []
+        self.tool_calls: List[Dict[str, Any]] = []
+        
         self.logger = logging.getLogger(__name__)
-        self.trajectories = []
-        self.current_execution = None
-        self.current_step = None
-        # 初始化memory引用
-        object.__setattr__(self, 'memory', None)
+        self.logger.info(f"🎯 回调处理器初始化 - 会话ID: {self.current_session_id}")
     
-    def on_agent_action(
-        self,
-        action: AgentAction,
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        **kwargs: Any
-    ) -> Any:
-        """记录Agent动作"""
-        self.logger.debug(f"Agent action: {action.tool} with input: {action.tool_input}")
+    # ========== LangChain回调接口实现 ==========
+    def on_agent_action(self, action: AgentAction, **kwargs: Any) -> None:
+        """Agent执行动作时调用"""
+        if not self.enable_trajectory:
+            return
         
-        # 确保tool_input是字典格式，避免Pydantic验证错误
-        tool_input_dict = action.tool_input
-        if isinstance(action.tool_input, str):
-            try:
-                import json
-                tool_input_dict = json.loads(action.tool_input)
-            except:
-                tool_input_dict = {"input": action.tool_input}
+        self.step_counter += 1
         
-        step = AgentStep(
-            step_type=AgentStepType.ACTION,
-            content=f"Calling tool: {action.tool}",
-            tool_name=action.tool,
-            tool_input=tool_input_dict,
-            timestamp=datetime.now()
-        )
-        
-        self.trajectories.append({
+        trajectory_entry = {
             "type": "action",
+            "step": self.step_counter,
+            "timestamp": datetime.now().isoformat(),
             "tool": action.tool,
-            "input": action.tool_input,
-            "timestamp": datetime.now(),
-            "run_id": str(run_id)
-        })
+            "tool_input": action.tool_input,
+            "log": action.log,
+            "session_id": self.current_session_id
+        }
         
-        if self.recorder and self.current_execution:
-            self.current_execution.steps.append(step)
+        self.trajectories.append(trajectory_entry)
+        
+        if self.enable_tool_tracking:
+            tool_call = {
+                "tool_name": action.tool,
+                "input": action.tool_input,
+                "timestamp": datetime.now().isoformat(),
+                "step": self.step_counter
+            }
+            self.tool_calls.append(tool_call)
+        
+        self.logger.debug(f"🔧 Agent动作: {action.tool} - 步骤 {self.step_counter}")
     
-    def on_agent_finish(
-        self,
-        finish: AgentFinish,
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        **kwargs: Any
-    ) -> Any:
-        """记录Agent完成"""
-        self.logger.info(f"Agent finished with output: {finish.return_values}")
+    def on_agent_finish(self, finish: AgentFinish, **kwargs: Any) -> None:
+        """Agent完成执行时调用"""
+        if not self.enable_trajectory:
+            return
         
-        # 打印工具调用历史
-        if hasattr(self, 'tool_call_history') and self.tool_call_history:
-            self.logger.info("\n📊 Tool Call History:")
-            self.logger.info("=" * 80)
-            for i, record in enumerate(self.tool_call_history, 1):
-                self.logger.info(f"{i}. Tool: {record['tool']}")
-                self.logger.info(f"   Time: {record['timestamp']}")
-                self.logger.info(f"   Status: {record['status']}")
-                self.logger.info(f"   Input: {record['input'][:100]}...")
-                if 'output_preview' in record:
-                    self.logger.info(f"   Output: {record['output_preview']}...")
-                self.logger.info("-" * 40)
-        
-        self.trajectories.append({
+        trajectory_entry = {
             "type": "finish",
-            "output": finish.return_values,
-            "timestamp": datetime.now(),
-            "run_id": str(run_id)
-        })
+            "step": self.step_counter + 1,
+            "timestamp": datetime.now().isoformat(),
+            "return_values": finish.return_values,
+            "log": finish.log,
+            "session_id": self.current_session_id
+        }
+        
+        self.trajectories.append(trajectory_entry)
+        self.logger.info(f"✅ Agent执行完成 - 总步骤: {self.step_counter + 1}")
     
-    def on_tool_start(
-        self,
-        serialized: Dict[str, Any],
-        input_str: str,
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        **kwargs: Any
-    ) -> Any:
-        """工具开始执行"""
+    def on_tool_start(self, serialized: Dict[str, Any], input_str: str, **kwargs: Any) -> None:
+        """工具开始执行时调用"""
+        if not self.enable_tool_tracking:
+            return
+        
         tool_name = serialized.get("name", "unknown")
-        self.logger.info(f"🔧 Tool '{tool_name}' started with input: {input_str}")
         
-        # 记录到工具调用历史
-        if not hasattr(self, 'tool_call_history'):
-            self.tool_call_history = []
+        self.logger.debug(f"🔧 工具开始: {tool_name}")
+    
+    def on_tool_end(self, output: str, **kwargs: Any) -> None:
+        """工具执行完成时调用"""
+        if not self.enable_tool_tracking:
+            return
         
-        self.tool_call_history.append({
-            "tool": tool_name,
-            "input": input_str,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "status": "started"
-        })
+        # 更新最新的工具调用记录
+        if self.tool_calls:
+            self.tool_calls[-1]["output"] = output
+            self.tool_calls[-1]["end_timestamp"] = datetime.now().isoformat()
         
-        if self.current_execution:
-            self.current_step = AgentStep(
-                step_type=AgentStepType.ACTION,
-                content=f"Executing tool: {tool_name}",
-                tool_name=tool_name,
-                tool_input={"input": input_str},
-                timestamp=datetime.now()
-            )
-    
-    def on_tool_end(
-        self,
-        output: str,
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        **kwargs: Any
-    ) -> Any:
-        """工具执行结束"""
-        self.logger.info(f"✅ Tool finished successfully")
+        # 更新轨迹中的工具输出
+        if self.trajectories and self.trajectories[-1]["type"] == "action":
+            self.trajectories[-1]["output"] = output
+            self.trajectories[-1]["end_timestamp"] = datetime.now().isoformat()
         
-        # 更新工具调用历史
-        if hasattr(self, 'tool_call_history') and self.tool_call_history:
-            # 找到最后一个 started 状态的记录
-            for record in reversed(self.tool_call_history):
-                if record.get("status") == "started":
-                    record["status"] = "completed"
-                    record["output_preview"] = output[:100] if isinstance(output, str) else str(output)[:100]
-                    break
+        self.logger.debug("🔧 工具执行完成")
+    
+    def on_tool_error(self, error: Union[Exception, KeyboardInterrupt], **kwargs: Any) -> None:
+        """工具执行出错时调用"""
+        if not self.enable_tool_tracking:
+            return
         
-        if self.current_step:
-            # 解析工具输出 - 处理JSON字符串格式
-            parsed_output = output
-            if isinstance(output, str):
-                try:
-                    import json
-                    parsed_output = json.loads(output)
-                    self.logger.debug(f"Successfully parsed JSON output for {self.current_step.tool_name}")
-                except (json.JSONDecodeError, ValueError):
-                    # 如果不是JSON格式，保持原样
-                    parsed_output = output
-                    self.logger.debug(f"Output is not JSON format for {self.current_step.tool_name}")
-            
-            self.current_step.tool_output = parsed_output
-            self.current_step.duration_ms = int(
-                (datetime.now() - self.current_step.timestamp).total_seconds() * 1000
-            )
-            
-            if self.current_execution:
-                self.current_execution.steps.append(self.current_step)
-            
-            # 保存到轨迹（包含工具名称）
-            if self.current_step.tool_name:
-                self.trajectories.append({
-                    "type": "tool_end",
-                    "tool_name": self.current_step.tool_name,
-                    "input": self.current_step.tool_input,
-                    "output": parsed_output,
-                    "timestamp": datetime.now(),
-                    "run_id": str(run_id)
-                })
-                
-                # 如果是分析工具，自动保存结果到记忆
-                if hasattr(self, 'memory') and self.memory and self.current_step.tool_name in [
-                    'schema_extraction', 'domain_analysis', 'field_classification',
-                    'column_meaning_analysis', 'table_meaning_analysis', 'er_analysis'
-                ]:
-                    try:
-                        if isinstance(parsed_output, dict):
-                            # 根据工具类型保存到对应的记忆位置
-                            analysis_type_mapping = {
-                                'schema_extraction': 'schema_info',
-                                'domain_analysis': 'domain_info', 
-                                'field_classification': 'field_classification',
-                                'column_meaning_analysis': 'column_meanings',
-                                'table_meaning_analysis': 'table_meanings',
-                                'er_analysis': 'er_relations'
-                            }
-                            
-                            analysis_type = analysis_type_mapping.get(self.current_step.tool_name)
-                            if analysis_type and hasattr(self.memory, 'update_analysis'):
-                                self.memory.update_analysis(analysis_type, parsed_output)
-                                self.logger.info(f"Saved {self.current_step.tool_name} result to memory as {analysis_type}")
-                            else:
-                                # 兜底：使用标准LangChain save_context
-                                self.memory.save_context(
-                                    {"tool_name": self.current_step.tool_name},
-                                    parsed_output
-                                )
-                    except Exception as e:
-                        self.logger.warning(f"Failed to save tool output to memory: {e}")
-            
-            self.current_step = None
-    
-    def on_tool_error(
-        self,
-        error: Union[Exception, KeyboardInterrupt],
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        **kwargs: Any
-    ) -> Any:
-        """工具执行出错"""
-        self.logger.error(f"Tool error: {error}")
+        error_info = {
+            "error_type": type(error).__name__,
+            "error_message": str(error),
+            "timestamp": datetime.now().isoformat()
+        }
         
-        if self.current_step:
-            self.current_step.error = str(error)
-            
-            if self.current_execution:
-                self.current_execution.steps.append(self.current_step)
-                self.current_execution.status = "failed"
-                self.current_execution.error = str(error)
-            
-            self.current_step = None
-    
-    def on_llm_start(
-        self,
-        serialized: Dict[str, Any],
-        prompts: List[str],
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        **kwargs: Any
-    ) -> Any:
-        """LLM开始生成"""
-        self.logger.debug(f"LLM started with {len(prompts)} prompts")
-    
-    def on_llm_end(
-        self,
-        response: LLMResult,
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        **kwargs: Any
-    ) -> Any:
-        """LLM生成结束"""
-        from utils.thinking_parser import ThinkingOutputParser
+        # 更新工具调用记录
+        if self.tool_calls:
+            self.tool_calls[-1]["error"] = error_info
         
-        # 使用 ThinkingOutputParser 处理输出
-        parser = ThinkingOutputParser()
+        # 更新轨迹记录
+        if self.trajectories and self.trajectories[-1]["type"] == "action":
+            self.trajectories[-1]["error"] = error_info
         
-        if response.generations:
-            for generation_list in response.generations:
-                for generation in generation_list:
-                    if hasattr(generation, 'text') and generation.text:
-                        # 解析输出
-                        parsed = parser.parse(generation.text)
-                        
-                        # 记录思考过程
-                        if parsed['has_thinking']:
-                            self.logger.debug(f"LLM thinking: {parsed['thinking'][:200]}...")
-                        
-                        # 更新生成的文本为清理后的答案
-                        generation.text = parsed['answer']
+        self.logger.error(f"❌ 工具执行出错: {error}")
+    
+    def on_llm_start(self, serialized: Dict[str, Any], prompts: List[str], **kwargs: Any) -> None:
+        """LLM开始调用时调用"""
+        if not self.enable_llm_tracking:
+            return
         
-        self.logger.debug(f"LLM finished with {len(response.generations)} generations")
+        llm_call = {
+            "model": serialized.get("id", ["unknown"])[-1],
+            "prompts": prompts,
+            "start_timestamp": datetime.now().isoformat(),
+            "step": self.step_counter
+        }
+        
+        self.llm_calls.append(llm_call)
+        self.logger.debug(f"🤖 LLM调用开始: {llm_call['model']}")
     
-    def on_llm_error(
-        self,
-        error: Union[Exception, KeyboardInterrupt],
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        **kwargs: Any
-    ) -> Any:
-        """LLM生成出错"""
-        self.logger.error(f"LLM error: {error}")
+    def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
+        """LLM调用完成时调用"""
+        if not self.enable_llm_tracking or not self.llm_calls:
+            return
+        
+        # 更新最新的LLM调用记录
+        llm_call = self.llm_calls[-1]
+        llm_call["end_timestamp"] = datetime.now().isoformat()
+        llm_call["response"] = {
+            "generations": [[g.text for g in gen] for gen in response.generations],
+            "llm_output": response.llm_output
+        }
+        
+        if hasattr(response, 'usage_metadata') and response.usage_metadata:
+            llm_call["usage"] = {
+                "input_tokens": getattr(response.usage_metadata, 'input_tokens', 0),
+                "output_tokens": getattr(response.usage_metadata, 'output_tokens', 0),
+                "total_tokens": getattr(response.usage_metadata, 'total_tokens', 0)
+            }
+        
+        self.logger.debug("🤖 LLM调用完成")
     
-    def on_chain_start(
-        self,
-        serialized: Dict[str, Any],
-        inputs: Dict[str, Any],
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        **kwargs: Any
-    ) -> Any:
-        """Chain开始执行"""
-        # 添加None检查
-        if serialized is not None:
-            chain_name = serialized.get('name', 'unknown')
-        else:
-            chain_name = 'unknown'
-        self.logger.debug(f"Chain started: {chain_name}")
+    def on_llm_error(self, error: Union[Exception, KeyboardInterrupt], **kwargs: Any) -> None:
+        """LLM调用出错时调用"""
+        if not self.enable_llm_tracking or not self.llm_calls:
+            return
+        
+        self.llm_calls[-1]["error"] = {
+            "error_type": type(error).__name__,
+            "error_message": str(error),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        self.logger.error(f"❌ LLM调用出错: {error}")
     
-    def on_chain_end(
-        self,
-        outputs: Dict[str, Any],
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        **kwargs: Any
-    ) -> Any:
-        """Chain执行结束"""
-        # 添加None检查
-        if outputs is not None:
-            self.logger.debug(f"Chain finished with outputs: {outputs}")
-        else:
-            self.logger.debug("Chain finished with no outputs")
-    
-    def on_chain_error(
-        self,
-        error: Union[Exception, KeyboardInterrupt],
-        *,
-        run_id: UUID,
-        parent_run_id: Optional[UUID] = None,
-        **kwargs: Any
-    ) -> Any:
-        """Chain执行出错"""
-        self.logger.error(f"Chain error: {error}")
-    
-    def set_execution(self, execution: AgentExecution):
-        """设置当前执行"""
-        self.current_execution = execution
-    
+    # ========== 轨迹数据访问方法 ==========
     def get_trajectories(self) -> List[Dict[str, Any]]:
-        """获取所有轨迹"""
-        return self.trajectories
+        """获取所有轨迹数据"""
+        return self.trajectories.copy()
     
-    def clear_trajectories(self):
-        """清空轨迹"""
+    def get_tool_calls(self) -> List[Dict[str, Any]]:
+        """获取所有工具调用记录"""
+        return self.tool_calls.copy()
+    
+    def get_llm_calls(self) -> List[Dict[str, Any]]:
+        """获取所有LLM调用记录"""
+        return self.llm_calls.copy()
+    
+    def get_execution_summary(self) -> Dict[str, Any]:
+        """获取执行摘要"""
+        return {
+            "session_id": self.current_session_id,
+            "total_steps": len(self.trajectories),
+            "tool_calls": len(self.tool_calls),
+            "llm_calls": len(self.llm_calls),
+            "errors": len([t for t in self.trajectories if "error" in t]),
+            "start_time": self.trajectories[0]["timestamp"] if self.trajectories else None,
+            "end_time": self.trajectories[-1]["timestamp"] if self.trajectories else None
+        }
+    
+    def get_training_examples(self) -> List[Dict[str, Any]]:
+        """从轨迹中提取训练样例"""
+        examples = []
+        current_example = {}
+        
+        for trajectory in self.trajectories:
+            if trajectory["type"] == "action":
+                tool_name = trajectory["tool"]
+                tool_output = trajectory.get("output", {})
+                
+                # 根据工具类型更新当前样例
+                if tool_name == "question_generation":
+                    current_example["question"] = self._extract_question(tool_output)
+                elif tool_name == "sql_generation":
+                    current_example["sql"] = self._extract_sql(tool_output)
+                    
+                    # 如果有问题和SQL，创建训练样例
+                    if "question" in current_example and "sql" in current_example:
+                        example = TrainingExample(
+                            question=current_example["question"],
+                            sql=current_example["sql"],
+                            scenario=current_example.get("scenario", {}),
+                            operations=current_example.get("operations", []),
+                            tables=current_example.get("tables", []),
+                            validation=current_example.get("validation", {}),
+                            quality_score=current_example.get("quality_score", 0.0)
+                        )
+                        
+                        examples.append(example.to_training_format())
+                        current_example = {}  # 重置
+        
+        return examples
+    
+    # ========== 轨迹持久化方法 ==========
+    def save_trajectories(self, filename: Optional[str] = None) -> str:
+        """保存轨迹到文件"""
+        if not filename:
+            filename = f"trajectory_{self.current_session_id}.json"
+        
+        filepath = self.output_directory / filename
+        
+        trajectory_data = {
+            "session_id": self.current_session_id,
+            "summary": self.get_execution_summary(),
+            "trajectories": self.trajectories,
+            "tool_calls": self.tool_calls,
+            "llm_calls": self.llm_calls
+        }
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(trajectory_data, f, ensure_ascii=False, indent=2)
+        
+        self.logger.info(f"💾 轨迹已保存: {filepath}")
+        return str(filepath)
+    
+    def save_training_examples(self, filename: Optional[str] = None) -> str:
+        """保存提取的训练样例"""
+        if not filename:
+            filename = f"training_examples_{self.current_session_id}.jsonl"
+        
+        filepath = self.output_directory / filename
+        examples = self.get_training_examples()
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            for example in examples:
+                f.write(json.dumps(example, ensure_ascii=False) + '\n')
+        
+        self.logger.info(f"📚 训练样例已保存: {filepath} ({len(examples)} 条)")
+        return str(filepath)
+    
+    def clear_trajectories(self) -> None:
+        """清空轨迹数据"""
         self.trajectories = []
+        self.tool_calls = []
+        self.llm_calls = []
+        self.step_counter = 0
+        self.current_session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        self.logger.info(f"🧹 轨迹数据已清空 - 新会话ID: {self.current_session_id}")
+    
+    # ========== 内部辅助方法 ==========
+    def _extract_question(self, tool_output: Any) -> str:
+        """从工具输出中提取问题"""
+        if isinstance(tool_output, dict):
+            return tool_output.get("question", "")
+        return str(tool_output)
+    
+    def _extract_sql(self, tool_output: Any) -> str:
+        """从工具输出中提取SQL"""
+        if isinstance(tool_output, dict):
+            return tool_output.get("sql", "")
+        return str(tool_output)
+
+
+class TrajectoryAnalyzer:
+    """轨迹分析器 - 分析和统计轨迹数据
+    
+    职责：
+    - 分析轨迹执行模式
+    - 统计工具使用频率
+    - 识别常见错误模式
+    - 生成性能报告
+    """
+    
+    def __init__(self, trajectories: List[Dict[str, Any]]):
+        """
+        初始化分析器
+        
+        Args:
+            trajectories: 轨迹数据列表
+        """
+        self.trajectories = trajectories
+        self.logger = logging.getLogger(__name__)
+    
+    def analyze_tool_usage(self) -> Dict[str, Any]:
+        """分析工具使用情况"""
+        tool_counts = {}
+        tool_errors = {}
+        
+        for trajectory in self.trajectories:
+            if trajectory["type"] == "action":
+                tool_name = trajectory["tool"]
+                tool_counts[tool_name] = tool_counts.get(tool_name, 0) + 1
+                
+                if "error" in trajectory:
+                    tool_errors[tool_name] = tool_errors.get(tool_name, 0) + 1
+        
+        return {
+            "tool_usage_counts": tool_counts,
+            "tool_error_counts": tool_errors,
+            "most_used_tools": sorted(tool_counts.items(), key=lambda x: x[1], reverse=True)[:5],
+            "error_rates": {tool: tool_errors.get(tool, 0) / count 
+                          for tool, count in tool_counts.items()}
+        }
+    
+    def analyze_execution_patterns(self) -> Dict[str, Any]:
+        """分析执行模式"""
+        total_steps = len([t for t in self.trajectories if t["type"] == "action"])
+        error_steps = len([t for t in self.trajectories if "error" in t])
+        
+        # 分析工具序列
+        tool_sequence = [t["tool"] for t in self.trajectories if t["type"] == "action"]
+        
+        return {
+            "total_action_steps": total_steps,
+            "error_steps": error_steps,
+            "success_rate": (total_steps - error_steps) / total_steps if total_steps > 0 else 0,
+            "tool_sequence": tool_sequence,
+            "unique_tools_used": len(set(tool_sequence)),
+            "average_retries": self._calculate_average_retries()
+        }
+    
+    def _calculate_average_retries(self) -> float:
+        """计算平均重试次数"""
+        tool_counts = {}
+        
+        for trajectory in self.trajectories:
+            if trajectory["type"] == "action":
+                tool_name = trajectory["tool"]
+                tool_counts[tool_name] = tool_counts.get(tool_name, 0) + 1
+        
+        if not tool_counts:
+            return 0.0
+        
+        retry_counts = [count - 1 for count in tool_counts.values() if count > 1]
+        return sum(retry_counts) / len(tool_counts) if tool_counts else 0.0
+
+
+# ========== 便利函数 ==========
+def create_callback_handler(trajectory_dir: str = "./trajectories", 
+                           enable_all: bool = True) -> SemanticSQLCallbackHandler:
+    """
+    创建回调处理器的便利函数
+    
+    Args:
+        trajectory_dir: 轨迹输出目录
+        enable_all: 是否启用所有跟踪功能
+        
+    Returns:
+        配置好的回调处理器
+    """
+    return SemanticSQLCallbackHandler(
+        enable_trajectory=enable_all,
+        enable_llm_tracking=enable_all,
+        enable_tool_tracking=enable_all,
+        output_directory=trajectory_dir
+    )

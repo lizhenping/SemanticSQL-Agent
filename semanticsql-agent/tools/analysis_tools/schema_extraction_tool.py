@@ -1,185 +1,284 @@
 """
-数据库结构提取工具 - 优化版本
-简化设计，移除过度异常处理，按就近原则组织代码
+数据库结构提取工具 - 极简架构重构版本
+基于新的BaseSemanticSQLTool，实现完全自主的结构提取
 """
 
-from typing import Dict, Any, Type, List, Optional
+from typing import Dict, Any, Optional, List
 import json
-from pydantic import BaseModel, Field
+import logging
 
-from models.exceptions import ToolExecutionError
-from utils.database import DatabaseManager
-from ..base_tool import BaseSemanticSQLTool
-
-
-# ========== 工具内部数据模型（就近原则）==========
-class SchemaExtractionInput(BaseModel):
-    """Schema提取输入参数"""
-    database_name: str = Field(description="数据库名称")
-    include_views: bool = Field(default=False, description="是否包含视图")
-    sample_data: bool = Field(default=True, description="是否包含样本数据")
-    tables: Optional[List[str]] = Field(default=None, description="指定要提取的表")
-
-
-class SchemaInfo(BaseModel):
-    """数据库结构信息"""
-    database_name: str
-    tables: Dict[str, Dict[str, Any]]
-    table_count: int
-    total_columns: int
+from pydantic import Field
+from tools.base_tool import BaseSemanticSQLTool
+from utils.database import DatabaseManager, create_database_manager
+from models.schemas import PredicateType, EntityType
+from models.exceptions import raise_tool_error, raise_dependency_error
 
 
 class SchemaExtractionTool(BaseSemanticSQLTool):
-    """数据库结构提取工具 - 优化版本
+    """数据库结构提取工具 - 极简重构版本
     
     职责：
-    - 提取数据库完整结构信息
-    - 获取表、列、主键、外键等元数据
-    - 支持样本数据提取
+    - 提取数据库完整结构信息（表、字段、类型、约束）
+    - 生成表-字段关系三元组
+    - 为后续工具提供结构化的数据库知识
     
     设计原则：
-    - 单一职责：专注结构提取
-    - 简化异常：让异常自然传播
-    - 类型安全：使用Pydantic模型
+    - 极简实现：所有逻辑在_run()中完成
+    - 自主决策：自动决定提取策略和存储时机
+    - 三元组输出：结构化知识表示
     """
-
+    
     name: str = "schema_extraction"
-    description: str = "提取数据库的完整结构信息，包括表、列、索引、外键等"
-    args_schema: Type[BaseModel] = SchemaExtractionInput
-
-    def __init__(self, db_manager: DatabaseManager = None, **kwargs):
+    description: str = "提取数据库结构信息，生成表字段关系三元组，为后续分析提供基础"
+    
+    # 数据库管理器（可选注入）
+    database_manager: Optional[DatabaseManager] = Field(default=None, exclude=True)
+    
+    def __init__(self, database_manager: Optional[DatabaseManager] = None, **kwargs):
+        """
+        初始化结构提取工具
+        
+        Args:
+            database_manager: 可选的数据库管理器
+        """
         super().__init__(**kwargs)
-        object.__setattr__(self, 'db_manager', db_manager)
-
-    def _run(
-        self,
-        database_name: str,
-        include_views: bool = False,
-        sample_data: bool = True,
-        tables: Optional[List[str]] = None,
-        **kwargs
-    ) -> str:
-        """执行数据库结构提取 - 简化版本"""
-        # 获取数据库管理器
-        db_manager = self._get_database_manager()
+        # 使用object.__setattr__避免Pydantic验证问题
+        object.__setattr__(self, 'database_manager', database_manager)
+    
+    def _run(self, input_text: str) -> str:
+        """
+        执行数据库结构提取 - 完全自主实现
         
-        # 获取表列表并提取信息
-        target_tables = tables if tables else db_manager.get_tables()
-        table_infos = self._extract_all_tables_info(
-            target_tables, database_name, sample_data, db_manager
-        )
+        Args:
+            input_text: 输入文本，期望包含数据库连接信息或提取指令
+            
+        Returns:
+            自定义格式的执行结果字符串
+        """
+        # 1. 清空上次执行的三元组
+        self._clear_generated_triples()
+        self._log_execution_start(input_text)
         
-        # 构建结果
-        result = self._build_schema_result(database_name, table_infos)
+        try:
+            # 2. 解析输入参数
+            extraction_params = self._parse_input(input_text)
+            
+            # 3. 获取或创建数据库管理器
+            db_manager = self._get_database_manager(extraction_params)
+            
+            # 4. 提取数据库结构信息
+            schema_info = self._extract_database_schema(db_manager)
+            
+            # 5. 生成结构化三元组
+            self._generate_schema_triples(schema_info)
+            
+            # 6. 持久化三元组到记忆系统
+            self._persist_triples()
+            
+            # 7. 构建执行结果
+            result_message = self._build_result_message(schema_info)
+            
+            self._log_execution_end(f"提取了 {len(schema_info['tables'])} 个表")
+            return result_message
+            
+        except Exception as e:
+            error_msg = f"结构提取失败: {str(e)}"
+            self.logger.error(f"❌ {self.name}: {error_msg}")
+            return f"❌ {error_msg}"
+    
+    # ========== 核心业务逻辑 ==========
+    def _parse_input(self, input_text: str) -> Dict[str, Any]:
+        """解析输入参数"""
+        try:
+            # 尝试解析JSON格式的输入
+            if input_text.strip().startswith('{'):
+                return json.loads(input_text)
+        except json.JSONDecodeError:
+            pass
         
-        # 保存并返回
-        self.save_to_memory("schema_extraction", result)
-        return json.dumps(result, ensure_ascii=False)
-
-    # ========== 核心提取逻辑 ==========
-    def _get_database_manager(self) -> DatabaseManager:
-        """获取数据库管理器"""
-        if self.db_manager:
-            return self.db_manager
-        
-        # 从记忆获取（向后兼容）
-        db_manager = self.get_from_memory("database_manager")
-        if not db_manager:
-            raise ToolExecutionError(
-                tool_name=self.name,
-                reason="数据库管理器未初始化"
-            )
-        return db_manager
-
-    def _extract_all_tables_info(
-        self,
-        tables: List[str],
-        database_name: str,
-        sample_data: bool,
-        db_manager: DatabaseManager
-    ) -> Dict[str, Dict[str, Any]]:
-        """提取所有表的信息"""
-        table_infos = {}
-        for table_name in tables:
-            table_infos[table_name] = self._extract_single_table_info(
-                table_name, database_name, sample_data, db_manager
-            )
-        return table_infos
-
-    def _extract_single_table_info(
-        self,
-        table_name: str,
-        database_name: str,
-        sample_data: bool,
-        db_manager: DatabaseManager
-    ) -> Dict[str, Any]:
-        """提取单个表的详细信息"""
-        # 获取基础表信息
-        columns = db_manager.get_table_columns(table_name)
-        primary_keys = db_manager.get_primary_keys(table_name)
-        foreign_keys = db_manager.get_foreign_keys(table_name)
-        
-        table_info = {
-            "name": table_name,
-            "columns": self._format_columns_info(columns),
-            "primary_keys": primary_keys,
-            "foreign_keys": self._format_foreign_keys_info(foreign_keys),
-            "row_count": self._get_table_row_count(table_name, db_manager)
-        }
-        
-        # 添加样本数据
-        if sample_data:
-            table_info["sample_data"] = self._get_sample_data(table_name, db_manager)
-        
-        return table_info
-
-    def _format_columns_info(self, columns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """格式化列信息"""
-        return [{
-            "name": col.get("name", ""),
-            "type": col.get("type", ""),
-            "nullable": col.get("nullable", True),
-            "default": col.get("default"),
-            "comment": col.get("comment", "")
-        } for col in columns]
-
-    def _format_foreign_keys_info(self, foreign_keys: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """格式化外键信息"""
-        return [{
-            "constrained_columns": fk.get("constrained_columns", []),
-            "referred_table": fk.get("referred_table", ""),
-            "referred_columns": fk.get("referred_columns", [])
-        } for fk in foreign_keys]
-
-    def _get_table_row_count(self, table_name: str, db_manager: DatabaseManager) -> int:
-        """获取表行数"""
-        return db_manager.get_table_row_count(table_name)
-
-    def _get_sample_data(self, table_name: str, db_manager: DatabaseManager, limit: int = 3) -> List[Dict[str, Any]]:
-        """获取样本数据"""
-        return db_manager.get_sample_data(table_name, limit)
-
-    def _build_schema_result(self, database_name: str, table_infos: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
-        """构建最终结果"""
-        total_columns = sum(
-            len(info.get("columns", [])) for info in table_infos.values()
-        )
-        
+        # 默认提取参数
         return {
-            "database_name": database_name,
-            "tables": table_infos,
-            "table_count": len(table_infos),
-            "total_columns": total_columns,
-            "extraction_summary": f"提取了{len(table_infos)}个表，共{total_columns}个字段"
+            "include_sample_data": True,
+            "max_sample_rows": 3,
+            "include_foreign_keys": True
         }
+    
+    def _get_database_manager(self, params: Dict[str, Any]) -> DatabaseManager:
+        """获取数据库管理器"""
+        # 优先使用注入的管理器
+        if self.database_manager:
+            return self.database_manager
+        
+        # 从输入参数创建
+        if "database_params" in params:
+            return create_database_manager(params["database_params"])
+        
+        # 最后尝试从记忆中获取连接信息
+        raise_tool_error(
+            self.name, 
+            "未找到数据库连接信息，请提供database_params或注入DatabaseManager"
+        )
+    
+    def _extract_database_schema(self, db_manager: DatabaseManager) -> Dict[str, Any]:
+        """提取数据库结构信息"""
+        try:
+            # 获取数据库基本信息
+            connection_info = db_manager.get_connection_info()
+            database_name = connection_info["database"]
+            
+            # 提取详细结构信息
+            schema_info = db_manager.extract_database_schema()
+            
+            self.logger.info(f"📊 成功提取数据库 {database_name} 的结构信息")
+            return {
+                "database_name": database_name,
+                "tables": schema_info.schema_info,
+                "table_names": schema_info.tables,
+                "connection_info": connection_info
+            }
+            
+        except Exception as e:
+            raise_tool_error(
+                self.name,
+                f"数据库结构提取失败: {str(e)}"
+            )
+    
+    def _generate_schema_triples(self, schema_info: Dict[str, Any]) -> None:
+        """生成结构化三元组"""
+        database_name = schema_info["database_name"]
+        tables_info = schema_info["tables"]
+        
+        # 1. 生成数据库-表关系三元组
+        for table_name in schema_info["table_names"]:
+            self.add_analysis_triple(
+                subject=database_name,
+                predicate=PredicateType.HAS_TABLE.value,
+                object=table_name,
+                subject_type=EntityType.DATABASE.value,
+                object_type=EntityType.TABLE.value,
+                confidence=1.0
+            )
+        
+        # 2. 生成表-字段关系三元组
+        for table_name, table_info in tables_info.items():
+            columns = table_info.get("columns", [])
+            
+            for column in columns:
+                column_name = column["name"]
+                
+                # 表-字段关系
+                self.add_analysis_triple(
+                    subject=table_name,
+                    predicate=PredicateType.HAS_COLUMN.value,
+                    object=column_name,
+                    subject_type=EntityType.TABLE.value,
+                    object_type=EntityType.COLUMN.value,
+                    confidence=1.0
+                )
+                
+                # 字段类型信息
+                column_type = column.get("type", "UNKNOWN")
+                self.add_analysis_triple(
+                    subject=column_name,
+                    predicate="has_type",
+                    object=column_type,
+                    subject_type=EntityType.COLUMN.value,
+                    object_type="DataType",
+                    confidence=1.0
+                )
+                
+                # 主键信息
+                if column_name in table_info.get("primary_keys", []):
+                    self.add_analysis_triple(
+                        subject=column_name,
+                        predicate="is_primary_key",
+                        object="true",
+                        subject_type=EntityType.COLUMN.value,
+                        object_type="Boolean",
+                        confidence=1.0
+                    )
+        
+        # 3. 生成外键关系三元组
+        for table_name, table_info in tables_info.items():
+            for fk in table_info.get("foreign_keys", []):
+                source_columns = fk.get("constrained_columns", [])
+                target_table = fk.get("referred_table", "")
+                target_columns = fk.get("referred_columns", [])
+                
+                if source_columns and target_table and target_columns:
+                    # 简化处理：使用第一个外键字段
+                    source_col = source_columns[0]
+                    target_col = target_columns[0]
+                    
+                    self.add_analysis_triple(
+                        subject=f"{table_name}.{source_col}",
+                        predicate=PredicateType.REFERENCES.value,
+                        object=f"{target_table}.{target_col}",
+                        subject_type="ForeignKey",
+                        object_type="PrimaryKey",
+                        confidence=0.95
+                    )
+        
+        self.logger.info(f"📝 生成了 {len(self._generated_triples)} 个结构三元组")
+    
+    def _build_result_message(self, schema_info: Dict[str, Any]) -> str:
+        """构建执行结果消息"""
+        database_name = schema_info["database_name"]
+        table_count = len(schema_info["table_names"])
+        total_columns = sum(
+            len(table_info.get("columns", [])) 
+            for table_info in schema_info["tables"].values()
+        )
+        triple_count = len(self._generated_triples)
+        
+        # 生成表概览
+        table_overview = []
+        for table_name, table_info in schema_info["tables"].items():
+            column_count = len(table_info.get("columns", []))
+            pk_count = len(table_info.get("primary_keys", []))
+            fk_count = len(table_info.get("foreign_keys", []))
+            
+            table_overview.append(
+                f"  • {table_name}: {column_count}列, {pk_count}主键, {fk_count}外键"
+            )
+        
+        result = f"""✅ 数据库结构提取完成
 
-    async def _arun(
-        self,
-        database_name: str,
-        include_views: bool = False,
-        sample_data: bool = True,
-        tables: Optional[List[str]] = None,
-        **kwargs
-    ) -> str:
-        """异步执行（当前实现为同步）"""
-        return self._run(database_name, include_views, sample_data, tables, **kwargs)
+📊 数据库概览:
+  • 数据库: {database_name}
+  • 表数量: {table_count}
+  • 总字段数: {total_columns}
+  • 生成三元组: {triple_count}
+
+📋 表结构详情:
+{chr(10).join(table_overview)}
+
+💾 结构知识已存储到记忆系统，可供后续工具使用"""
+        
+        return result
+
+
+# ========== 便利函数 ==========
+def create_schema_extraction_tool(
+    memory_manager: Optional['Neo4jMemoryManager'] = None,
+    database_manager: Optional['DatabaseManager'] = None,
+    database_params: Optional[Dict[str, Any]] = None
+) -> SchemaExtractionTool:
+    """创建结构提取工具的便利函数
+    
+    Args:
+        memory_manager: Neo4j记忆管理器
+        database_manager: 数据库管理器
+        database_params: 数据库连接参数（向后兼容）
+        
+    Returns:
+        配置好的结构提取工具
+    """
+    # 处理向后兼容的database_params
+    if database_params and not database_manager:
+        database_manager = create_database_manager(database_params)
+    
+    return SchemaExtractionTool(
+        memory_manager=memory_manager,
+        database_manager=database_manager
+    )

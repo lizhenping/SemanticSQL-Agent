@@ -1,362 +1,492 @@
 """
-记忆管理模块 - 优化版本
-设计类型安全的分析上下文容器，替代字典式记忆系统
+Neo4j三元组记忆管理 - SemanticSQL Agent核心记忆系统
+基于架构设计的完全重构版本，实现工具间智能协作
 """
 
-from typing import Dict, Any, List, Optional
-from dataclasses import dataclass, field
-from langchain_core.memory import BaseMemory
-from pydantic import Field
+from typing import List, Dict, Any, Optional, Union
 import logging
+from datetime import datetime
+import uuid
+
+try:
+    from langchain_community.graphs import Neo4jGraph
+    from langchain_community.graphs.graph_document import GraphDocument, Node, Relationship
+    NEO4J_AVAILABLE = True
+except ImportError:
+    # 如果Neo4j不可用，使用内存存储作为后备
+    NEO4J_AVAILABLE = False
+    Node = None
+    Relationship = None
+    GraphDocument = None
+
+from models.schemas import SemanticTriple, TripleCollection, PredicateType
+from models.exceptions import (
+    MemoryConnectionError, 
+    TripleStorageError, 
+    MemoryQueryError
+)
 
 
-# ========== 类型安全的分析结果容器 ==========
-@dataclass
-class SchemaInfo:
-    """数据库结构信息"""
-    database_name: str
-    tables: Dict[str, Any] = field(default_factory=dict)
-    total_tables: int = 0
-    total_columns: int = 0
-    relationships: List[Dict[str, Any]] = field(default_factory=list)
-
-
-@dataclass 
-class DomainInfo:
-    """业务领域信息"""
-    primary_domain: str = ""
-    secondary_domains: List[str] = field(default_factory=list)
-    business_concepts: List[str] = field(default_factory=list)
-    confidence_score: float = 0.0
-
-
-@dataclass
-class FieldClassification:
-    """字段分类信息"""
-    field_classifications: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    classification_stats: Dict[str, int] = field(default_factory=dict)
-    important_fields: List[str] = field(default_factory=list)
-
-
-@dataclass
-class ColumnMeanings:
-    """列语义信息"""
-    column_meanings: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    business_meanings: Dict[str, str] = field(default_factory=dict)
-    semantic_groups: Dict[str, List[str]] = field(default_factory=dict)
-
-
-@dataclass
-class TableMeanings:
-    """表语义信息"""
-    table_meanings: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    table_relationships: List[Dict[str, Any]] = field(default_factory=list)
-    core_tables: List[str] = field(default_factory=list)
-
-
-@dataclass
-class ERRelations:
-    """实体关系信息"""
-    relationships: List[Dict[str, Any]] = field(default_factory=list)
-    entities: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    relationship_matrix: Dict[str, Dict[str, str]] = field(default_factory=dict)
-
-
-@dataclass
-class ScenarioCombinations:
-    """场景组合信息"""
-    combinations: List[Dict[str, Any]] = field(default_factory=list)
-    total_combinations: int = 0
-    generation_strategy: str = ""
-
-
-@dataclass
-class AnalysisContext:
-    """类型安全的分析上下文容器 - 替代字典式记忆
-    
-    职责：
-    - 存储所有分析阶段的结果
-    - 提供类型安全的数据访问
-    - 支持分析完整性检查
+class Neo4jMemoryManager:
+    """Neo4j三元组记忆管理器 - 工具间智能协作的核心
     
     设计原则：
-    - 类型安全：使用强类型数据类
-    - 单一职责：专门存储分析数据
-    - 不可变性：通过dataclass确保数据一致性
+    - 记忆分片：每个工具管理自己的记忆片段(source_tool)
+    - 依赖查询：工具通过source_tool查询其他工具的记忆
+    - 结构化存储：三元组形式存储，支持图查询和推理
+    - 完全自主：工具自主决定存储时机和查询策略
+    
+    核心功能：
+    1. store_triples() - 存储工具生成的三元组
+    2. query_by_source_tool() - 按工具查询记忆片段
+    3. get_related_triples() - 获取实体相关三元组
     """
     
-    # 核心分析数据
-    schema_info: Optional[SchemaInfo] = None
-    domain_info: Optional[DomainInfo] = None
-    field_classification: Optional[FieldClassification] = None
-    column_meanings: Optional[ColumnMeanings] = None
-    table_meanings: Optional[TableMeanings] = None
-    er_relations: Optional[ERRelations] = None
-    
-    # 生成相关数据
-    scenario_combinations: Optional[ScenarioCombinations] = None
-    current_question: str = ""
-    current_sql: str = ""
-    
-    # 元数据
-    analysis_timestamp: str = ""
-    database_name: str = ""
-    
-    def is_analysis_complete(self) -> bool:
-        """检查分析是否完整"""
-        return all([
-            self.schema_info is not None,
-            self.domain_info is not None,
-            self.field_classification is not None,
-            self.column_meanings is not None,
-            self.table_meanings is not None,
-            self.er_relations is not None
-        ])
-    
-    def get_completion_status(self) -> Dict[str, bool]:
-        """获取各项分析的完成状态"""
-        return {
-            "schema_info": self.schema_info is not None,
-            "domain_info": self.domain_info is not None,
-            "field_classification": self.field_classification is not None,
-            "column_meanings": self.column_meanings is not None,
-            "table_meanings": self.table_meanings is not None,
-            "er_relations": self.er_relations is not None,
-            "scenario_combinations": self.scenario_combinations is not None
-        }
-    
-    def get_summary(self) -> str:
-        """获取分析上下文摘要"""
-        if not any([self.schema_info, self.domain_info]):
-            return "分析上下文为空"
-        
-        summary_parts = []
-        
-        # 数据库结构信息
-        if self.schema_info:
-            summary_parts.append(f"数据库: {self.schema_info.database_name}")
-            summary_parts.append(f"表数量: {self.schema_info.total_tables}")
-        
-        # 业务领域信息
-        if self.domain_info and self.domain_info.primary_domain:
-            summary_parts.append(f"领域: {self.domain_info.primary_domain}")
-        
-        # 完成状态
-        completed_count = sum(1 for completed in self.get_completion_status().values() if completed)
-        summary_parts.append(f"完成度: {completed_count}/7")
-        
-        return " | ".join(summary_parts)
-
-
-class DatabaseAnalysisMemory(BaseMemory):
-    """基于类型安全容器的记忆管理器
-    
-    职责：
-    - 兼容 LangChain BaseMemory 接口
-    - 提供类型安全的数据存储和访问
-    - 支持工具结果到类型化容器的转换
-    
-    设计原则：
-    - 类型安全：内部使用 AnalysisContext
-    - 兼容性：保持 LangChain 接口
-    - 简化映射：直接的工具名到数据类型映射
-    """
-    
-    # LangChain 要求的字段
-    memories: Dict[str, Any] = Field(default_factory=dict)
-    memory_key: str = "db_analysis"
-    
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        object.__setattr__(self, 'logger', logging.getLogger(__name__))
-        object.__setattr__(self, 'context', AnalysisContext())
-    
-    # ========== LangChain 接口实现 ==========
-    @property
-    def memory_variables(self) -> List[str]:
-        """返回记忆变量列表"""
-        return [self.memory_key]
-    
-    def clear(self) -> None:
-        """清空记忆"""
-        self.memories = {}
-        object.__setattr__(self, 'context', AnalysisContext())
-    
-    def load_memory_variables(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """加载记忆变量 - 保持向后兼容"""
-        # 为了兼容现有代码，同时提供字典格式和类型化格式
-        return {
-            self.memory_key: self.memories,
-            "typed_context": self.context
-        }
-    
-    def save_context(self, inputs: Dict[str, Any], outputs: Dict[str, Any]) -> None:
-        """保存上下文 - 转换为类型化容器
+    def __init__(self, 
+                 neo4j_uri: str = "bolt://localhost:7687",
+                 neo4j_user: str = "neo4j", 
+                 neo4j_password: str = "",
+                 use_fallback: bool = True):
+        """
+        初始化Neo4j记忆管理器
         
         Args:
-            inputs: 输入参数
-            outputs: 工具输出结果
+            neo4j_uri: Neo4j连接URI
+            neo4j_user: 用户名
+            neo4j_password: 密码
+            use_fallback: 是否在连接失败时使用内存后备存储
         """
-        tool_name = self._extract_tool_name(inputs)
-        if not tool_name:
-            return
+        self.logger = logging.getLogger(__name__)
+        self.use_fallback = use_fallback
+        self.neo4j_graph = None
+        self.fallback_storage = {}  # 内存后备存储
         
-        data = self._extract_output_data(outputs)
-        
-        # 更新类型化容器
-        self._update_typed_context(tool_name, data)
-        
-        # 保持向后兼容的字典格式
-        self._update_legacy_memory(tool_name, data)
-        
-        self.logger.info(f"💾 Saved {tool_name} to typed context")
+        # 尝试连接Neo4j
+        if NEO4J_AVAILABLE and neo4j_password:
+            try:
+                self.neo4j_graph = Neo4jGraph(
+                    url=neo4j_uri,
+                    username=neo4j_user,
+                    password=neo4j_password
+                )
+                # 测试连接
+                self.neo4j_graph.query("MATCH (n) RETURN count(n) LIMIT 1")
+                self.logger.info("✅ Neo4j连接成功")
+            except Exception as e:
+                self.logger.warning(f"⚠️ Neo4j连接失败: {e}")
+                if not use_fallback:
+                    raise MemoryConnectionError("Neo4j", {
+                        "uri": neo4j_uri,
+                        "user": neo4j_user,
+                        "error": str(e)
+                    })
+                self.logger.info("📦 使用内存后备存储")
     
-    # ========== 内部辅助方法 ==========
-    def _extract_tool_name(self, inputs: Dict[str, Any]) -> Optional[str]:
-        """提取工具名称"""
-        return inputs.get("tool_name") or inputs.get("action", {}).get("tool")
-    
-    def _extract_output_data(self, outputs: Dict[str, Any]) -> Any:
-        """提取输出数据"""
-        return outputs.get("output", outputs) if isinstance(outputs, dict) else outputs
-    
-    def _update_typed_context(self, tool_name: str, data: Any) -> None:
-        """更新类型化上下文"""
+    def store_triples(self, 
+                     triples: Union[List[SemanticTriple], TripleCollection], 
+                     source_tool: str) -> bool:
+        """
+        存储三元组到记忆系统
+        
+        Args:
+            triples: 三元组列表或集合
+            source_tool: 来源工具名称
+            
+        Returns:
+            存储是否成功
+        """
         try:
-            if tool_name == "schema_extraction":
-                self._update_schema_info(data)
-            elif tool_name == "domain_analysis":
-                self._update_domain_info(data)
-            elif tool_name == "field_analysis":
-                self._update_field_classification(data)
-            elif tool_name == "column_analysis":
-                self._update_column_meanings(data)
-            elif tool_name == "table_analysis":
-                self._update_table_meanings(data)
-            elif tool_name == "er_analysis":
-                self._update_er_relations(data)
-            elif tool_name == "scenario_operation_generation":
-                self._update_scenario_combinations(data)
-            elif tool_name == "question_generation":
-                self._update_current_question(data)
-            elif tool_name == "sql_generation":
-                self._update_current_sql(data)
+            # 统一处理输入格式
+            if isinstance(triples, TripleCollection):
+                triple_list = triples.triples
+                source_tool = triples.source_tool or source_tool
+            else:
+                triple_list = triples
+            
+            if not triple_list:
+                self.logger.warning(f"⚠️ 工具 {source_tool} 没有三元组需要存储")
+                return True
+            
+            # 设置source_tool
+            for triple in triple_list:
+                if not triple.source_tool:
+                    triple.source_tool = source_tool
+            
+            # 尝试存储到Neo4j
+            if self.neo4j_graph:
+                success = self._store_to_neo4j(triple_list, source_tool)
+            else:
+                success = self._store_to_fallback(triple_list, source_tool)
+            
+            if success:
+                self.logger.info(f"💾 成功存储 {len(triple_list)} 个三元组 (来源: {source_tool})")
+            
+            return success
+            
         except Exception as e:
-            self.logger.warning(f"Failed to update typed context for {tool_name}: {e}")
+            self.logger.error(f"❌ 存储三元组失败: {e}")
+            raise TripleStorageError("存储", str(e), {"source_tool": source_tool})
     
-    def _update_legacy_memory(self, tool_name: str, data: Any) -> None:
-        """更新传统字典格式记忆（向后兼容）"""
-        memory_mapping = {
-            "schema_extraction": "schema_info",
-            "domain_analysis": "domain_info",
-            "field_analysis": "field_classification",
-            "column_analysis": "column_meanings",
-            "table_analysis": "table_meanings",
-            "er_analysis": "er_relations",
-            "scenario_operation_generation": "all_scenario_combinations",
-            "question_generation": "current_question",
-            "sql_generation": "current_sql"
-        }
+    def query_by_source_tool(self, source_tool: str, limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        按工具来源查询记忆片段 - 核心依赖查询方法
         
-        if tool_name in memory_mapping:
-            memory_key = memory_mapping[tool_name]
-            self.memories[memory_key] = data
+        Args:
+            source_tool: 来源工具名称
+            limit: 返回数量限制
+            
+        Returns:
+            三元组字典列表
+        """
+        try:
+            if self.neo4j_graph:
+                results = self._query_neo4j_by_source(source_tool, limit)
+            else:
+                results = self._query_fallback_by_source(source_tool, limit)
+            
+            self.logger.debug(f"🔍 查询 {source_tool} 记忆: {len(results)} 条")
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"❌ 查询记忆失败: {e}")
+            raise MemoryQueryError("source_tool", str(e), {"source_tool": source_tool})
     
-    # ========== 类型化数据更新方法 ==========
-    def _update_schema_info(self, data: Dict[str, Any]) -> None:
-        """更新数据库结构信息"""
-        schema_info = SchemaInfo(
-            database_name=data.get("database_name", ""),
-            tables=data.get("tables", {}),
-            total_tables=len(data.get("tables", {})),
-            total_columns=sum(len(table.get("columns", [])) for table in data.get("tables", {}).values()),
-            relationships=data.get("relationships", [])
+    def get_related_triples(self, 
+                           entity: str, 
+                           relation_types: Optional[List[str]] = None,
+                           limit: int = 30) -> List[Dict[str, Any]]:
+        """
+        获取实体相关的三元组
+        
+        Args:
+            entity: 实体名称
+            relation_types: 关系类型过滤
+            limit: 返回数量限制
+            
+        Returns:
+            相关三元组列表
+        """
+        try:
+            if self.neo4j_graph:
+                results = self._query_neo4j_related(entity, relation_types, limit)
+            else:
+                results = self._query_fallback_related(entity, relation_types, limit)
+            
+            self.logger.debug(f"🔍 查询 {entity} 相关记忆: {len(results)} 条")
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"❌ 查询相关记忆失败: {e}")
+            raise MemoryQueryError("相关实体", str(e), {"entity": entity})
+    
+    def get_all_memory_by_tools(self, tool_names: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        批量获取多个工具的记忆
+        
+        Args:
+            tool_names: 工具名称列表
+            
+        Returns:
+            按工具分组的记忆字典
+        """
+        memory_dict = {}
+        for tool_name in tool_names:
+            memory_dict[tool_name] = self.query_by_source_tool(tool_name)
+        return memory_dict
+    
+    def clear_tool_memory(self, source_tool: str) -> bool:
+        """
+        清空指定工具的记忆
+        
+        Args:
+            source_tool: 工具名称
+            
+        Returns:
+            清空是否成功
+        """
+        try:
+            if self.neo4j_graph:
+                success = self._clear_neo4j_memory(source_tool)
+            else:
+                success = self._clear_fallback_memory(source_tool)
+            
+            if success:
+                self.logger.info(f"🗑️ 清空工具 {source_tool} 的记忆")
+            
+            return success
+            
+        except Exception as e:
+            self.logger.error(f"❌ 清空记忆失败: {e}")
+            raise TripleStorageError("清空", str(e), {"source_tool": source_tool})
+    
+    def get_memory_statistics(self) -> Dict[str, Any]:
+        """获取记忆统计信息"""
+        try:
+            if self.neo4j_graph:
+                return self._get_neo4j_statistics()
+            else:
+                return self._get_fallback_statistics()
+        except Exception as e:
+            self.logger.warning(f"⚠️ 获取记忆统计失败: {e}")
+            return {"error": str(e)}
+    
+    # ========== Neo4j存储实现 ==========
+    def _store_to_neo4j(self, triples: List[SemanticTriple], source_tool: str) -> bool:
+        """存储到Neo4j"""
+        try:
+            # 转换为GraphDocument
+            graph_doc = self._convert_to_graph_document(triples, source_tool)
+            
+            # 添加到Neo4j
+            self.neo4j_graph.add_graph_documents([graph_doc])
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ Neo4j存储失败: {e}")
+            # 尝试后备存储
+            if self.use_fallback:
+                return self._store_to_fallback(triples, source_tool)
+            return False
+    
+    def _query_neo4j_by_source(self, source_tool: str, limit: int) -> List[Dict[str, Any]]:
+        """从Neo4j按工具查询"""
+        cypher_query = """
+        MATCH (s)-[r]->(o)
+        WHERE r.source_tool = $source_tool
+        RETURN s.name as subject, type(r) as predicate, o.name as object,
+               r.confidence as confidence, r.source_tool as source_tool,
+               s.type as subject_type, o.type as object_type
+        ORDER BY id(r) DESC
+        LIMIT $limit
+        """
+        
+        results = self.neo4j_graph.query(
+            cypher_query, 
+            {"source_tool": source_tool, "limit": limit}
         )
-        object.__setattr__(self.context, 'schema_info', schema_info)
+        return results
     
-    def _update_domain_info(self, data: Dict[str, Any]) -> None:
-        """更新业务领域信息"""
-        domain_info = DomainInfo(
-            primary_domain=data.get("primary_domain", ""),
-            secondary_domains=data.get("secondary_domains", []),
-            business_concepts=data.get("business_concepts", []),
-            confidence_score=data.get("confidence_score", 0.0)
+    def _query_neo4j_related(self, entity: str, relation_types: Optional[List[str]], limit: int) -> List[Dict[str, Any]]:
+        """从Neo4j查询相关实体"""
+        if relation_types:
+            relation_filter = "AND type(r) IN $relation_types"
+            params = {"entity": entity, "relation_types": relation_types, "limit": limit}
+        else:
+            relation_filter = ""
+            params = {"entity": entity, "limit": limit}
+        
+        cypher_query = f"""
+        MATCH (s)-[r]->(o)
+        WHERE s.name = $entity OR o.name = $entity {relation_filter}
+        RETURN s.name as subject, type(r) as predicate, o.name as object,
+               r.confidence as confidence, r.source_tool as source_tool
+        ORDER BY r.confidence DESC
+        LIMIT $limit
+        """
+        
+        results = self.neo4j_graph.query(cypher_query, params)
+        return results
+    
+    def _clear_neo4j_memory(self, source_tool: str) -> bool:
+        """清空Neo4j中指定工具的记忆"""
+        cypher_query = """
+        MATCH ()-[r]->() 
+        WHERE r.source_tool = $source_tool
+        DELETE r
+        """
+        
+        self.neo4j_graph.query(cypher_query, {"source_tool": source_tool})
+        return True
+    
+    def _get_neo4j_statistics(self) -> Dict[str, Any]:
+        """获取Neo4j统计信息"""
+        stats_query = """
+        MATCH ()-[r]->()
+        RETURN r.source_tool as tool, count(r) as count
+        ORDER BY count DESC
+        """
+        
+        results = self.neo4j_graph.query(stats_query)
+        
+        total_query = "MATCH ()-[r]->() RETURN count(r) as total"
+        total_result = self.neo4j_graph.query(total_query)
+        
+        return {
+            "storage_type": "Neo4j",
+            "total_triples": total_result[0]["total"] if total_result else 0,
+            "by_tool": {r["tool"]: r["count"] for r in results}
+        }
+    
+    # ========== 内存后备存储实现 ==========
+    def _store_to_fallback(self, triples: List[SemanticTriple], source_tool: str) -> bool:
+        """存储到内存后备"""
+        if source_tool not in self.fallback_storage:
+            self.fallback_storage[source_tool] = []
+        
+        for triple in triples:
+            self.fallback_storage[source_tool].append({
+                "subject": triple.subject,
+                "predicate": triple.predicate,
+                "object": triple.object,
+                "subject_type": triple.subject_type,
+                "object_type": triple.object_type,
+                "confidence": triple.confidence,
+                "source_tool": triple.source_tool,
+                "timestamp": triple.timestamp,
+                "session_id": triple.session_id
+            })
+        
+        return True
+    
+    def _query_fallback_by_source(self, source_tool: str, limit: int) -> List[Dict[str, Any]]:
+        """从内存后备按工具查询"""
+        tool_data = self.fallback_storage.get(source_tool, [])
+        return tool_data[:limit]
+    
+    def _query_fallback_related(self, entity: str, relation_types: Optional[List[str]], limit: int) -> List[Dict[str, Any]]:
+        """从内存后备查询相关实体"""
+        related_triples = []
+        
+        for tool_data in self.fallback_storage.values():
+            for triple_dict in tool_data:
+                # 检查主体或客体是否匹配
+                if triple_dict["subject"] == entity or triple_dict["object"] == entity:
+                    # 检查关系类型过滤
+                    if not relation_types or triple_dict["predicate"] in relation_types:
+                        related_triples.append(triple_dict)
+        
+        # 按置信度排序
+        related_triples.sort(key=lambda x: x.get("confidence", 0), reverse=True)
+        return related_triples[:limit]
+    
+    def _clear_fallback_memory(self, source_tool: str) -> bool:
+        """清空内存后备中指定工具的记忆"""
+        if source_tool in self.fallback_storage:
+            del self.fallback_storage[source_tool]
+        return True
+    
+    def _get_fallback_statistics(self) -> Dict[str, Any]:
+        """获取内存后备统计信息"""
+        by_tool = {tool: len(triples) for tool, triples in self.fallback_storage.items()}
+        total = sum(by_tool.values())
+        
+        return {
+            "storage_type": "Memory Fallback",
+            "total_triples": total,
+            "by_tool": by_tool
+        }
+    
+    # ========== 辅助方法 ==========
+    def _convert_to_graph_document(self, triples: List[SemanticTriple], source_tool: str) -> GraphDocument:
+        """将三元组转换为GraphDocument"""
+        if not NEO4J_AVAILABLE:
+            raise RuntimeError("Neo4j不可用，无法转换为GraphDocument")
+        
+        nodes = []
+        relationships = []
+        node_set = set()
+        
+        for triple in triples:
+            # 创建主体节点
+            if triple.subject not in node_set:
+                subject_node = Node(
+                    id=triple.subject,
+                    type=triple.subject_type,
+                    properties={"name": triple.subject, "type": triple.subject_type}
+                )
+                nodes.append(subject_node)
+                node_set.add(triple.subject)
+            
+            # 创建客体节点
+            if triple.object not in node_set:
+                object_node = Node(
+                    id=triple.object,
+                    type=triple.object_type,
+                    properties={"name": triple.object, "type": triple.object_type}
+                )
+                nodes.append(object_node)
+                node_set.add(triple.object)
+            
+            # 创建关系
+            relationship = Relationship(
+                source=Node(id=triple.subject, type=triple.subject_type),
+                target=Node(id=triple.object, type=triple.object_type),
+                type=triple.predicate.upper().replace(" ", "_"),
+                properties={
+                    "confidence": triple.confidence,
+                    "source_tool": triple.source_tool,
+                    "timestamp": triple.timestamp,
+                    "session_id": triple.session_id
+                }
+            )
+            relationships.append(relationship)
+        
+        return GraphDocument(
+            nodes=nodes,
+            relationships=relationships,
+            source=f"SemanticSQL-Agent-{source_tool}"
         )
-        object.__setattr__(self.context, 'domain_info', domain_info)
     
-    def _update_field_classification(self, data: Dict[str, Any]) -> None:
-        """更新字段分类信息"""
-        field_classification = FieldClassification(
-            field_classifications=data.get("field_classifications", {}),
-            classification_stats=data.get("classification_stats", {}),
-            important_fields=data.get("important_fields", [])
-        )
-        object.__setattr__(self.context, 'field_classification', field_classification)
+    def is_available(self) -> bool:
+        """检查记忆系统是否可用"""
+        return self.neo4j_graph is not None or self.use_fallback
     
-    def _update_column_meanings(self, data: Dict[str, Any]) -> None:
-        """更新列语义信息"""
-        column_meanings = ColumnMeanings(
-            column_meanings=data.get("column_meanings", {}),
-            business_meanings=data.get("business_meanings", {}),
-            semantic_groups=data.get("semantic_groups", {})
-        )
-        object.__setattr__(self.context, 'column_meanings', column_meanings)
+    def get_connection_info(self) -> Dict[str, Any]:
+        """获取连接信息"""
+        return {
+            "neo4j_available": self.neo4j_graph is not None,
+            "fallback_enabled": self.use_fallback,
+            "storage_type": "Neo4j" if self.neo4j_graph else "Memory"
+        }
+
+
+# ========== 便利函数 ==========
+def create_memory_manager(neo4j_uri: Optional[str] = None,
+                         neo4j_user: Optional[str] = None,
+                         neo4j_password: Optional[str] = None) -> Neo4jMemoryManager:
+    """
+    创建记忆管理器的便利函数
     
-    def _update_table_meanings(self, data: Dict[str, Any]) -> None:
-        """更新表语义信息"""
-        table_meanings = TableMeanings(
-            table_meanings=data.get("table_meanings", {}),
-            table_relationships=data.get("table_relationships", []),
-            core_tables=data.get("core_tables", [])
-        )
-        object.__setattr__(self.context, 'table_meanings', table_meanings)
+    Args:
+        neo4j_uri: Neo4j连接URI
+        neo4j_user: 用户名
+        neo4j_password: 密码
+        
+    Returns:
+        配置好的记忆管理器
+    """
+    return Neo4jMemoryManager(
+        neo4j_uri=neo4j_uri or "bolt://localhost:7687",
+        neo4j_user=neo4j_user or "neo4j",
+        neo4j_password=neo4j_password or "",
+        use_fallback=True
+    )
+
+
+def format_memory_text(memory_triples: List[Dict[str, Any]], limit: int = 10) -> str:
+    """
+    格式化记忆三元组为文本描述
     
-    def _update_er_relations(self, data: Dict[str, Any]) -> None:
-        """更新实体关系信息"""
-        er_relations = ERRelations(
-            relationships=data.get("relationships", []),
-            entities=data.get("entities", {}),
-            relationship_matrix=data.get("relationship_matrix", {})
-        )
-        object.__setattr__(self.context, 'er_relations', er_relations)
+    Args:
+        memory_triples: 记忆三元组列表
+        limit: 显示数量限制
+        
+    Returns:
+        格式化的记忆文本
+    """
+    if not memory_triples:
+        return "记忆为空"
     
-    def _update_scenario_combinations(self, data: Dict[str, Any]) -> None:
-        """更新场景组合信息"""
-        scenario_combinations = ScenarioCombinations(
-            combinations=data.get("combinations", []),
-            total_combinations=data.get("total_combinations", 0),
-            generation_strategy=data.get("generation_strategy", "")
-        )
-        object.__setattr__(self.context, 'scenario_combinations', scenario_combinations)
+    text_lines = []
+    for triple in memory_triples[:limit]:
+        subject = triple.get("subject", "")
+        predicate = triple.get("predicate", "")
+        object_val = triple.get("object", "")
+        source = triple.get("source_tool", "unknown")
+        
+        text_lines.append(f"• {subject} {predicate} {object_val} [{source}]")
     
-    def _update_current_question(self, data: Any) -> None:
-        """更新当前问题"""
-        question = data.get("question", "") if isinstance(data, dict) else str(data)
-        object.__setattr__(self.context, 'current_question', question)
+    if len(memory_triples) > limit:
+        text_lines.append(f"... 还有 {len(memory_triples) - limit} 条记忆")
     
-    def _update_current_sql(self, data: Any) -> None:
-        """更新当前SQL"""
-        sql = data.get("sql", "") if isinstance(data, dict) else str(data)
-        object.__setattr__(self.context, 'current_sql', sql)
-    
-    # ========== 公共访问方法 ==========
-    def get_typed_context(self) -> AnalysisContext:
-        """获取类型化上下文"""
-        return self.context
-    
-    def update_analysis(self, analysis_type: str, result: Dict[str, Any]) -> None:
-        """更新特定类型的分析结果（向后兼容）"""
-        self.memories[analysis_type] = result
-        self.logger.info(f"Updated {analysis_type} in memory")
-    
-    def get_analysis(self, analysis_type: str) -> Dict[str, Any]:
-        """获取特定类型的分析结果（向后兼容）"""
-        return self.memories.get(analysis_type, {})
-    
-    def has_complete_analysis(self) -> bool:
-        """检查是否有完整的数据库分析结果"""
-        return self.context.is_analysis_complete()
-    
-    def get_summary(self) -> str:
-        """获取记忆摘要"""
-        return self.context.get_summary()
+    return "\n".join(text_lines)

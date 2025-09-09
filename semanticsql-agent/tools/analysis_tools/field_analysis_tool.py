@@ -1,443 +1,399 @@
 """
-字段分析工具 - 优化版本
-简化设计，移除过度异常处理，按就近原则组织代码
+字段语义分析工具 - 极简架构重构版本
+基于新的BaseSemanticSQLTool，实现完全自主的字段语义分析
 """
 
-from typing import Dict, Any, Type, List, Tuple
-from enum import Enum
+from typing import Dict, Any, List, Optional
 import json
-from pydantic import BaseModel, Field
+import re
 
-from models.exceptions import ToolExecutionError
-from prompts.manager import PromptManager
-from ..base_tool import BaseSemanticSQLTool
-
-
-# ========== 工具内部数据模型（就近原则）==========
-class FieldClassificationInput(BaseModel):
-    """字段分析输入参数"""
-    include_statistics: bool = Field(default=True, description="是否包含统计信息")
-
-
-class FieldCategory(str, Enum):
-    """字段类别枚举"""
-    IDENTIFIER = "identifier"    # 标识符（主键、外键）
-    DATETIME = "datetime"        # 时间类型
-    MEASURE = "measure"          # 度量值（数量、金额）
-    DIMENSION = "dimension"      # 维度（状态、类型）
-    TEXT = "text"                # 文本信息
-    BOOLEAN = "boolean"          # 布尔值
-    JSON = "json"                # JSON数据
-    BINARY = "binary"            # 二进制数据
-    OTHER = "other"              # 其他
-
-
-class FieldImportance(str, Enum):
-    """字段重要性级别"""
-    CRITICAL = "critical"        # 关键字段（主键、核心业务字段）
-    HIGH = "high"                # 高重要性（常用于查询/分析）
-    MEDIUM = "medium"            # 中等重要性
-    LOW = "low"                  # 低重要性
-
-
-class FieldClassificationRule(BaseModel):
-    """字段分类规则"""
-    name_patterns: List[str] = Field(default_factory=list)
-    type_patterns: List[str] = Field(default_factory=list)
-    category: FieldCategory
-    field_type: str
-    importance: FieldImportance
-    confidence_base: float = 0.8
-
-
-class FieldInfo(BaseModel):
-    """字段信息"""
-    table_name: str
-    column_name: str
-    data_type: str
-    is_primary_key: bool
-    is_nullable: bool
-    has_default: bool
-    comment: str = ""
-
-
-class ClassifiedField(BaseModel):
-    """已分类字段信息"""
-    table_name: str
-    column_name: str
-    category: FieldCategory
-    field_type: str
-    importance: FieldImportance
-    confidence: float
-    business_meaning: str = ""
-    classification_reason: str = ""
+from tools.base_tool import BaseSemanticSQLTool
+from models.schemas import PredicateType, EntityType
+from models.exceptions import raise_tool_error, raise_dependency_error
 
 
 class FieldAnalysisTool(BaseSemanticSQLTool):
-    """字段分析工具 - 优化版本
+    """字段语义分析工具 - 极简重构版本
     
     职责：
-    - 对数据库字段进行语义分类
-    - 识别字段的业务含义和重要性
-    - 生成字段分类统计信息
+    - 基于数据库结构进行字段语义分析
+    - 识别字段的业务含义和重要性  
+    - 生成字段-语义关系三元组
+    - 为后续工具提供字段语义上下文
     
     设计原则：
-    - 单一职责：专注字段分析
-    - 方法拆分：每个方法<30行
-    - 类型安全：使用枚举和Pydantic模型
-    - 简化异常：让异常自然传播
+    - 依赖记忆：基于schema_extraction工具的结果
+    - 智能推断：通过字段名和类型模式识别
+    - 三元组输出：结构化字段知识
     """
     
     name: str = "field_analysis"
-    description: str = "对数据库字段进行语义分类，识别字段的业务含义和重要性"
-    args_schema: Type[BaseModel] = FieldClassificationInput
-
+    description: str = "分析数据库字段语义，识别字段业务含义和重要性"
+    
     def __init__(self, **kwargs):
+        """初始化字段分析工具"""
         super().__init__(**kwargs)
-        object.__setattr__(self, 'prompt_manager', PromptManager())
-        object.__setattr__(self, '_classification_rules', self._initialize_classification_rules())
-
-    def _run(self, include_statistics: bool = True, **kwargs) -> str:
-        """执行字段分析 - 主流程"""
-        # 获取数据库结构信息
-        schema_info = self._get_schema_info()
-        
-        # 提取字段信息
-        field_infos = self._extract_field_infos(schema_info)
-        
-        # 对字段进行分类
-        classified_fields = self._classify_all_fields(field_infos)
-        
-        # 构建分析结果
-        result = self._build_analysis_result(classified_fields, include_statistics)
-        
-        # 保存并返回
-        self.save_to_memory("field_analysis", result)
-        return json.dumps(result, ensure_ascii=False)
+        # 使用object.__setattr__避免Pydantic验证问题
+        object.__setattr__(self, 'field_patterns', self._init_field_patterns())
     
-    # ========== 核心分析逻辑 ==========
-    def _get_schema_info(self) -> Dict[str, Any]:
-        """获取数据库结构信息"""
-        schema_info = self.get_from_memory("schema_extraction")
-        if not schema_info:
-            raise ToolExecutionError(
-                tool_name=self.name,
-                reason="无法获取数据库结构信息，需要先运行schema_extraction工具"
-            )
-        return schema_info
-    
-    def _initialize_classification_rules(self) -> List[FieldClassificationRule]:
-        """初始化字段分类规则"""
-        return [
-            # 标识符类型
-            FieldClassificationRule(
-                name_patterns=["id", "_id", "uuid", "key", "_key"],
-                type_patterns=["int", "bigint", "varchar", "char", "uuid"],
-                category=FieldCategory.IDENTIFIER,
-                field_type="标识符",
-                importance=FieldImportance.CRITICAL
-            ),
-            # 时间类型
-            FieldClassificationRule(
-                name_patterns=["time", "date", "created", "updated", "modified"],
-                type_patterns=["datetime", "timestamp", "date", "time"],
-                category=FieldCategory.DATETIME,
-                field_type="时间戳",
-                importance=FieldImportance.HIGH
-            ),
-            # 金额类型
-            FieldClassificationRule(
-                name_patterns=["amount", "price", "cost", "fee", "money", "pay"],
-                type_patterns=["decimal", "numeric", "float", "double"],
-                category=FieldCategory.MEASURE,
-                field_type="金额",
-                importance=FieldImportance.HIGH
-            ),
-            # 数量类型
-            FieldClassificationRule(
-                name_patterns=["count", "num", "qty", "quantity", "size", "length"],
-                type_patterns=["int", "bigint", "smallint", "tinyint"],
-                category=FieldCategory.MEASURE,
-                field_type="数量",
-                importance=FieldImportance.MEDIUM
-            ),
-            # 状态维度
-            FieldClassificationRule(
-                name_patterns=["status", "state", "type", "category", "level"],
-                type_patterns=["varchar", "char", "enum", "int"],
-                category=FieldCategory.DIMENSION,
-                field_type="状态",
-                importance=FieldImportance.HIGH
-            ),
-            # 名称文本
-            FieldClassificationRule(
-                name_patterns=["name", "title", "label", "desc"],
-                type_patterns=["varchar", "char", "text"],
-                category=FieldCategory.TEXT,
-                field_type="名称",
-                importance=FieldImportance.HIGH
-            ),
-            # 布尔类型
-            FieldClassificationRule(
-                name_patterns=["is_", "has_", "can_", "enable", "active"],
-                type_patterns=["boolean", "bit", "tinyint(1)"],
-                category=FieldCategory.BOOLEAN,
-                field_type="布尔值",
-                importance=FieldImportance.MEDIUM
-            )
-        ]
-    
-    def _extract_field_infos(self, schema_info: Dict[str, Any]) -> List[FieldInfo]:
-        """提取所有字段信息"""
-        field_infos = []
-        tables = schema_info.get("tables", {})
+    def _run(self, input_text: str) -> str:
+        """
+        执行字段语义分析 - 完全自主实现
         
-        for table_name, table_info in tables.items():
-            primary_keys = set(table_info.get("primary_keys", []))
-            columns = table_info.get("columns", [])
+        Args:
+            input_text: 输入文本，通常包含分析参数
             
-            for column in columns:
-                field_info = FieldInfo(
-                    table_name=table_name,
-                    column_name=column.get("name", ""),
-                    data_type=column.get("type", "").lower(),
-                    is_primary_key=column.get("name") in primary_keys,
-                    is_nullable=column.get("nullable", True),
-                    has_default=column.get("default") is not None,
-                    comment=column.get("comment", "")
-                )
-                field_infos.append(field_info)
+        Returns:
+            自定义格式的执行结果字符串
+        """
+        # 1. 清空上次执行的三元组
+        self._clear_generated_triples()
+        self._log_execution_start(input_text)
         
-        return field_infos
-    
-    def _classify_all_fields(self, field_infos: List[FieldInfo]) -> List[ClassifiedField]:
-        """对所有字段进行分类"""
-        classified_fields = []
-        
-        for field_info in field_infos:
-            classified_field = self._classify_single_field(field_info)
-            classified_fields.append(classified_field)
-        
-        return classified_fields
-    
-    def _classify_single_field(self, field_info: FieldInfo) -> ClassifiedField:
-        """对单个字段进行分类"""
-        # 主键特殊处理
-        if field_info.is_primary_key:
-            return ClassifiedField(
-                table_name=field_info.table_name,
-                column_name=field_info.column_name,
-                category=FieldCategory.IDENTIFIER,
-                field_type="主键",
-                importance=FieldImportance.CRITICAL,
-                confidence=1.0,
-                business_meaning="表的主键标识符",
-                classification_reason="数据库主键定义"
-            )
-        
-        # 匹配分类规则
-        best_match = self._find_best_matching_rule(field_info)
-        if best_match:
-            rule, confidence = best_match
-            business_meaning = self._generate_business_meaning(field_info, rule)
-            classification_reason = self._generate_classification_reason(field_info, rule)
+        try:
+            # 2. 检查依赖：需要schema_extraction工具的结果
+            self._check_dependencies(["schema_extraction"])
             
-            return ClassifiedField(
-                table_name=field_info.table_name,
-                column_name=field_info.column_name,
-                category=rule.category,
-                field_type=rule.field_type,
-                importance=rule.importance,
-                confidence=confidence,
-                business_meaning=business_meaning,
-                classification_reason=classification_reason
-            )
-        
-        # 默认分类
-        return self._create_default_classification(field_info)
-    
-    def _find_best_matching_rule(self, field_info: FieldInfo) -> Tuple[FieldClassificationRule, float]:
-        """找到最佳匹配的分类规则"""
-        best_rule = None
-        best_confidence = 0.0
-        
-        for rule in self._classification_rules:
-            confidence = self._calculate_rule_confidence(field_info, rule)
-            if confidence > best_confidence and confidence > 0.3:  # 最低置信度阈值
-                best_rule = rule
-                best_confidence = confidence
-        
-        return (best_rule, best_confidence) if best_rule else None
-    
-    def _calculate_rule_confidence(self, field_info: FieldInfo, rule: FieldClassificationRule) -> float:
-        """计算规则匹配置信度"""
-        name_score = 0.0
-        type_score = 0.0
-        
-        # 字段名匹配得分
-        field_name_lower = field_info.column_name.lower()
-        for pattern in rule.name_patterns:
-            if pattern in field_name_lower:
-                name_score = 1.0
-                break
-            elif any(part in pattern for part in field_name_lower.split("_")):
-                name_score = 0.7
-        
-        # 数据类型匹配得分
-        for pattern in rule.type_patterns:
-            if pattern in field_info.data_type:
-                type_score = 1.0
-                break
-        
-        # 综合置信度计算：字段名权重0.7，数据类型权重0.3
-        overall_score = name_score * 0.7 + type_score * 0.3
-        return overall_score * rule.confidence_base
-    
-    def _generate_business_meaning(self, field_info: FieldInfo, rule: FieldClassificationRule) -> str:
-        """生成业务含义描述"""
-        meanings = {
-            FieldCategory.IDENTIFIER: f"{field_info.table_name}表的标识符字段",
-            FieldCategory.DATETIME: f"记录{field_info.table_name}的时间信息",
-            FieldCategory.MEASURE: f"{field_info.table_name}的{rule.field_type}度量值",
-            FieldCategory.DIMENSION: f"{field_info.table_name}的{rule.field_type}维度信息",
-            FieldCategory.TEXT: f"{field_info.table_name}的{rule.field_type}文本信息",
-            FieldCategory.BOOLEAN: f"标记{field_info.table_name}的{rule.field_type}状态"
-        }
-        return meanings.get(rule.category, f"{field_info.table_name}的{rule.field_type}字段")
-    
-    def _generate_classification_reason(self, field_info: FieldInfo, rule: FieldClassificationRule) -> str:
-        """生成分类理由"""
-        return f"基于字段名'{field_info.column_name}'和数据类型'{field_info.data_type}'的规则匹配"
-    
-    def _create_default_classification(self, field_info: FieldInfo) -> ClassifiedField:
-        """创建默认分类（未匹配到规则时）"""
-        return ClassifiedField(
-            table_name=field_info.table_name,
-            column_name=field_info.column_name,
-            category=FieldCategory.OTHER,
-            field_type="未分类",
-            importance=FieldImportance.LOW,
-            confidence=0.1,
-            business_meaning=f"{field_info.table_name}的普通字段",
-            classification_reason="未能匹配到具体分类规则"
-        )
-    
-    # ========== 结果构建和统计 ==========
-    def _build_analysis_result(self, classified_fields: List[ClassifiedField], include_statistics: bool) -> Dict[str, Any]:
-        """构建分析结果"""
-        # 按表组织字段分类
-        field_classifications = self._organize_fields_by_table(classified_fields)
-        
-        # 分类统计
-        classification_stats = self._calculate_classification_statistics(classified_fields)
-        
-        # 重要字段识别
-        important_fields = self._identify_important_fields(classified_fields)
-        
-        result = {
-            "field_classifications": field_classifications,
-            "classification_stats": classification_stats,
-            "important_fields": important_fields,
-            "total_fields": len(classified_fields),
-            "analysis_summary": f"共分析{len(classified_fields)}个字段，识别出{len(important_fields)}个重要字段"
-        }
-        
-        if include_statistics:
-            result["detailed_statistics"] = self._generate_detailed_statistics(classified_fields)
-        
-        return result
-    
-    def _organize_fields_by_table(self, classified_fields: List[ClassifiedField]) -> Dict[str, Dict[str, Any]]:
-        """按表组织字段分类结果"""
-        field_classifications = {}
-        
-        for field in classified_fields:
-            if field.table_name not in field_classifications:
-                field_classifications[field.table_name] = {}
+            # 3. 获取数据库结构信息
+            schema_memory = self.get_memory_by_source_tool("schema_extraction")
+            schema_info = self._extract_schema_info(schema_memory)
             
-            field_classifications[field.table_name][field.column_name] = {
-                "category": field.category.value,
-                "field_type": field.field_type,
-                "importance": field.importance.value,
-                "confidence": field.confidence,
-                "business_meaning": field.business_meaning,
-                "classification_reason": field.classification_reason
-            }
-        
-        return field_classifications
-    
-    def _calculate_classification_statistics(self, classified_fields: List[ClassifiedField]) -> Dict[str, int]:
-        """计算分类统计信息"""
-        stats = {}
-        
-        # 按类别统计
-        for field in classified_fields:
-            category = field.category.value
-            stats[category] = stats.get(category, 0) + 1
-        
-        # 按重要性统计
-        importance_stats = {}
-        for field in classified_fields:
-            importance = field.importance.value
-            importance_stats[f"importance_{importance}"] = importance_stats.get(f"importance_{importance}", 0) + 1
-        
-        stats.update(importance_stats)
-        return stats
-    
-    def _identify_important_fields(self, classified_fields: List[ClassifiedField]) -> List[str]:
-        """识别重要字段"""
-        important_fields = []
-        
-        for field in classified_fields:
-            if field.importance in [FieldImportance.CRITICAL, FieldImportance.HIGH]:
-                important_fields.append(f"{field.table_name}.{field.column_name}")
-        
-        return important_fields
-    
-    def _generate_detailed_statistics(self, classified_fields: List[ClassifiedField]) -> Dict[str, Any]:
-        """生成详细统计信息"""
-        # 高置信度字段
-        high_confidence_fields = [
-            f"{field.table_name}.{field.column_name}" 
-            for field in classified_fields 
-            if field.confidence > 0.8
-        ]
-        
-        # 低置信度字段（可能需要人工复核）
-        low_confidence_fields = [
-            f"{field.table_name}.{field.column_name}" 
-            for field in classified_fields 
-            if field.confidence < 0.5
-        ]
-        
-        # 按表统计
-        tables_stats = {}
-        for field in classified_fields:
-            table_name = field.table_name
-            if table_name not in tables_stats:
-                tables_stats[table_name] = {
-                    "total_fields": 0,
-                    "important_fields": 0,
-                    "categories": set()
-                }
+            # 4. 分析字段语义
+            field_analysis = self._analyze_fields_semantics(schema_info)
             
-            tables_stats[table_name]["total_fields"] += 1
-            if field.importance in [FieldImportance.CRITICAL, FieldImportance.HIGH]:
-                tables_stats[table_name]["important_fields"] += 1
-            tables_stats[table_name]["categories"].add(field.category.value)
+            # 5. 生成字段三元组
+            self._generate_field_triples(field_analysis, schema_info)
+            
+            # 6. 持久化三元组到记忆系统
+            self._persist_triples()
+            
+            # 7. 构建执行结果
+            result_message = self._build_result_message(field_analysis)
+            
+            self._log_execution_end(f"分析了 {field_analysis['total_fields']} 个字段")
+            return result_message
+            
+        except Exception as e:
+            error_msg = f"字段分析失败: {str(e)}"
+            self.logger.error(f"❌ {self.name}: {error_msg}")
+            return f"❌ {error_msg}"
+    
+    # ========== 核心业务逻辑 ==========
+    def _extract_schema_info(self, schema_memory: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """从记忆中提取结构信息"""
+        if not schema_memory:
+            raise_dependency_error(self.name, "schema_extraction", "数据库结构信息")
         
-        # 转换set为list
-        for table_stat in tables_stats.values():
-            table_stat["categories"] = list(table_stat["categories"])
+        # 从三元组中重建结构信息
+        tables = set()
+        table_columns = {}
+        column_details = {}
+        database_name = "unknown"
+        
+        for triple in schema_memory:
+            subject = triple.get("subject", "")
+            predicate = triple.get("predicate", "")
+            obj = triple.get("object", "")
+            
+            if predicate == PredicateType.HAS_TABLE.value:
+                database_name = subject
+                tables.add(obj)
+            elif predicate == PredicateType.HAS_COLUMN.value:
+                table_name = subject
+                column_name = obj
+                if table_name not in table_columns:
+                    table_columns[table_name] = []
+                table_columns[table_name].append(column_name)
+            elif predicate == "has_type":
+                column_details[subject] = {"type": obj}
+            elif predicate == "is_primary_key" and obj == "true":
+                if subject not in column_details:
+                    column_details[subject] = {}
+                column_details[subject]["is_primary_key"] = True
         
         return {
-            "high_confidence_count": len(high_confidence_fields),
-            "low_confidence_count": len(low_confidence_fields),
-            "high_confidence_fields": high_confidence_fields[:20],  # 限制返回数量
-            "low_confidence_fields": low_confidence_fields[:10],
-            "tables_statistics": tables_stats
+            "database_name": database_name,
+            "tables": list(tables),
+            "table_columns": table_columns,
+            "column_details": column_details
         }
     
-    async def _arun(self, include_statistics: bool = True, **kwargs) -> str:
-        """异步执行（当前实现为同步）"""
-        return self._run(include_statistics, **kwargs)
+    def _init_field_patterns(self) -> Dict[str, Dict[str, Any]]:
+        """初始化字段模式库"""
+        return {
+            "标识符": {
+                "name_patterns": ["id", "_id", "uuid", "key", "_key", "code"],
+                "type_patterns": ["int", "bigint", "varchar", "char", "uuid"],
+                "importance": "critical",
+                "semantic_type": "identifier"
+            },
+            "时间字段": {
+                "name_patterns": ["time", "date", "created", "updated", "modified", "at"],
+                "type_patterns": ["datetime", "timestamp", "date", "time"],
+                "importance": "high",
+                "semantic_type": "temporal"
+            },
+            "金额字段": {
+                "name_patterns": ["amount", "price", "cost", "fee", "money", "pay", "salary"],
+                "type_patterns": ["decimal", "numeric", "float", "double"],
+                "importance": "high",
+                "semantic_type": "monetary"
+            },
+            "数量字段": {
+                "name_patterns": ["count", "num", "qty", "quantity", "size", "length", "total"],
+                "type_patterns": ["int", "bigint", "smallint", "tinyint"],
+                "importance": "medium",
+                "semantic_type": "quantitative"
+            },
+            "状态字段": {
+                "name_patterns": ["status", "state", "type", "category", "level", "priority"],
+                "type_patterns": ["varchar", "char", "enum", "int"],
+                "importance": "high", 
+                "semantic_type": "categorical"
+            },
+            "文本字段": {
+                "name_patterns": ["name", "title", "label", "desc", "content", "text", "comment"],
+                "type_patterns": ["varchar", "char", "text", "longtext"],
+                "importance": "medium",
+                "semantic_type": "textual"
+            },
+            "布尔字段": {
+                "name_patterns": ["is_", "has_", "can_", "enable", "active", "deleted"],
+                "type_patterns": ["boolean", "bit", "tinyint(1)"],
+                "importance": "medium",
+                "semantic_type": "boolean"
+            }
+        }
+    
+    def _analyze_fields_semantics(self, schema_info: Dict[str, Any]) -> Dict[str, Any]:
+        """分析字段语义"""
+        table_columns = schema_info["table_columns"]
+        column_details = schema_info["column_details"]
+        
+        analyzed_fields = []
+        semantic_summary = {
+            "标识符": 0, "时间字段": 0, "金额字段": 0, "数量字段": 0,
+            "状态字段": 0, "文本字段": 0, "布尔字段": 0, "未分类": 0
+        }
+        critical_fields = []
+        
+        # 分析每个字段
+        for table_name, columns in table_columns.items():
+            for column_name in columns:
+                field_analysis = self._analyze_single_field(
+                    table_name, column_name, column_details.get(column_name, {})
+                )
+                analyzed_fields.append(field_analysis)
+                
+                # 更新统计
+                semantic_type = field_analysis["semantic_type"]
+                semantic_summary[semantic_type] = semantic_summary.get(semantic_type, 0) + 1
+                
+                # 收集关键字段
+                if field_analysis["importance"] == "critical":
+                    critical_fields.append(f"{table_name}.{column_name}")
+        
+        return {
+            "analyzed_fields": analyzed_fields,
+            "semantic_summary": semantic_summary,
+            "critical_fields": critical_fields,
+            "total_fields": len(analyzed_fields),
+            "analysis_details": {
+                "total_tables": len(table_columns),
+                "patterns_matched": len([f for f in analyzed_fields if f["confidence"] > 0.7])
+            }
+        }
+    
+    def _analyze_single_field(self, table_name: str, column_name: str, 
+                              column_details: Dict[str, Any]) -> Dict[str, Any]:
+        """分析单个字段"""
+        column_type = column_details.get("type", "unknown").lower()
+        is_primary_key = column_details.get("is_primary_key", False)
+        
+        # 主键特殊处理
+        if is_primary_key:
+            return {
+                "table_name": table_name,
+                "column_name": column_name,
+                "semantic_type": "标识符",
+                "business_meaning": f"{table_name}表的主键标识符",
+                "importance": "critical",
+                "confidence": 1.0,
+                "data_type": column_type,
+                "pattern_matched": "primary_key_detection"
+            }
+        
+        # 模式匹配分析
+        best_match = self._match_field_patterns(column_name, column_type)
+        
+        if best_match:
+            semantic_type, confidence, pattern_info = best_match
+            return {
+                "table_name": table_name,
+                "column_name": column_name,
+                "semantic_type": semantic_type,
+                "business_meaning": self._generate_business_meaning(table_name, column_name, semantic_type),
+                "importance": pattern_info["importance"],
+                "confidence": confidence,
+                "data_type": column_type,
+                "pattern_matched": pattern_info["semantic_type"]
+            }
+        
+        # 默认分类
+        return {
+            "table_name": table_name,
+            "column_name": column_name,
+            "semantic_type": "未分类",
+            "business_meaning": f"{table_name}的普通字段",
+            "importance": "low",
+            "confidence": 0.1,
+            "data_type": column_type,
+            "pattern_matched": "no_match"
+        }
+    
+    def _match_field_patterns(self, column_name: str, column_type: str) -> Optional[tuple]:
+        """匹配字段模式"""
+        column_lower = column_name.lower()
+        best_match = None
+        best_confidence = 0.0
+        
+        for semantic_type, pattern_info in self.field_patterns.items():
+            confidence = 0.0
+            
+            # 字段名匹配
+            name_score = 0.0
+            for pattern in pattern_info["name_patterns"]:
+                if pattern in column_lower:
+                    name_score = 1.0
+                    break
+                elif any(part in pattern for part in column_lower.split("_")):
+                    name_score = 0.7
+            
+            # 类型匹配
+            type_score = 0.0
+            for pattern in pattern_info["type_patterns"]:
+                if pattern in column_type:
+                    type_score = 1.0
+                    break
+            
+            # 综合置信度：字段名权重0.7，类型权重0.3
+            confidence = name_score * 0.7 + type_score * 0.3
+            
+            if confidence > best_confidence and confidence > 0.3:
+                best_confidence = confidence
+                best_match = (semantic_type, confidence, pattern_info)
+        
+        return best_match
+    
+    def _generate_business_meaning(self, table_name: str, column_name: str, semantic_type: str) -> str:
+        """生成业务含义描述"""
+        meanings = {
+            "标识符": f"{table_name}表的唯一标识符",
+            "时间字段": f"记录{table_name}的时间信息",
+            "金额字段": f"{table_name}相关的金额数据",
+            "数量字段": f"{table_name}的数量统计信息",
+            "状态字段": f"{table_name}的状态或分类信息",
+            "文本字段": f"{table_name}的描述性文本信息",
+            "布尔字段": f"{table_name}的是否标记信息"
+        }
+        return meanings.get(semantic_type, f"{table_name}的{column_name}字段")
+    
+    def _generate_field_triples(self, analysis: Dict[str, Any], schema_info: Dict[str, Any]) -> None:
+        """生成字段分析三元组"""
+        database_name = schema_info["database_name"]
+        analyzed_fields = analysis["analyzed_fields"]
+        
+        for field_info in analyzed_fields:
+            table_name = field_info["table_name"]
+            column_name = field_info["column_name"]
+            semantic_type = field_info["semantic_type"]
+            importance = field_info["importance"]
+            confidence = field_info["confidence"]
+            
+            # 1. 字段-语义类型关系
+            self.add_analysis_triple(
+                subject=f"{table_name}.{column_name}",
+                predicate="has_semantic_type",
+                object=semantic_type,
+                subject_type=EntityType.COLUMN.value,
+                object_type="SemanticType",
+                confidence=confidence
+            )
+            
+            # 2. 字段-重要性关系
+            self.add_analysis_triple(
+                subject=f"{table_name}.{column_name}",
+                predicate="has_importance",
+                object=importance,
+                subject_type=EntityType.COLUMN.value,
+                object_type="ImportanceLevel",
+                confidence=confidence
+            )
+            
+            # 3. 字段-业务含义关系
+            if field_info["business_meaning"]:
+                self.add_analysis_triple(
+                    subject=f"{table_name}.{column_name}",
+                    predicate="has_business_meaning",
+                    object=field_info["business_meaning"],
+                    subject_type=EntityType.COLUMN.value,
+                    object_type="BusinessMeaning",
+                    confidence=confidence
+                )
+            
+            # 4. 关键字段特殊标记
+            if importance == "critical":
+                self.add_analysis_triple(
+                    subject=table_name,
+                    predicate="has_critical_field",
+                    object=column_name,
+                    subject_type=EntityType.TABLE.value,
+                    object_type=EntityType.COLUMN.value,
+                    confidence=confidence
+                )
+        
+        self.logger.info(f"📝 生成了 {len(self._generated_triples)} 个字段语义三元组")
+    
+    def _build_result_message(self, analysis: Dict[str, Any]) -> str:
+        """构建执行结果消息"""
+        total_fields = analysis["total_fields"]
+        semantic_summary = analysis["semantic_summary"]
+        critical_fields = analysis["critical_fields"]
+        triple_count = len(self._generated_triples)
+        
+        # 构建语义类型统计
+        semantic_stats = []
+        for semantic_type, count in semantic_summary.items():
+            if count > 0:
+                semantic_stats.append(f"  • {semantic_type}: {count}个")
+        
+        # 构建关键字段描述
+        critical_desc = ""
+        if critical_fields:
+            critical_fields_display = critical_fields[:5]
+            if len(critical_fields) > 5:
+                critical_fields_display.append(f"等{len(critical_fields)}个")
+            critical_desc = f"\n  • 关键字段: {', '.join(critical_fields_display)}"
+        
+        result = f"""✅ 字段语义分析完成
+
+🔍 分析结果:
+  • 分析字段总数: {total_fields}
+  • 生成三元组: {triple_count}个{critical_desc}
+
+📊 语义类型分布:
+{chr(10).join(semantic_stats)}
+
+🎯 分析统计:
+  • 分析表数: {analysis['analysis_details']['total_tables']}
+  • 高置信度匹配: {analysis['analysis_details']['patterns_matched']}个
+  
+💾 字段语义知识已存储到记忆系统，可供后续工具使用"""
+        
+        return result
+
+
+# ========== 便利函数 ==========
+def create_field_analysis_tool(memory_manager: Optional['Neo4jMemoryManager'] = None) -> FieldAnalysisTool:
+    """创建字段分析工具的便利函数"""
+    return FieldAnalysisTool(memory_manager=memory_manager)

@@ -1,290 +1,487 @@
 """
-Simplified database connection management
-Based on the design specification - combines connection_manager functionality
+数据库连接管理 - SemanticSQL Agent基础设施
+基于架构设计的标准数据库管理，支持MySQL + Neo4j
 """
 
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 from contextlib import contextmanager
+import json
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, MetaData, inspect
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
-from utils.database_config import DatabaseConfig
+from models.schemas import DatabaseInfo
+from models.exceptions import (
+    DatabaseConnectionError, 
+    SQLExecutionError,
+    SchemaExtractionError
+)
 
 
 class DatabaseManager:
-    """Simplified database manager"""
+    """统一数据库管理器 - 支持MySQL/PostgreSQL数据库操作
     
-    def __init__(self, config: DatabaseConfig):
-        self.config = config
+    设计原则：
+    - 安全第一：只允许SELECT查询，阻止危险操作
+    - 结构化输出：返回标准化的数据结构
+    - 错误处理：详细的错误分类和日志记录
+    - 资源管理：自动连接池管理和资源清理
+    """
+    
+    def __init__(self, connection_params: Dict[str, Any]):
+        """
+        初始化数据库管理器
+        
+        Args:
+            connection_params: 数据库连接参数
+            {
+                "host": "localhost",
+                "port": 3306,
+                "database": "test_db", 
+                "username": "root",
+                "password": "password",
+                "type": "mysql"  # mysql, postgresql, sqlite
+            }
+        """
+        self.connection_params = connection_params
         self.engine = None
         self.session_factory = None
         self.logger = logging.getLogger(__name__)
         
-        # Validate configuration
-        self.config.validate_connection_params()
+        # 验证必需参数
+        required_params = ["host", "database", "username", "password"]
+        missing_params = [p for p in required_params if p not in connection_params]
+        if missing_params:
+            raise DatabaseConnectionError(
+                "参数验证",
+                {"missing_params": missing_params}
+            )
         
-        self.logger.info(f"Initializing database manager: {config.type}://{config.host}:{config.port}/{config.database}")
+        self.db_type = connection_params.get("type", "mysql").lower()
+        self.host = connection_params["host"]
+        self.port = connection_params.get("port", 3306)
+        self.database = connection_params["database"]
+        self.username = connection_params["username"]
+        self.password = connection_params["password"]
     
     def initialize(self) -> bool:
-        """Initialize database connection"""
+        """
+        初始化数据库连接
+        
+        Returns:
+            连接是否成功
+        """
         try:
-            connection_string = self.config.to_connection_string()
+            # 构建连接字符串
+            connection_string = self._build_connection_string()
+            
+            # 创建引擎
             self.engine = create_engine(
                 connection_string,
-                pool_size=self.config.pool_size,
-                max_overflow=self.config.max_overflow,
-                pool_timeout=self.config.pool_timeout,
-                pool_recycle=self.config.pool_recycle,
-                pool_pre_ping=self.config.pool_pre_ping,
-                echo=self.config.echo
+                pool_size=5,
+                max_overflow=10,
+                pool_timeout=30,
+                pool_recycle=3600,
+                pool_pre_ping=True,
+                echo=False  # 生产环境关闭SQL日志
             )
             
-            # Test connection
+            # 测试连接
             with self.engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
-                
+            
+            # 创建session工厂
             self.session_factory = sessionmaker(bind=self.engine)
-            self.logger.info("Database connection successful")
+            
+            self.logger.info(f"✅ 数据库连接成功: {self.db_type}://{self.host}:{self.port}/{self.database}")
             return True
             
         except Exception as e:
-            self.logger.error(f"Database connection failed: {e}")
-            return False
-    
-    def get_tables(self) -> List[str]:
-        """Get all table names"""
-        try:
-            with self.engine.connect() as conn:
-                if self.config.type.value == "mysql":
-                    result = conn.execute(text("SHOW TABLES"))
-                    return [row[0] for row in result.fetchall()]
-                elif self.config.type.value == "postgresql":
-                    result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"))
-                    return [row[0] for row in result.fetchall()]
-                elif self.config.type.value == "sqlite":
-                    result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
-                    return [row[0] for row in result.fetchall()]
-        except Exception as e:
-            self.logger.error(f"Failed to get table list: {e}")
-            return []
-    
-    def _safe_type_string(self, column_type) -> str:
-        """安全地转换列类型为字符串，处理特殊字符"""
-        try:
-            type_str = str(column_type)
-            # 清理可能导致JSON解析问题的字符
-            if "enum(" in type_str.lower():
-                # 提取enum值并简化格式
-                import re
-                enum_match = re.search(r"enum\((.*?)\)", type_str, re.IGNORECASE)
-                if enum_match:
-                    enum_values = enum_match.group(1)
-                    # 解析enum值列表，移除引号并用逗号分隔
-                    values_list = []
-                    for val in enum_values.split(','):
-                        clean_val = val.strip().strip("'\"")
-                        if clean_val:
-                            values_list.append(clean_val)
-                    return f"ENUM({','.join(values_list)})"
-            
-            # 移除其他可能的问题字符
-            return type_str.replace('"', '').replace("'", "")
-        except:
-            return "UNKNOWN"
-
-    def get_table_info(self, table_name: str) -> Dict[str, Any]:
-        """Get table information"""
-        try:
-            with self.engine.connect() as conn:
-                info = {"name": table_name, "columns": []}
-                
-                if self.config.type.value == "mysql":
-                    result = conn.execute(text(f"DESCRIBE {table_name}"))
-                    for row in result.fetchall():
-                        info["columns"].append({
-                            "name": row[0],
-                            "type": self._safe_type_string(row[1]),
-                            "nullable": row[2] == "YES",
-                            "key": row[3],
-                            "default": row[4]
-                        })
-                elif self.config.type.value == "postgresql":
-                    result = conn.execute(text(f"SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_name = '{table_name}'"))
-                    for row in result.fetchall():
-                        info["columns"].append({
-                            "name": row[0],
-                            "type": str(row[1]),
-                            "nullable": row[2] == "YES"
-                        })
-                
-                return info
-                
-        except Exception as e:
-            self.logger.error(f"Failed to get table info: {e}")
-            return {"name": table_name, "columns": []}
-    
-    def get_database_info(self) -> Dict[str, Any]:
-        """Get database information"""
-        try:
-            with self.engine.connect() as conn:
-                tables = self.get_tables()
-                
-                # Get database version
-                version = "unknown"
-                try:
-                    if self.config.type.value == "mysql":
-                        result = conn.execute(text("SELECT VERSION()"))
-                        version = result.scalar()
-                    elif self.config.type.value == "postgresql":
-                        result = conn.execute(text("SELECT version()"))
-                        version = result.scalar().split()[1]
-                except:
-                    pass
-                
-                return {
-                    "database": self.config.database,
-                    "type": self.config.type.value,
-                    "host": f"{self.config.host}:{self.config.port}",
-                    "tables_count": len(tables),
-                    "tables": tables,
-                    "version": version
-                }
-                
-        except Exception as e:
-            self.logger.error(f"Failed to get database info: {e}")
-            return {
-                "database": self.config.database,
-                "type": self.config.type.value,
+            self.logger.error(f"❌ 数据库连接失败: {e}")
+            raise DatabaseConnectionError(self.db_type, {
+                "host": self.host,
+                "port": self.port,
+                "database": self.database,
                 "error": str(e)
-            }
+            })
     
-    def test_connection(self) -> bool:
-        """Test database connection"""
-        try:
-            with self.engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
-                return True
-        except Exception:
-            return False
-    
-    def execute_sql_safe(self, sql: str, dry_run: bool = False) -> Dict[str, Any]:
+    def extract_database_schema(self) -> DatabaseInfo:
         """
-        Safely execute SQL (SELECT only)
+        提取数据库结构信息
+        
+        Returns:
+            数据库信息对象
+        """
+        try:
+            if not self.engine:
+                raise SchemaExtractionError(self.database, "数据库连接未初始化")
+            
+            # 使用SQLAlchemy的inspect功能
+            inspector = inspect(self.engine)
+            table_names = inspector.get_table_names()
+            
+            # 构建结构信息
+            schema_info = {}
+            total_columns = 0
+            
+            for table_name in table_names:
+                columns = inspector.get_columns(table_name)
+                column_info = []
+                
+                for column in columns:
+                    column_data = {
+                        "name": column["name"],
+                        "type": self._safe_type_string(column["type"]),
+                        "nullable": column.get("nullable", True),
+                        "primary_key": column.get("primary_key", False),
+                        "default": self._safe_default_value(column.get("default"))
+                    }
+                    column_info.append(column_data)
+                    total_columns += 1
+                
+                schema_info[table_name] = {
+                    "columns": column_info,
+                    "primary_keys": [c["name"] for c in column_info if c["primary_key"]],
+                    "column_count": len(column_info)
+                }
+            
+            # 获取外键关系
+            relationships = self._extract_foreign_keys(inspector, table_names)
+            
+            database_info = DatabaseInfo(
+                name=self.database,
+                tables=list(table_names),
+                schema_info=schema_info,
+                connection_params={
+                    "host": self.host,
+                    "port": self.port,
+                    "database": self.database,
+                    "type": self.db_type
+                }
+            )
+            
+            self.logger.info(f"📊 提取数据库结构: {len(table_names)} 表, {total_columns} 列")
+            return database_info
+            
+        except Exception as e:
+            self.logger.error(f"❌ 数据库结构提取失败: {e}")
+            raise SchemaExtractionError(self.database, str(e))
+    
+    def execute_sql_safe(self, sql: str, limit: int = 100) -> Dict[str, Any]:
+        """
+        安全执行SQL查询 - 仅允许SELECT语句
         
         Args:
-            sql: SQL query string
-            dry_run: Whether to perform a dry run
+            sql: SQL查询语句
+            limit: 结果数量限制
             
         Returns:
-            Execution result
+            执行结果字典
         """
-        # Clean SQL statement
-        sql_clean = sql.strip().rstrip(';')
-        sql_upper = sql_clean.upper()
-        
-        # Security check: only allow SELECT statements
-        if not sql_upper.startswith('SELECT'):
-            return {
-                "success": False,
-                "error": "For security reasons, only SELECT queries are allowed",
-                "error_type": "SecurityError",
-                "sql": sql
-            }
-        
-        # Check for dangerous operations
-        dangerous_keywords = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'CREATE', 'TRUNCATE']
-        for keyword in dangerous_keywords:
-            if keyword in sql_upper:
-                return {
-                    "success": False,
-                    "error": f"SQL contains dangerous keyword: {keyword}",
-                    "error_type": "SecurityError", 
-                    "sql": sql
-                }
-        
-        if dry_run:
-            # Dry run: use EXPLAIN to check SQL syntax
-            try:
-                explain_sql = f"EXPLAIN {sql_clean}"
-                with self.engine.connect() as conn:
-                    conn.execute(text(explain_sql))
-                return {
-                    "success": True,
-                    "dry_run": True,
-                    "sql": sql,
-                    "message": "SQL syntax check passed"
-                }
-            except Exception as e:
-                return {
-                    "success": False,
-                    "error": f"SQL syntax check failed: {e}",
-                    "error_type": "SyntaxError",
-                    "sql": sql
-                }
-        else:
-            # Actual execution
-            return self._execute_query(sql)
-    
-    def _execute_query(self, sql: str, params: Optional[Dict] = None) -> Dict[str, Any]:
-        """Execute SQL query"""
         try:
+            # 清理和验证SQL
+            sql_clean = sql.strip().rstrip(';')
+            
+            if not self._is_safe_sql(sql_clean):
+                return {
+                    "success": False,
+                    "error": "安全检查失败：只允许SELECT查询",
+                    "error_type": "SecurityError",
+                    "sql": sql_clean
+                }
+            
+            # 添加LIMIT限制
+            if "LIMIT" not in sql_clean.upper():
+                sql_clean = f"{sql_clean} LIMIT {limit}"
+            
+            # 执行查询
             with self.engine.connect() as conn:
-                # Execute query
-                if params:
-                    result = conn.execute(text(sql), params)
-                else:
-                    result = conn.execute(text(sql))
+                result = conn.execute(text(sql_clean))
                 
                 if result.returns_rows:
-                    # Get results
                     rows = result.fetchall()
-                    columns = result.keys()
+                    columns = list(result.keys())
                     
-                    # Convert to dictionary list
+                    # 转换为字典列表
                     data = []
                     for row in rows:
-                        row_dict = {}
-                        for i, column in enumerate(columns):
-                            row_dict[column] = row[i]
+                        row_dict = {columns[i]: self._safe_value(row[i]) for i in range(len(columns))}
                         data.append(row_dict)
                     
                     return {
                         "success": True,
                         "data": data,
                         "row_count": len(data),
-                        "columns": list(columns),
-                        "sql": sql
+                        "columns": columns,
+                        "sql": sql_clean
                     }
                 else:
-                    # For non-query statements (INSERT, UPDATE, DELETE, etc.)
                     return {
                         "success": True,
-                        "affected_rows": result.rowcount if hasattr(result, 'rowcount') else 0,
-                        "sql": sql
+                        "message": "查询执行成功，无返回数据",
+                        "sql": sql_clean
                     }
-                    
+            
         except SQLAlchemyError as e:
-            self.logger.error(f"SQL execution failed: {sql}, error: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "error_type": "SQLAlchemyError",
-                "sql": sql
-            }
+            self.logger.error(f"❌ SQL执行失败: {sql} - {e}")
+            raise SQLExecutionError(sql, str(e), "SQLAlchemyError")
+            
         except Exception as e:
-            self.logger.error(f"Query execution failed: {sql}, error: {e}")
+            self.logger.error(f"❌ 查询执行异常: {sql} - {e}")
+            raise SQLExecutionError(sql, str(e), type(e).__name__)
+    
+    def validate_sql_syntax(self, sql: str) -> Dict[str, Any]:
+        """
+        验证SQL语法 - 使用EXPLAIN进行语法检查
+        
+        Args:
+            sql: SQL语句
+            
+        Returns:
+            验证结果
+        """
+        try:
+            sql_clean = sql.strip().rstrip(';')
+            
+            # 安全检查
+            if not self._is_safe_sql(sql_clean):
+                return {
+                    "valid": False,
+                    "error": "安全检查失败：只允许SELECT查询",
+                    "error_type": "SecurityError"
+                }
+            
+            # 语法检查
+            explain_sql = f"EXPLAIN {sql_clean}"
+            
+            with self.engine.connect() as conn:
+                conn.execute(text(explain_sql))
+            
             return {
-                "success": False,
-                "error": str(e),
-                "error_type": type(e).__name__,
-                "sql": sql
+                "valid": True,
+                "message": "SQL语法检查通过",
+                "sql": sql_clean
+            }
+            
+        except Exception as e:
+            return {
+                "valid": False,
+                "error": f"SQL语法错误: {str(e)}",
+                "error_type": "SyntaxError",
+                "sql": sql_clean
             }
     
-    def close(self):
-        """Close database connection"""
+    def get_table_info(self, table_name: str) -> Dict[str, Any]:
+        """获取指定表的详细信息"""
+        try:
+            if not self.engine:
+                raise SchemaExtractionError(table_name, "数据库连接未初始化")
+            
+            inspector = inspect(self.engine)
+            
+            # 检查表是否存在
+            if table_name not in inspector.get_table_names():
+                return {
+                    "exists": False,
+                    "error": f"表 {table_name} 不存在"
+                }
+            
+            # 获取列信息
+            columns = inspector.get_columns(table_name)
+            column_info = []
+            
+            for column in columns:
+                column_info.append({
+                    "name": column["name"],
+                    "type": self._safe_type_string(column["type"]),
+                    "nullable": column.get("nullable", True),
+                    "primary_key": column.get("primary_key", False),
+                    "default": self._safe_default_value(column.get("default"))
+                })
+            
+            # 获取索引信息
+            indexes = inspector.get_indexes(table_name)
+            
+            # 获取外键信息
+            foreign_keys = inspector.get_foreign_keys(table_name)
+            
+            return {
+                "exists": True,
+                "name": table_name,
+                "columns": column_info,
+                "column_count": len(column_info),
+                "indexes": indexes,
+                "foreign_keys": foreign_keys,
+                "primary_keys": [c["name"] for c in column_info if c["primary_key"]]
+            }
+            
+        except Exception as e:
+            self.logger.error(f"❌ 获取表信息失败: {table_name} - {e}")
+            return {
+                "exists": False,
+                "error": str(e)
+            }
+    
+    def test_connection(self) -> bool:
+        """测试数据库连接"""
+        try:
+            if not self.engine:
+                return False
+            
+            with self.engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            return True
+            
+        except Exception as e:
+            self.logger.warning(f"⚠️ 连接测试失败: {e}")
+            return False
+    
+    def get_connection_info(self) -> Dict[str, Any]:
+        """获取连接信息"""
+        return {
+            "type": self.db_type,
+            "host": self.host,
+            "port": self.port,
+            "database": self.database,
+            "connected": self.test_connection()
+        }
+    
+    def close(self) -> None:
+        """关闭数据库连接"""
         if self.engine:
             self.engine.dispose()
-            self.logger.info("Database connection closed")
+            self.logger.info("🔒 数据库连接已关闭")
+    
+    # ========== 内部辅助方法 ==========
+    def _build_connection_string(self) -> str:
+        """构建数据库连接字符串"""
+        if self.db_type == "mysql":
+            return f"mysql+pymysql://{self.username}:{self.password}@{self.host}:{self.port}/{self.database}?charset=utf8mb4"
+        elif self.db_type == "postgresql":
+            return f"postgresql://{self.username}:{self.password}@{self.host}:{self.port}/{self.database}"
+        elif self.db_type == "sqlite":
+            return f"sqlite:///{self.database}"
+        else:
+            raise ValueError(f"不支持的数据库类型: {self.db_type}")
+    
+    def _is_safe_sql(self, sql: str) -> bool:
+        """检查SQL是否安全"""
+        sql_upper = sql.upper().strip()
+        
+        # 只允许SELECT语句
+        if not sql_upper.startswith('SELECT'):
+            return False
+        
+        # 检查危险关键词
+        dangerous_keywords = [
+            'DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 
+            'CREATE', 'TRUNCATE', 'REPLACE', 'MERGE', 'CALL',
+            'EXEC', 'EXECUTE', 'LOAD_FILE', 'OUTFILE', 'DUMPFILE'
+        ]
+        
+        for keyword in dangerous_keywords:
+            if keyword in sql_upper:
+                return False
+        
+        return True
+    
+    def _safe_type_string(self, column_type) -> str:
+        """安全转换列类型为字符串"""
+        try:
+            type_str = str(column_type)
+            
+            # 处理ENUM类型
+            if "enum(" in type_str.lower():
+                import re
+                enum_match = re.search(r"enum\((.*?)\)", type_str, re.IGNORECASE)
+                if enum_match:
+                    return f"ENUM({enum_match.group(1)})"
+            
+            # 清理特殊字符
+            return type_str.replace('"', '').replace("'", "")
+            
+        except Exception:
+            return "UNKNOWN"
+    
+    def _safe_default_value(self, default_value) -> Union[str, None]:
+        """安全处理默认值"""
+        if default_value is None:
+            return None
+        
+        try:
+            # 如果是可调用对象(如函数)，转换为字符串
+            if hasattr(default_value, '__call__'):
+                return str(default_value)
+            
+            return str(default_value)
+        except Exception:
+            return None
+    
+    def _safe_value(self, value) -> Any:
+        """安全处理查询结果值"""
+        try:
+            # 处理日期时间类型
+            if hasattr(value, 'isoformat'):
+                return value.isoformat()
+            
+            # 处理Decimal类型
+            if hasattr(value, '__float__'):
+                return float(value)
+            
+            # 处理bytes类型
+            if isinstance(value, bytes):
+                try:
+                    return value.decode('utf-8')
+                except:
+                    return str(value)
+            
+            return value
+            
+        except Exception:
+            return str(value) if value is not None else None
+    
+    def _extract_foreign_keys(self, inspector, table_names: List[str]) -> List[Dict[str, Any]]:
+        """提取外键关系"""
+        relationships = []
+        
+        try:
+            for table_name in table_names:
+                foreign_keys = inspector.get_foreign_keys(table_name)
+                
+                for fk in foreign_keys:
+                    relationships.append({
+                        "source_table": table_name,
+                        "source_columns": fk.get("constrained_columns", []),
+                        "target_table": fk.get("referred_table"),
+                        "target_columns": fk.get("referred_columns", []),
+                        "constraint_name": fk.get("name")
+                    })
+                    
+        except Exception as e:
+            self.logger.warning(f"⚠️ 提取外键关系失败: {e}")
+        
+        return relationships
+
+
+# ========== 便利函数 ==========
+def create_database_manager(connection_params: Dict[str, Any]) -> DatabaseManager:
+    """
+    创建数据库管理器的便利函数
+    
+    Args:
+        connection_params: 数据库连接参数
+        
+    Returns:
+        初始化的数据库管理器
+    """
+    manager = DatabaseManager(connection_params)
+    
+    if not manager.initialize():
+        raise DatabaseConnectionError(
+            connection_params.get("type", "unknown"),
+            connection_params
+        )
+    
+    return manager

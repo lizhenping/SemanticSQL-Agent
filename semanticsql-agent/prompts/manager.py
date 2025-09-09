@@ -116,12 +116,22 @@ class PromptManager:
         Returns:
             LangChain PromptTemplate，专门用于ReAct Agent
         """
-        # 获取智能体系统提示词
-        template_content = self.get_system_prompt(template_name=agent_type, **kwargs)
+        # 获取原始Jinja2模板
+        template_path = f'system/{agent_type}.j2'
+        jinja_template = self.get_template(template_path)
+        
+        # 将Jinja2语法转换为LangChain格式
+        # 创建一个包含占位符的基础模板
+        langchain_template = jinja_template.render(
+            tools="{tools}",
+            tool_names="{tool_names}",
+            input="{input}",
+            agent_scratchpad="{agent_scratchpad}"
+        )
         
         # 创建PromptTemplate，包含ReAct所需的输入变量
         return PromptTemplate(
-            template=template_content,
+            template=langchain_template,
             input_variables=["input", "agent_scratchpad", "tools", "tool_names"]
         )
     
