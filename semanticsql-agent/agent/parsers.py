@@ -42,6 +42,9 @@ class SemanticSQLOutputParser(AgentOutputParser):
             OutputParserException: 解析失败时抛出
         """
         
+        # 预处理：过滤掉LLM输出中的think内容
+        llm_output = self._filter_think_content(llm_output)
+        
         # 1. 检查是否包含 Final Answer（官方ReAct结束信号）
         if "Final Answer:" in llm_output:
             # 提取 Final Answer 之后的内容

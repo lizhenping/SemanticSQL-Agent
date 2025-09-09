@@ -178,12 +178,15 @@ class SemanticSQLReActAgent:
             return format_log_to_str(x["intermediate_steps"])
         
         # 构建agent（官方RunnablePassthrough.assign模式）
+        # 绑定停止序列确保LLM在正确位置停止
+        llm_with_stop = llm.bind(stop=["\nObservation:", "\nObservation"])
+        
         agent = (
             RunnablePassthrough.assign(
                 agent_scratchpad=agent_scratchpad,
             )
             | prompt
-            | llm  # 直接使用llm而不是绑定停止序列
+            | llm_with_stop  # 使用带停止序列的LLM
             | output_parser
         )
         
@@ -265,7 +268,7 @@ def create_llm(config_type="openai", **kwargs) -> ChatOpenAI:
     
     if config_type == "openai":
         return ChatOpenAI(
-            model=kwargs.get("model", "gpt-4"),
+            model=kwargs.get("model", "Qwen3-14B"),
             api_key=kwargs.get("api_key"),
             base_url=kwargs.get("base_url"),
             temperature=kwargs.get("temperature", 0.7),
