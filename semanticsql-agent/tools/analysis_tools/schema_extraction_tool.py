@@ -60,7 +60,8 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
         # 提取输入文本
         input_text = args[0] if args else kwargs.get('input', '')
         
-        self._log_execution_start(input_text)
+        # 自定义日志记录（避免基类中的三元组引用问题）
+        self.logger.info(f"🔧 {self.name}: 开始执行 - 输入: {str(input_text)[:100]}...")
         
         try:
             # 1. 解析输入参数和配置
@@ -78,7 +79,9 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
             # 5. 返回简洁成功消息
             result_message = "✅ schema_extraction_tool提取完成，已存储到Neo4j。请继续执行field_analysis_tool工具。"
             
-            self._log_execution_end(f"成功处理 {len(raw_data.get('filtered_tables', []))} 个表")
+            # 自定义执行完成日志
+            table_count = len(raw_data.get('filtered_tables', []))
+            self.logger.info(f"✅ {self.name}: 执行完成 - 成功处理 {table_count} 个表")
             return result_message
             
         except Exception as e:
