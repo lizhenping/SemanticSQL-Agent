@@ -49,7 +49,7 @@ class Settings(BaseModel):
         description="LLM model name",
     )
     llm_base_url: str = Field(
-        default=os.getenv("SEMANTICSQL_LLM_BASE_URL", ""),
+        default=os.getenv("SEMANTICSQL_LLM_BASE_URL", "http://127.0.0.1:9991/v1"),
         description="LLM API base URL - REQUIRED in production, avoid hardcoded localhost",
     )
     llm_api_key: str = Field(
@@ -57,11 +57,11 @@ class Settings(BaseModel):
         description="LLM API key",
     )
     llm_temperature: float = Field(
-        default=float(os.getenv("SEMANTICSQL_LLM_TEMPERATURE", "0.7")),
+        default=float(os.getenv("SEMANTICSQL_LLM_TEMPERATURE", "0.1")),
         description="LLM temperature for creativity",
     )
     llm_max_tokens: int = Field(
-        default=int(os.getenv("SEMANTICSQL_LLM_MAX_TOKENS", "8000")),
+        default=int(os.getenv("SEMANTICSQL_LLM_MAX_TOKENS", "28000")),
         description="Maximum tokens for LLM",
     )
     llm_timeout: int = 30
@@ -69,7 +69,7 @@ class Settings(BaseModel):
 
     # Neo4j configuration - NO HARDCODED DEFAULTS IN PRODUCTION
     neo4j_uri: str = Field(
-        default=os.getenv("SEMANTICSQL_NEO4J_URI", "bolt://localhost:7687"),
+        default=os.getenv("SEMANTICSQL_NEO4J_URI", "bolt://127.0.0.1:7687"),
         description="Neo4j connection URI - avoid hardcoded localhost in production",
     )
     neo4j_user: str = Field(
@@ -77,7 +77,7 @@ class Settings(BaseModel):
         description="Neo4j username",
     )
     neo4j_password: str = Field(
-        default=os.getenv("SEMANTICSQL_NEO4J_PASSWORD", ""),
+        default=os.getenv("SEMANTICSQL_NEO4J_PASSWORD", "88888888"),
         description="Neo4j password - REQUIRED in production",
     )
 
@@ -87,23 +87,23 @@ class Settings(BaseModel):
         description="Database type",
     )
     db_host: str = Field(
-        default=os.getenv("SEMANTICSQL_DB_HOST", ""),
+        default=os.getenv("SEMANTICSQL_DB_HOST", "http://127.0.0.1"),
         description="Database host - REQUIRED in production",
     )
     db_port: int = Field(
-        default=int(os.getenv("SEMANTICSQL_DB_PORT", "3306")),
+        default=int(os.getenv("SEMANTICSQL_DB_PORT", "13306")),
         description="Database port",
     )
     db_database: str = Field(
-        default=os.getenv("SEMANTICSQL_DB_DATABASE", ""),
+        default=os.getenv("SEMANTICSQL_DB_DATABASE", "testdb"),
         description="Database name - REQUIRED in production",
     )
     db_username: str = Field(
-        default=os.getenv("SEMANTICSQL_DB_USERNAME", ""),
+        default=os.getenv("SEMANTICSQL_DB_USERNAME", "testuser"),
         description="Database username - REQUIRED in production",
     )
     db_password: str = Field(
-        default=os.getenv("SEMANTICSQL_DB_PASSWORD", ""),
+        default=os.getenv("SEMANTICSQL_DB_PASSWORD", "testpass"),
         description="Database password - REQUIRED in production",
     )
 
