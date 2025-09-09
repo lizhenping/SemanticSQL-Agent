@@ -165,21 +165,13 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
             raise_tool_error(self.name, f"MySQL元数据提取失败: {str(e)}")
     
     def _get_database_info(self, db_manager: DatabaseManager, database_name: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        """获取数据库级别信息"""
-        business_desc = ""
-        if config.get("use_db_comments", True):
-            # 尝试获取数据库comment
-            try:
-                sql = f"SELECT SCHEMA_COMMENT as database_comment FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '{database_name}'"
-                result = db_manager.execute_sql_safe(sql)
-                if result.get("success") and result.get("data"):
-                    business_desc = result["data"][0].get("database_comment", "") or ""
-            except Exception as e:
-                self.logger.warning(f"获取数据库comment失败: {e}")
+        """获取数据库级别信息
         
+        MySQL不支持数据库级别的注释，business_desc字段保留在Neo4J中供后期填充
+        """
         return {
             "name": database_name,
-            "business_desc": business_desc
+            "business_desc": ""  # 保留字段供后期在Neo4J中填充
         }
     
     def _get_all_table_names(self, db_manager: DatabaseManager) -> List[str]:
