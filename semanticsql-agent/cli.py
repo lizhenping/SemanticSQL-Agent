@@ -209,9 +209,10 @@ def analyze(ctx, database: str, output: Optional[str], config: Optional[str]):
     click.echo(f"🔍 分析数据库: {database}")
     click.echo("=" * 50)
     
-    # 加载配置
-    config_path = config or ctx.obj.get('config_path')
-    settings = load_configuration(ctx, config_path, database)
+    # 加载配置（统一Settings），并按CLI参数覆盖数据库名
+    settings = load_configuration(ctx)
+    if database:
+        settings = settings.copy(update={"db_database": database})
     
     # 创建Agent
     click.echo("🔧 初始化分析Agent...")

@@ -63,22 +63,49 @@ class SemanticSQLReActAgent:
         """
         self.logger = logging.getLogger(self.__class__.__name__)
         
-        # 核心组件初始化 - 使用统一配置工厂
+        # 核心组件初始化 - 强制统一配置工厂
+        from config.settings import get_settings
+        settings = get_settings()
+
         if llm is None and memory_manager is None and database_manager is None:
-            # 如果没有传入任何组件，使用工厂统一创建
-            components = ComponentFactory.create_all_components()
+            # 未注入任何组件 → 全部交给工厂创建（包含健康检查与fail-fast）
+            components = ComponentFactory.create_all_components(settings)
             self.llm = components["llm"]
-            self.memory_manager = components["memory_manager"] 
+            self.memory_manager = components["memory_manager"]
             self.database_manager = components["database_manager"]
         else:
-            # 如果有部分组件传入，按需创建缺失的组件
-            self.llm = llm or self._create_default_llm()
-            self.memory_manager = memory_manager or self._create_default_memory_manager()
-            self.database_manager = database_manager
+            # 存在部分注入
+            if settings.fail_fast:
+                missing = []
+                if llm is None:
+                    missing.append("llm")
+                if memory_manager is None:
+                    missing.append("memory_manager")
+                if database_manager is None:
+                    missing.append("database_manager")
+                if missing:
+                    raise AgentInitializationError(
+                        "SemanticSQLAgent",
+                        f"fail_fast 模式下不允许部分注入: 缺少 {', '.join(missing)}。请使用ComponentFactory或显式提供全部组件"
+                    )
+                # 全量注入 → 直接使用
+                self.llm = llm
+                self.memory_manager = memory_manager
+                self.database_manager = database_manager
+            else:
+                # 非fail-fast允许按需补全（仍通过统一工厂创建缺失组件）
+                from config.factories import LLMFactory, MemoryFactory, DatabaseFactory
+                self.llm = llm or LLMFactory.create_llm(settings)
+                self.memory_manager = memory_manager or MemoryFactory.create_memory_manager(settings)
+                self.database_manager = database_manager or DatabaseFactory.create_database_manager(settings)
             
         self.max_iterations = max_iterations
         self.verbose = verbose
         
+        # fail-fast: 确认Neo4j连接不可被绕过
+        if settings.fail_fast and not getattr(self.memory_manager, 'neo4j_graph', None):
+            raise AgentInitializationError("Neo4j", "连接不可用，请检查配置并在启动时解决连接问题")
+
         # 工具系统初始化
         self.tools = tools or self._create_semantic_sql_tools()
         

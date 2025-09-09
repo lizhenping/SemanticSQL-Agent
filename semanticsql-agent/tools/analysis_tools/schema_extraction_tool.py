@@ -366,12 +366,14 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
     
     def _store_to_neo4j(self, raw_data: Dict[str, Any], config: Dict[str, Any]) -> None:
         """直接存储到Neo4j图结构 - 按设计文档Neo4j结构"""
-        # 强制fail-fast：不允许跳过Neo4j存储
-        if not self.memory_manager:
-            raise_tool_error(self.name, "Neo4j记忆管理器未注入，初始化阶段应该验证连接")
-        
-        if not hasattr(self.memory_manager, 'neo4j_graph') or self.memory_manager.neo4j_graph is None:
-            raise_tool_error(self.name, "Neo4j连接失败，请检查配置并在启动时解决连接问题")
+        # 强制fail-fast：不允许跳过Neo4j存储（复用基类统一校验）
+        from config.settings import get_settings
+        if get_settings().fail_fast:
+            self._require_neo4j_connection()
+        else:
+            if not self.memory_manager or not getattr(self.memory_manager, 'neo4j_graph', None):
+                self.logger.warning("⚠️ 未配置Neo4j连接，跳过存储（非fail-fast模式）")
+                return
         
         try:
             neo4j_graph = self.memory_manager.neo4j_graph

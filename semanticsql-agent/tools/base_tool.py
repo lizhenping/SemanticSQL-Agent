@@ -192,10 +192,16 @@ class BaseSemanticSQLTool(BaseTool):
         if not self._generated_triples:
             self.logger.debug(f"📝 {self.name}: 没有三元组需要持久化")
             return True
-        
-        if not self.memory_manager:
-            self.logger.warning(f"⚠️ {self.name}: 记忆管理器未配置，无法持久化")
-            return False
+
+        # 在fail-fast模式下，强制要求可用的Neo4j连接
+        from config.settings import get_settings
+        settings = get_settings()
+        if settings.fail_fast:
+            self._require_neo4j_connection()
+        else:
+            if not self.memory_manager:
+                self.logger.warning(f"⚠️ {self.name}: 记忆管理器未配置，无法持久化")
+                return False
         
         try:
             success = self.memory_manager.store_triples(self._generated_triples, self.name)
@@ -218,6 +224,18 @@ class BaseSemanticSQLTool(BaseTool):
             source_tool=self.name,
             summary=summary or f"{self.name} 执行结果"
         )
+
+    # ========== 统一依赖校验：Neo4j连接 ==========
+    def _require_neo4j_connection(self) -> None:
+        """在fail-fast模式下强制校验Neo4j连接，避免绕过图存储。
+
+        Raises:
+            ToolDependencyError: 当记忆管理器缺失或连接不可用时抛出
+        """
+        if not self.memory_manager:
+            raise_tool_error(self.name, "Neo4j记忆管理器未注入，初始化阶段应该验证连接")
+        if not hasattr(self.memory_manager, 'neo4j_graph') or self.memory_manager.neo4j_graph is None:
+            raise_tool_error(self.name, "Neo4j连接失败，请检查配置并在启动时解决连接问题")
     
     # ========== 工具状态检查方法 ==========
     def _check_dependencies(self, required_tools: List[str]) -> bool:
