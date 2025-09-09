@@ -45,7 +45,10 @@ def handle_errors(func):
             sys.exit(1)
         except LLMError as e:
             click.echo(f"🤖 LLM服务错误: {e}", err=True) 
-            click.echo("请检查VLLM服务是否正常运行: http://localhost:9991", err=True)
+            # 动态获取配置，避免硬编码
+            from config.settings import get_settings
+            settings = get_settings()
+            click.echo(f"请检查VLLM服务是否正常运行: {settings.llm_base_url}", err=True)
             sys.exit(2)
         except AgentInitializationError as e:
             click.echo(f"🚫 Agent初始化失败: {e}", err=True)
@@ -81,44 +84,34 @@ def cli(ctx, config: Optional[str], verbose: bool):
         click.echo("🔍 详细模式已启用")
 
 
-def load_configuration(ctx, config_path: Optional[str], database: Optional[str]) -> tuple:
-    """加载配置信息"""
-    # 默认配置（匹配文档规范）
-    default_settings = {
-        "llm_model": "Qwen3-14B",
-        "llm_temperature": 0.7,
-        "llm_max_tokens": 20000,
-        "llm_base_url": "http://127.0.0.1:9991/v1",
-        "llm_api_key": "not-needed",
-        "max_steps": 15,
-        "verbose": ctx.obj.get('verbose', False)
-    }
+def load_configuration(ctx, config_path: Optional[str], database: Optional[str]) -> 'Settings':
+    """加载配置信息 - 使用统一Settings，不重复定义配置"""
+    from config.settings import get_settings
     
-    default_database = {
-        "host": "192.168.200.216",
-        "port": 13306,
-        "username": "testuser", 
-        "password": "testpass",
-        "database": database or "testdb"
-    }
+    # 获取统一配置
+    settings = get_settings()
     
-    # 从配置文件加载（如果存在）
+    # 从配置文件加载覆盖（如果存在）  
     if config_path and Path(config_path).exists():
         with open(config_path, 'r', encoding='utf-8') as f:
             config_data = yaml.safe_load(f)
-        
-        # 合并配置
-        settings_data = {**default_settings, **config_data.get('settings', {})}
-        database_data = {**default_database, **config_data.get('database', {})}
-    else:
-        settings_data = default_settings
-        database_data = default_database
+            
+        # 简单的配置文件支持 - 直接设置环境变量让Settings重新加载
+        import os
+        yaml_settings = config_data.get('settings', {})
+        for key, value in yaml_settings.items():
+            # 映射到环境变量
+            env_key = f"SEMANTICSQL_{key.upper()}"
+            os.environ[env_key] = str(value)
     
-    # 如果指定了数据库名，覆盖配置
+    # 处理数据库名覆盖
     if database:
-        database_data['database'] = database
-    
-    return settings_data, database_data
+        import os
+        os.environ["SEMANTICSQL_DB_DATABASE"] = database
+        
+    # 重新获取Settings以应用覆盖
+    from config.settings import Settings
+    return Settings()  # 重新创建以获取最新环境变量
 
 
 @cli.command()
@@ -141,16 +134,16 @@ def generate(ctx, count: int, output: str, database: Optional[str], config: Opti
     click.echo(f"🚀 SemanticSQL Agent v4.0 - 开始生成 {count} 条训练数据")
     click.echo("=" * 60)
     
-    # 加载配置
+    # 加载统一配置
     config_path = config or ctx.obj.get('config_path')
-    settings_data, database_data = load_configuration(ctx, config_path, database)
+    settings = load_configuration(ctx, config_path, database)
     
     # 显示配置信息
     if ctx.obj.get('verbose'):
         click.echo(f"📊 配置信息:")
-        click.echo(f"  • LLM模型: {settings_data['llm_model']}")
-        click.echo(f"  • API地址: {settings_data['llm_base_url']}")
-        click.echo(f"  • 数据库: {database_data['host']}:{database_data['port']}/{database_data['database']}")
+        click.echo(f"  • LLM模型: {settings.llm_model}")
+        click.echo(f"  • API地址: {settings.llm_base_url}")
+        click.echo(f"  • 数据库: {settings.db_host}:{settings.db_port}/{settings.db_database}")
         click.echo(f"  • 生成数量: {count}")
         click.echo(f"  • 输出格式: {format}")
     
@@ -158,22 +151,12 @@ def generate(ctx, count: int, output: str, database: Optional[str], config: Opti
     if not output.endswith(f'.{format}'):
         output = f"{Path(output).stem}.{format}"
     
-    # 创建新架构Agent
-    click.echo("🔧 初始化SemanticSQL Agent（新架构）...")
+    # 创建新架构Agent - 使用统一配置
+    click.echo("🔧 初始化SemanticSQL Agent（统一配置）...")
     
     try:
         agent = create_semantic_sql_agent(
-            config_type="openai",
-            llm_config={
-                "model": settings_data["llm_model"],
-                "api_key": settings_data["llm_api_key"],
-                "base_url": settings_data["llm_base_url"],
-                "temperature": settings_data["llm_temperature"],
-                "max_tokens": settings_data["llm_max_tokens"]
-            },
-            database_config=database_data,
-            max_iterations=settings_data["max_steps"],
-            verbose=settings_data["verbose"]
+            settings=settings
         )
         
         click.echo(f"✅ Agent创建成功，包含工具: {', '.join(agent.get_tool_names())}")
