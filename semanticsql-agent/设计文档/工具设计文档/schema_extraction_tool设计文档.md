@@ -28,7 +28,7 @@ CREATE (d:Database {
 ```cypher
 CREATE (t:Table {
     name: "表名",
-    row_count: null,           // 🔖 后续阶段填充
+    row_count: null,           // 
     business_desc: "业务描述"   // 根据配置使用comment或后续填充
 })
 ```
@@ -40,10 +40,10 @@ CREATE (c:Column {
     data_type: "数据类型",      // ✅ 当前阶段：从MySQL获取
     is_nullable: true,         // ✅ 当前阶段：从MySQL获取
     is_primary: false,         // ✅ 当前阶段：从MySQL获取
-    is_foreign: null,          // 🔖 后续阶段填充
+    is_foreign: null,          // ✅ 当前阶段：从MySQL获取
     category: null,            // 🔖 后续阶段填充 (identifier/measure/dimension/datetime)
-    entropy_level: null,       // 🔖 后续阶段填充 (low/medium/high)
-    sample_values: [],         // 🔖 后续阶段填充 (采样数据)
+    entropy_level: null,       // ✅ 当前阶段：从MySQL获取 需要设计单独的计算列中数据的分布，设置为高中低
+    sample_values: [],         // 🔖 当前阶段：从MySQL获取 10个
     business_desc: "业务描述"   // 根据配置使用comment或后续填充
 })
 ```
@@ -66,10 +66,7 @@ CREATE (c:Column {
 ```python
 {
     "table_blacklist": [        // 表黑名单
-        "temp_",                // 过滤表名包含"temp_"的表
-        "log_",                 // 过滤表名包含"log_"的表  
-        "backup_",              // 过滤表名包含"backup_"的表
-        "sys_",                 // 可自定义其他过滤规则
+        "aid_info",             // 过滤表名包含"aid_info"的表
     ],
     "use_db_comments": true     // 是否使用数据库comment作为business_desc
 }
@@ -135,15 +132,10 @@ WHERE TABLE_SCHEMA = '目标数据库名'
 #### Column节点
 - `is_foreign`: 需要分析外键关系
 - `category`: 需要AI推理字段类型分类
-- `entropy_level`: 需要数据分析计算多样性
+- `entropy_level`: 需要数据分析计算多样性 采样五百个数据计算熵，注意如果是空则设置为低
 - `sample_values`: 需要执行`SELECT DISTINCT column_name LIMIT 100`采样
 - `business_desc`（当use_db_comments=false时）
 
-### 5.2 填充时机
-- **domain_analysis阶段**: 填充business_desc（如果启用LLM推理）
-- **data_analysis阶段**: 填充row_count、sample_values、entropy_level
-- **er_analysis阶段**: 填充is_foreign和关系信息
-- **field_analysis阶段**: 填充category分类
 
 ## 6. Neo4j查询接口
 
@@ -187,17 +179,14 @@ RETURN t.name as table_name,
 
 ### 7.1 成功返回
 ```
-✅ 数据库结构提取完成，已存储到Neo4j。请继续执行domain_analysis工具。
+✅ schema_extraction_tool提取完成，已存储到Neo4j。请继续执行field_analysis_tool工具。
 ```
 
 ### 7.2 配置示例返回
 ```
 ✅ 数据库结构提取完成：
 - 数据库: testdb
-- 提取表数: 8个（过滤了3个黑名单表）
-- 提取列数: 156个
-- 使用数据库comment: 是
-已存储到Neo4j，请继续执行domain_analysis工具。
+已存储到Neo4j，请继续执行field_analysis_tool工具。
 ```
 
 ## 8. 实现要点
