@@ -14,13 +14,23 @@ import json
 from sqlalchemy import create_engine, text, MetaData, inspect
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
+from pydantic import BaseModel, Field
 
-from models.schemas import DatabaseInfo
 from models.exceptions import (
     DatabaseConnectionError, 
     SQLExecutionError,
     SchemaExtractionError
 )
+
+
+# 数据库信息模型 - 从 models/schemas.py 迁移到此处
+class DatabaseInfo(BaseModel):
+    """数据库信息模型"""
+    
+    name: str = Field(description="数据库名称")
+    tables: List[str] = Field(default_factory=list, description="表名列表")
+    schema_info: Dict[str, Dict[str, Any]] = Field(default_factory=dict, description="表结构信息")
+    connection_params: Dict[str, Any] = Field(default_factory=dict, description="连接参数")
 
 
 class DatabaseManager:

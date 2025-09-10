@@ -14,9 +14,9 @@ from langchain.tools import BaseTool
 from langchain_core.memory import BaseMemory
 
 from config.settings import Settings
-from models.agent import AgentExecution, AgentStep
+from agent.models import AgentExecution, AgentStep
 from utils.trajectory import TrajectoryRecorder
-from utils.callbacks import TrajectoryCallbackHandler
+from utils.callbacks import SemanticSQLCallbackHandler
 from prompts.manager import PromptManager
 
 
@@ -47,7 +47,7 @@ class BaseAgent(ABC):
         # 初始化核心组件
         self.llm = self._create_llm()
         self.trajectory_recorder = TrajectoryRecorder()
-        self.callback_handler = TrajectoryCallbackHandler(self.trajectory_recorder)
+        self.callback_handler = SemanticSQLCallbackHandler(self.trajectory_recorder)
         
         # 初始化工具和记忆
         self.tools = self._initialize_tools()

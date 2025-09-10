@@ -6,9 +6,16 @@
 from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import List, Dict, Any, Optional
+from enum import Enum
 import uuid
 
-from models.base import DifficultyLevel
+
+class DifficultyLevel(Enum):
+    """查询难度级别 - 从 models/base.py 迁移到此处"""
+    EASY = "easy"
+    MEDIUM = "medium"
+    HARD = "hard"
+    EXPERT = "expert"
 
 
 class GeneratedExample(BaseModel):

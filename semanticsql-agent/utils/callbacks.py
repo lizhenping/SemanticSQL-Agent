@@ -14,7 +14,7 @@ from langchain.callbacks.base import BaseCallbackHandler
 from langchain.schema import AgentAction, AgentFinish, LLMResult
 from langchain_core.outputs import LLMResult
 
-from models.schemas import TrainingExample
+from models.training import TrainingExample
 from models.exceptions import raise_tool_error
 
 

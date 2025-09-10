@@ -1,5 +1,5 @@
 """
-Agent执行相关模型
+Agent execution models - 从 base_agent.py 分离，避免循环导入
 """
 
 from pydantic import BaseModel, Field

@@ -7,8 +7,8 @@ import re
 import json
 from typing import Dict, Any, Type, List, Optional
 from pydantic import BaseModel, Field, model_validator
+from enum import Enum
 
-from models.base import SQLOperation
 from models.exceptions import ToolExecutionError, LLMException
 from prompts.manager import PromptManager
 from utils.database import DatabaseManager
@@ -16,6 +16,18 @@ from ..base_tool import BaseSemanticSQLTool
 
 
 # ========== 工具内部数据模型（就近原则）==========
+
+class SQLOperation(Enum):
+    """SQL操作类型 - 从 models/base.py 迁移到此处"""
+    SELECT = "SELECT"
+    JOIN = "JOIN"
+    GROUP = "GROUP"
+    SUBQUERY = "SUBQUERY"
+    WINDOW = "WINDOW"
+    CTE = "CTE"
+    UNION = "UNION"
+
+
 class SQLGenerationInput(BaseModel):
     """SQL生成输入参数"""
     question: str = Field(description="自然语言问题")

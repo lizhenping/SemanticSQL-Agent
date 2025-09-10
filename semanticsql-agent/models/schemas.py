@@ -218,41 +218,7 @@ class ToolResult(BaseModel):
         )
 
 
-class DatabaseInfo(BaseModel):
-    """数据库信息模型"""
-    
-    name: str = Field(description="数据库名称")
-    tables: List[str] = Field(default_factory=list, description="表名列表")
-    schema_info: Dict[str, Dict[str, Any]] = Field(default_factory=dict, description="表结构信息")
-    connection_params: Dict[str, Any] = Field(default_factory=dict, description="连接参数")
 
-
-class TrainingExample(BaseModel):
-    """训练样例数据模型"""
-    
-    id: str = Field(default_factory=lambda: f"example_{uuid.uuid4().hex[:8]}", description="样例ID")
-    question: str = Field(description="自然语言问题")
-    sql: str = Field(description="对应SQL查询")
-    scenario: Dict[str, Any] = Field(default_factory=dict, description="业务场景信息")
-    operations: List[str] = Field(default_factory=list, description="SQL操作类型")
-    tables: List[str] = Field(default_factory=list, description="涉及的表")
-    validation: Dict[str, Any] = Field(default_factory=dict, description="验证结果")
-    quality_score: float = Field(default=0.0, description="质量评分(0-1)")
-    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat(), description="生成时间")
-    
-    def to_training_format(self) -> Dict[str, Any]:
-        """转换为训练数据格式"""
-        return {
-            "id": self.id,
-            "question": self.question,
-            "sql": self.sql,
-            "scenario": self.scenario,
-            "operations": self.operations,
-            "tables": self.tables,
-            "validation": self.validation,
-            "quality_score": self.quality_score,
-            "timestamp": self.timestamp
-        }
 
 
 # 便利函数
