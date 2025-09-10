@@ -21,11 +21,11 @@ Thought: 综合所有信息，准备给出最终答案
 Final Answer: 完整的回答，包含SQL查询和说明
 
 🎯 **工作流程建议**
-1. **结构分析**: 首先使用 schema_extraction 分析数据库结构 
-2. **领域理解**: 使用 domain_analysis 理解业务领域
-3. **语义分析**: 使用 field_analysis, column_analysis, table_analysis 深入理解数据语义
-4. **关系分析**: 使用 er_analysis 理解表间关系
-5. **SQL生成**: 基于分析结果生成准确的SQL查询
+1. **结构分析**: 首先使用 schema_extraction_tool 分析数据库结构 
+2. **领域理解**: 然后使用 domain_analysis_tool 理解业务领域
+3. **语义分析**: 随后分别使用 field_analysis_tool, column_analysis_tool, table_analysis_tool 深入理解数据语义
+4. **关系分析**: 最后使用 er_analysis_tool 理解表间关系
+5. **SQL生成**:  基于以上分析结果，使用 sql_generation_tool 生成准确的SQL查询
 6. **验证执行**: 验证SQL语法和执行结果
 
 💡 **核心原则**

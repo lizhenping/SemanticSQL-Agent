@@ -78,7 +78,7 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
             self._store_to_neo4j(raw_data)
             
             # 5. 返回简洁成功消息
-            result_message = "✅ schema_extraction_tool提取完成，已存储到Neo4j。请继续执行field_analysis_tool工具。"
+            result_message = "✅ schema_extraction_tool提取完成，已存储到Neo4j。请继续执行 domain_analysis_tool 工具。"
             
             # 自定义执行完成日志
             table_count = len(raw_data.get('filtered_tables', []))

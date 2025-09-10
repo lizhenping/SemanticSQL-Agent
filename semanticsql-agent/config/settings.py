@@ -136,14 +136,14 @@ class Settings(BaseModel):
 
     # Enabled tools
     enabled_tools: List[str] = [
-        "schema_extraction",
-        "domain_analysis",
-        "field_classification",
-        "er_analysis",
-        "sql_generation",
-        "sql_validation",
-        "sql_execution",
-        "sequential_thinking",
+        "schema_extraction_tool",
+        "domain_analysis_tool",
+        "field_classification_tool",
+        "er_analysis_tool",
+        "sql_generation_tool",
+        "sql_validation_tool",
+        "sql_execution_tool",
+        "sequential_thinking_tool",
     ]
 
     # Output settings

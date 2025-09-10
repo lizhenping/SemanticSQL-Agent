@@ -9,22 +9,23 @@
 - 从Neo4j读取schema_extraction_tool的输出
 - 使用LLM进行六维业务分析(domain_type, business_problems, solution_approaches, key_entities, business_rules, special_fields)
 - 直接创建Neo4j业务知识图谱节点
-- 支持优雅降级和错误处理
+- 快速失败错误处理机制
 """
 
 from typing import Dict, Any, List, Optional
 import json
 import logging
-import re
 from dataclasses import dataclass
 from datetime import datetime
-from jinja2 import Environment, BaseLoader
 from pydantic import Field
+from langchain_openai import ChatOpenAI
 
 from tools.base_tool import BaseSemanticSQLTool
 from models.exceptions import raise_tool_error, raise_dependency_error
 from config.settings import get_settings
 from utils.memory import Neo4jMemoryManager
+from prompts.manager import PromptManager
+from config.factories import ComponentManager
 
 @dataclass
 class DomainKnowledge:
@@ -37,6 +38,19 @@ class DomainKnowledge:
     special_fields: List[str]
     confidence: float = 0.0
     analysis_timestamp: str = ""
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典格式"""
+        return {
+            "domain_type": self.domain_type,
+            "business_problems": self.business_problems,
+            "solution_approaches": self.solution_approaches,
+            "key_entities": self.key_entities,
+            "business_rules": self.business_rules,
+            "special_fields": self.special_fields,
+            "confidence": self.confidence,
+            "analysis_timestamp": self.analysis_timestamp
+        }
     
 
 class DomainAnalysisTool(BaseSemanticSQLTool):
@@ -57,31 +71,38 @@ class DomainAnalysisTool(BaseSemanticSQLTool):
     技术特性：
     - 基于 02_domain_analysis_structured.j2 提示词模板
     - 六维业务分析框架 (domain_type, business_problems, solution_approaches, key_entities, business_rules, special_fields)
-    - 智能降级处理和错误恢复
-    - 支持缓存和性能优化
+    - 快速失败错误处理
+    - 支持性能优化
     """
     
     name: str = "domain_analysis_tool"  
     description: str = "基于LLM的智能业务领域分析，识别业务问题、解决方案和核心实体"
     memory_manager: Optional[Neo4jMemoryManager] = Field(default=None, exclude=True)
+    llm: Optional[ChatOpenAI] = Field(default=None, exclude=True)
+    settings: Optional[Any] = Field(default=None, exclude=True)
+    prompt_manager: Optional[Any] = Field(default=None, exclude=True)
     
     def __init__(self, memory_manager: Optional[Neo4jMemoryManager] = None, **kwargs):
         """初始化领域分析工具"""
         super().__init__(**kwargs)
-        self.settings = get_settings()
+        # 使用object.__setattr__避免Pydantic验证问题
+        object.__setattr__(self, 'settings', get_settings())
+        object.__setattr__(self, 'memory_manager', memory_manager)
+        object.__setattr__(self, 'llm', ComponentManager.create_llm(get_settings()))
+        # 初始化提示词管理器
+        object.__setattr__(self, 'prompt_manager', PromptManager())
     
     def _run(self, *args, **kwargs) -> str:
         """执行领域分析 - 基于LLM的智能分析流程"""
         self.logger.info(f"🔧 {self.name}: 开始执行 - 基于LLM的领域分析")
         
         try:
+            # 初始化必要的服务
+            if not self.memory_manager:
+                self.memory_manager = ComponentManager.create_memory_manager(self.settings)
+            
             # 1. 验证依赖：确保schema_extraction_tool已执行
             self._check_schema_extraction_dependency()
-            from config.factories import ComponentManager
-            
-            # LLM是必需的
-            self.llm = ComponentManager.create_llm(self.settings)
-            self.memory_manager = ComponentManager.create_memory_manager(self.settings)
                
             # 2. 从Neo4j读取数据库结构信息
             database_schema = self._query_neo4j_schema()
@@ -92,7 +113,7 @@ class DomainAnalysisTool(BaseSemanticSQLTool):
             ddl_content = self._format_schema_to_ddl(database_schema)
             
             # 4. 使用LLM进行深度领域分析
-            domain_knowledge = self.llm(ddl_content)
+            domain_knowledge = self._analyze_domain_with_llm(ddl_content)
             
             # 5. 直接存储到Neo4j知识图谱
             self._store_domain_knowledge_to_neo4j(domain_knowledge, database_schema)
@@ -118,6 +139,9 @@ class DomainAnalysisTool(BaseSemanticSQLTool):
         - 是否存在完整的Table和Column结构
         - 检查schema_extraction_tool的execution_status
         """
+        if not self.memory_manager:
+            raise_dependency_error(self.name, "memory_manager", "Neo4j内存管理器未初始化")
+            
         cypher = '''
         MATCH (d:Database)-[:HAS_TABLE]->(t:Table)-[:HAS_COLUMN]->(c:Column)
         RETURN count(DISTINCT d) as db_count, 
@@ -125,15 +149,23 @@ class DomainAnalysisTool(BaseSemanticSQLTool):
                count(DISTINCT c) as column_count
         '''
         
-        result = self.memory_manager.query(cypher)
-        if not result or result[0]["db_count"] == 0:
+        try:
+            result = self.memory_manager.query(cypher)
+            if not result or result[0]["db_count"] == 0:
+                raise_dependency_error(
+                    self.name, 
+                    "schema_extraction_tool", 
+                    "Neo4j中未找到Database和Table结构，请先执行schema_extraction_tool"
+                )
+            
+            self.logger.info(f"✅ 依赖检查通过: 发现 {result[0]['table_count']} 个表，{result[0]['column_count']} 个字段")
+        except Exception as e:
+            self.logger.error(f"❌ Neo4j查询失败: {e}")
             raise_dependency_error(
                 self.name, 
                 "schema_extraction_tool", 
-                "Neo4j中未找到Database和Table结构，请先执行schema_extraction_tool"
+                f"Neo4j依赖检查失败: {str(e)}"
             )
-        
-        self.logger.info(f"✅ 依赖检查通过: 发现 {result[0]['table_count']} 个表，{result[0]['column_count']} 个字段")
     
     def _query_neo4j_schema(self) -> Dict[str, Any]:
         """从Neo4j查询数据库结构信息
@@ -166,17 +198,28 @@ class DomainAnalysisTool(BaseSemanticSQLTool):
                }) as tables
         '''
         
-        result = self.memory_manager.query(cypher)
-        if not result:
-            raise_dependency_error(self.name, "schema_extraction_tool", "Neo4j查询返回空结果")
-        
-        schema_data = result[0]
-        # 过滤掉空的表记录
-        schema_data["tables"] = [table for table in schema_data["tables"] if table["name"]]
-        
-        self.logger.info(f"📊 从Neo4j读取到 {len(schema_data['tables'])} 个表的结构信息")
-        
-        return schema_data
+        try:
+            result = self.memory_manager.query(cypher)
+            if not result:
+                raise_dependency_error(self.name, "schema_extraction_tool", "Neo4j查询返回空结果")
+            
+            schema_data = result[0]
+            # 过滤掉空的表记录
+            if schema_data and "tables" in schema_data:
+                schema_data["tables"] = [table for table in schema_data["tables"] if table.get("name")]
+            else:
+                schema_data = {"database_name": "unknown", "tables": []}
+            
+            self.logger.info(f"📊 从Neo4j读取到 {len(schema_data['tables'])} 个表的结构信息")
+            
+            return schema_data
+        except Exception as e:
+            self.logger.error(f"❌ Neo4j Schema查询失败: {e}")
+            raise_dependency_error(
+                self.name, 
+                "schema_extraction_tool", 
+                f"Neo4j Schema查询失败: {str(e)}"
+            )
     
     def _format_schema_to_ddl(self, database_schema: Dict[str, Any]) -> str:
         """格式化数据库结构为DDL语句
@@ -262,8 +305,10 @@ class DomainAnalysisTool(BaseSemanticSQLTool):
             # 1. 构建结构化提示词
             structured_prompt = self._build_structured_prompt(ddl_content)
             
-            # 2. 调用LLM服务
-            llm_response = self._call_llm_service(structured_prompt)
+            # 2. 直接调用LLM服务
+            self.logger.info("📡 调用LLM服务进行分析...")
+            llm_response = self.llm.invoke(structured_prompt)
+            self.logger.info(f"✅ LLM响应长度: {len(llm_response)} 字符")
             
             # 3. 解析结构化响应
             domain_knowledge = self._parse_structured_response(llm_response)
@@ -273,118 +318,20 @@ class DomainAnalysisTool(BaseSemanticSQLTool):
             return domain_knowledge
             
         except Exception as e:
-            self.logger.warning(f"⚠️ LLM分析失败，启动降级处理: {e}")
-            return self._fallback_analysis(ddl_content)
+            self.logger.error(f"❌ LLM分析失败: {e}")
+            raise_tool_error(self.name, f"LLM领域分析失败: {str(e)}")
     
     def _build_structured_prompt(self, ddl_content: str) -> str:
         """构建结构化提示词 - 基于 02_domain_analysis_structured.j2"""
         
-        template_content = '''您现担任跨行业首席数据架构师和业务专家。请依据所提供之数据库 Schema，分析该数据库的业务领域，并严格按照以下JSON格式输出分析结果。
-
-分析要求：
-1. 使用业务语言而非技术术语（避免使用"表"、"字段"、"外键"等技术词汇）
-2. 基于 Schema 信息进行合理推理，不要臆测没有依据的内容
-3. 所有描述都必须是完整的句子，不能是简单的名词或短语
-4. 严格遵循下面的JSON格式，不要输出任何JSON之外的内容
-
-请直接输出以下格式的JSON：
-
-{
-  "domain_type": "精准的业务领域名称（如：电商订单管理、国防工业合同管理等）",
-  
-  "business_problems": [
-    "系统旨在解决的第一个业务问题的完整描述",
-    "系统旨在解决的第二个业务问题的完整描述",
-    "系统旨在解决的第三个业务问题的完整描述"
-  ],
-  
-  "solution_approaches": [
-    "解决上述问题的第一种方式的完整描述",
-    "解决上述问题的第二种方式的完整描述",
-    "解决上述问题的第三种方式的完整描述"
-  ],
-  
-  "key_entities": [
-    "第一个核心业务实体的完整描述：它是什么，代表什么业务对象，在业务流程中扮演什么角色",
-    "第二个核心业务实体的完整描述：它如何支撑业务运转，承载哪些业务信息，如何与其他实体协作",
-    "第三个核心业务实体的完整描述：它与其他概念的关联，生命周期如何，对业务有什么影响"
-  ],
-  
-  "business_rules": [
-    "若第一个条件发生，则系统必须执行的动作，以及这样做的业务目的",
-    "当第二个状态变化时，系统自动触发的行为，以及对业务的影响",
-    "必须满足的第三个约束条件，才能执行的操作，以及这个约束的业务意义",
-    "第一对实体之间的关系规则：实体间存在什么样的业务关联，这种关联如何支撑业务流程",
-    "第二对实体之间的关系规则：这种关系在业务中的意义，以及它如何影响业务决策"
-  ],
-  
-  "special_fields": [
-    "特殊业务字段及其规则：字段名称代表的业务含义，以及基于该字段的业务规则",
-    "如果没有明确的特殊字段规则，此数组可以为空"
-  ]
-}
-
-重要提示：
-- 每个数组中的元素都必须是完整的描述性句子
-- business_rules 包含业务约束和实体关系规则，使用条件句式（若...则...、当...时...、必须...才能...）
-- key_entities 整合了原有的业务概念和实体描述，避免重复
-- 不要输出JSON之外的任何解释或说明文字
-- 如果某些信息无法从Schema中推断，相应字段可以包含较少的条目，但不要臆造
-
-Schema 如下：
-{{ schema_ddl }}'''
-        
-        template = self.jinja_env.from_string(template_content)
-        return template.render(schema_ddl=ddl_content)
-    
-    def _call_llm_service(self, prompt: str) -> str:
-        """调用LLM服务"""
-        # 这里需要根据实际的LLM服务接口实现
-        # 目前返回模拟响应，实际实现时需要集成真实的LLM服务
-        
-        self.logger.info("📡 调用LLM服务进行分析...")
-        
-        # TODO: 实际实现LLM服务调用
-        # 示例代码结构：
-        # from services.llm_service import LLMService
-        # llm_service = LLMService(self.settings)
-        # response = llm_service.generate(
-        #     prompt=prompt,
-        #     temperature=self.LLM_CONFIG["temperature"],
-        #     max_tokens=self.LLM_CONFIG["max_tokens"],
-        #     timeout=self.LLM_CONFIG["timeout"]
-        # )
-        # return response
-        
-        # 临时模拟响应
-        mock_response = '''{
-  "domain_type": "业务管理系统",
-  "business_problems": [
-    "需要管理和跟踪各种业务实体的生命周期和状态变化",
-    "需要建立不同业务对象之间的关联关系以支撑复杂的业务流程",
-    "需要确保数据的完整性和业务规则的一致性执行"
-  ],
-  "solution_approaches": [
-    "通过标准化的数据模型来统一管理各类业务实体",
-    "建立完善的状态管理机制来跟踪业务流程的执行进度",
-    "实施严格的数据验证和业务规则引擎来保障系统稳定性"
-  ],
-  "key_entities": [
-    "核心业务实体：代表系统中的主要业务对象，承载核心业务信息和状态",
-    "关联实体：负责建立不同业务对象间的关系，支撑复杂的业务逻辑",
-    "配置实体：管理系统的配置信息和业务参数，确保系统的灵活性"
-  ],
-  "business_rules": [
-    "当业务实体状态发生变更时，系统必须记录变更日志以确保审计追踪",
-    "若删除核心业务实体，则系统必须检查关联关系以防止数据孤岛",
-    "业务实体与关联实体之间存在依赖关系：关联关系的建立必须基于有效的业务实体"
-  ],
-  "special_fields": [
-    "状态字段代表业务实体的当前状态，遵循预定义的状态流转规则"
-  ]
-}'''
-        
-        return mock_response
+        try:
+            # 使用PromptManager加载和渲染模板
+            template_path = 'analysis/02_domain_analysis_structured.j2'
+            return self.prompt_manager.render_template(template_path, schema_ddl=ddl_content)
+            
+        except Exception as e:
+            self.logger.error(f"❌ 模板加载失败: {e}")
+            raise_tool_error(self.name, f"Jinja2模板加载失败: {str(e)}")
     
     def _parse_structured_response(self, response: str) -> DomainKnowledge:
         """解析LLM结构化响应"""
@@ -590,7 +537,7 @@ Schema 如下：
                 "timestamp": domain_knowledge.analysis_timestamp
             }
             
-            self.memory_manager.execute(cypher, params)
+            self.memory_manager.neo4j_graph.query(cypher, params)
             nodes_created += 1
         
         # 创建KeyEntity节点
@@ -614,7 +561,7 @@ Schema 如下：
                 "timestamp": domain_knowledge.analysis_timestamp
             }
             
-            self.memory_manager.execute(cypher, params)
+            self.memory_manager.neo4j_graph.query(cypher, params)
             nodes_created += 1
         
         # 创建BusinessRule节点
@@ -636,7 +583,7 @@ Schema 如下：
                 "timestamp": domain_knowledge.analysis_timestamp
             }
             
-            self.memory_manager.execute(cypher, params)
+            self.memory_manager.neo4j_graph.query(cypher, params)
             nodes_created += 1
         
         return nodes_created
@@ -665,7 +612,7 @@ Schema 如下：
                 "timestamp": domain_knowledge.analysis_timestamp
             }
             
-            self.memory_manager.execute(cypher, params)
+            self.memory_manager.neo4j_graph.query(cypher, params)
             relationships_created += 1
         
         # Domain与KeyEntity的关系
@@ -686,7 +633,7 @@ Schema 如下：
                 "timestamp": domain_knowledge.analysis_timestamp
             }
             
-            self.memory_manager.execute(cypher, params)
+            self.memory_manager.neo4j_graph.query(cypher, params)
             relationships_created += 1
         
         # Domain与BusinessRule的关系
@@ -707,7 +654,7 @@ Schema 如下：
                 "timestamp": domain_knowledge.analysis_timestamp
             }
             
-            self.memory_manager.execute(cypher, params)
+            self.memory_manager.neo4j_graph.query(cypher, params)
             relationships_created += 1
         
         return relationships_created
@@ -754,107 +701,6 @@ Schema 如下：
         
         return result
     
-    # ========== 降级处理 ==========
-    
-    def _fallback_analysis(self, ddl_content: str) -> DomainKnowledge:
-        """智能降级分析算法"""
-        self.logger.info("🔄 启动降级分析模式")
-        
-        # 基于关键词的领域识别
-        domain_type = self._rule_based_domain_detection(ddl_content)
-        
-        # 基于表名的业务问题推断
-        business_problems = self._infer_business_problems(ddl_content)
-        
-        # 基于字段模式的实体识别
-        key_entities = self._extract_entities_from_schema(ddl_content)
-        
-        # 基于约束的业务规则推断
-        business_rules = self._infer_business_rules(ddl_content)
-        
-        fallback_knowledge = DomainKnowledge(
-            domain_type=domain_type,
-            business_problems=business_problems,
-            solution_approaches=[
-                f"通过{domain_type}系统管理相关业务流程",
-                f"建立标准化的{domain_type}操作规范"
-            ],
-            key_entities=key_entities,
-            business_rules=business_rules,
-            special_fields=[],
-            confidence=0.4,  # 降级分析的置信度较低
-            analysis_timestamp=datetime.now().isoformat()
-        )
-        
-        self.logger.info("✅ 降级分析完成")
-        return fallback_knowledge
-    
-    def _rule_based_domain_detection(self, ddl_content: str) -> str:
-        """基于规则的领域检测"""
-        domain_keywords = {
-            "电商系统": ["order", "product", "customer", "cart", "payment"],
-            "用户管理系统": ["user", "account", "profile", "auth", "permission"],
-            "内容管理系统": ["article", "post", "content", "media", "category"],
-            "财务管理系统": ["transaction", "account", "invoice", "payment", "balance"],
-            "库存管理系统": ["inventory", "stock", "warehouse", "supplier", "goods"]
-        }
-        
-        content_lower = ddl_content.lower()
-        domain_scores = {}
-        
-        for domain, keywords in domain_keywords.items():
-            score = sum(1 for keyword in keywords if keyword in content_lower)
-            if score > 0:
-                domain_scores[domain] = score
-        
-        if domain_scores:
-            return max(domain_scores, key=domain_scores.get)
-        
-        return "通用业务系统"
-    
-    def _infer_business_problems(self, ddl_content: str) -> List[str]:
-        """推断业务问题"""
-        return [
-            "需要管理和维护系统中的核心业务数据",
-            "需要确保业务流程的规范化和标准化执行"
-        ]
-    
-    def _extract_entities_from_schema(self, ddl_content: str) -> List[str]:
-        """从Schema提取实体"""
-        entities = []
-        # 简单提取CREATE TABLE后的表名作为实体
-        import re
-        table_matches = re.findall(r'CREATE TABLE `([^`]+)`', ddl_content)
-        
-        for table_name in table_matches[:3]:  # 最多3个
-            entities.append(f"{table_name}实体：代表系统中的{table_name}业务对象")
-        
-        return entities
-    
-    def _infer_business_rules(self, ddl_content: str) -> List[str]:
-        """推断业务规则"""
-        rules = []
-        
-        if "NOT NULL" in ddl_content:
-            rules.append("当创建业务记录时，系统必须确保关键字段不能为空")
-        
-        if "PRIMARY KEY" in ddl_content:
-            rules.append("每个业务实体必须具有唯一标识符以确保数据完整性")
-        
-        return rules
-    
-    def _create_fallback_domain_knowledge(self) -> DomainKnowledge:
-        """创建降级的领域知识"""
-        return DomainKnowledge(
-            domain_type="通用业务系统",
-            business_problems=["需要管理业务数据和流程"],
-            solution_approaches=["通过系统化方法管理业务"],
-            key_entities=["业务实体：系统中的核心业务对象"],
-            business_rules=["业务数据必须满足完整性约束"],
-            special_fields=[],
-            confidence=0.3,
-            analysis_timestamp=datetime.now().isoformat()
-        )
     
     def _optimize_ddl_for_llm(self, ddl_content: str) -> str:
         """DDL内容优化 - 适配LLM token限制"""
