@@ -115,8 +115,8 @@ class SemanticSQLReActAgent:
         if self.memory_manager:
             try:
                 tools.extend([
+                    create_domain_analysis_tool(memory_manager=self.memory_manager),
                     create_field_analysis_tool(memory_manager=self.memory_manager),
-                    # create_domain_analysis_tool(memory_manager=self.memory_manager),
                     create_column_analysis_tool(memory_manager=self.memory_manager),
                     create_table_analysis_tool(memory_manager=self.memory_manager),
                     create_er_analysis_tool(memory_manager=self.memory_manager)

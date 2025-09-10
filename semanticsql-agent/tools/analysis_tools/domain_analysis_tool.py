@@ -19,11 +19,12 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from jinja2 import Environment, BaseLoader
+from pydantic import Field
 
 from tools.base_tool import BaseSemanticSQLTool
 from models.exceptions import raise_tool_error, raise_dependency_error
 from config.settings import get_settings
-
+from utils.memory import Neo4jMemoryManager
 
 @dataclass
 class DomainKnowledge:
@@ -37,19 +38,6 @@ class DomainKnowledge:
     confidence: float = 0.0
     analysis_timestamp: str = ""
     
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典格式"""
-        return {
-            "domain_type": self.domain_type,
-            "business_problems": self.business_problems,
-            "solution_approaches": self.solution_approaches,
-            "key_entities": self.key_entities,
-            "business_rules": self.business_rules,
-            "special_fields": self.special_fields,
-            "confidence": self.confidence,
-            "analysis_timestamp": self.analysis_timestamp
-        }
-
 
 class DomainAnalysisTool(BaseSemanticSQLTool):
     """业务领域分析工具 - LLM增强版本
@@ -75,49 +63,45 @@ class DomainAnalysisTool(BaseSemanticSQLTool):
     
     name: str = "domain_analysis_tool"  
     description: str = "基于LLM的智能业务领域分析，识别业务问题、解决方案和核心实体"
+    memory_manager: Optional[Neo4jMemoryManager] = Field(default=None, exclude=True)
     
-    # LLM服务配置
-    # LLM_CONFIG = {
-    #     "temperature": 0.1,        # 保持分析一致性
-    #     "max_tokens": 4000,        # 支持复杂Schema分析
-    #     "timeout": 120,            # 2分钟超时
-    #     "retry_attempts": 3        # 失败重试3次
-    # }
-    
-    def __init__(self, **kwargs):
+    def __init__(self, memory_manager: Optional[Neo4jMemoryManager] = None, **kwargs):
         """初始化领域分析工具"""
         super().__init__(**kwargs)
-        # self.settings = get_settings()
-        # self.llm_service = None  # 将在需要时初始化
-        # self.jinja_env = Environment(loader=BaseLoader())
+        self.settings = get_settings()
     
     def _run(self, *args, **kwargs) -> str:
         """执行领域分析 - 基于LLM的智能分析流程"""
         self.logger.info(f"🔧 {self.name}: 开始执行 - 基于LLM的领域分析")
         
         try:
-            # # 1. 验证依赖：确保schema_extraction_tool已执行
-            # self._check_schema_extraction_dependency()
+            # 1. 验证依赖：确保schema_extraction_tool已执行
+            self._check_schema_extraction_dependency()
+            from config.factories import ComponentManager
             
-            # # 2. 从Neo4j读取数据库结构信息
-            # database_schema = self._query_neo4j_schema()
-            # if not database_schema.get("tables"):
-            #     raise_dependency_error(self.name, "schema_extraction_tool", "未找到数据库表结构信息")
+            # LLM是必需的
+            self.llm = ComponentManager.create_llm(self.settings)
+            self.memory_manager = ComponentManager.create_memory_manager(self.settings)
+               
+            # 2. 从Neo4j读取数据库结构信息
+            database_schema = self._query_neo4j_schema()
+            if not database_schema.get("tables"):
+                raise_dependency_error(self.name, "schema_extraction_tool", "未找到数据库表结构信息")
             
-            # # 3. 格式化为LLM可理解的DDL格式
-            # ddl_content = self._format_schema_to_ddl(database_schema)
+            # 3. 格式化为LLM可理解的DDL格式
+            ddl_content = self._format_schema_to_ddl(database_schema)
             
-            # # 4. 使用LLM进行深度领域分析
-            # domain_knowledge = self._analyze_domain_with_llm(ddl_content)
+            # 4. 使用LLM进行深度领域分析
+            domain_knowledge = self.llm(ddl_content)
             
-            # # 5. 直接存储到Neo4j知识图谱
-            # self._store_domain_knowledge_to_neo4j(domain_knowledge, database_schema)
+            # 5. 直接存储到Neo4j知识图谱
+            self._store_domain_knowledge_to_neo4j(domain_knowledge, database_schema)
             
-            # # 6. 返回分析结果
-            # result_message = self._build_analysis_result(domain_knowledge)
+            # 6. 返回分析结果
+            result_message = "✅ domain_analysis_tool提取完成，已存储到Neo4j。请继续执行field_analysis_tool工具。"
             
-            # self.logger.info(f"✅ {self.name}: 执行完成 - 识别领域: {domain_knowledge.domain_type}")
-            return "result_message"
+            self.logger.info(f"✅ {self.name}: 执行完成 - 识别领域: {domain_knowledge.domain_type}")
+            return result_message
             
         except Exception as e:
             error_msg = f"领域分析失败: {str(e)}"
