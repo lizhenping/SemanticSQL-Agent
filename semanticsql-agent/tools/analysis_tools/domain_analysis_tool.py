@@ -1,70 +1,81 @@
 """
-业务领域分析工具 - 极简架构重构版本
-基于新的BaseSemanticSQLTool，实现完全自主的领域识别
+业务领域分析工具 - 基于LLM的智能分析版本
+整合pipeline算法，采用直接Neo4j操作架构，实现深度业务理解
 """
 
 from typing import Dict, Any, List, Optional
 import json
-import re
+import logging
+from dataclasses import dataclass
+from datetime import datetime
 
 from tools.base_tool import BaseSemanticSQLTool
-from models.schemas import PredicateType, EntityType
 from models.exceptions import raise_tool_error, raise_dependency_error
+from config.settings import get_settings
+
+
+@dataclass
+class DomainKnowledge:
+    """领域知识数据模型 - 基于pipeline的结构化设计"""
+    domain_type: str
+    business_problems: List[str]
+    solution_approaches: List[str] 
+    key_entities: List[str]
+    business_rules: List[str]
+    special_fields: List[str]
+    confidence: float = 0.0
+    analysis_timestamp: str = ""
 
 
 class DomainAnalysisTool(BaseSemanticSQLTool):
-    """业务领域分析工具 - 极简重构版本
+    """业务领域分析工具 - LLM增强版本
     
-    职责：
-    - 基于数据库结构识别业务领域
-    - 分析表名和字段名的业务语义  
-    - 生成领域-实体关系三元组
-    - 为后续工具提供业务上下文
+    核心职责：
+    - 从Neo4j读取数据库结构信息（schema_extraction_tool的输出）
+    - 使用LLM进行深度业务领域分析（整合pipeline算法）
+    - 直接创建Neo4j业务知识图谱（Domain、BusinessProblem等节点）
+    - 为后续工具提供结构化业务上下文
     
     设计原则：
-    - 依赖记忆：基于schema_extraction工具的结果
-    - 智能推断：通过关键词匹配和模式识别
-    - 三元组输出：结构化业务知识
+    - 数据复用：直接从Neo4j读取已有结构信息
+    - LLM驱动：采用结构化提示词进行智能分析
+    - 知识图谱：建立丰富的业务知识关系网络
+    - 直接存储：跳过三元组抽象，直接操作Neo4j
     """
     
-    name: str = "domain_analysis"
-    description: str = "分析数据库的业务领域，识别主要业务概念和实体关系"
+    name: str = "domain_analysis_tool"  
+    description: str = "基于LLM的智能业务领域分析，识别业务问题、解决方案和核心实体"
     
     def __init__(self, **kwargs):
         """初始化领域分析工具"""
         super().__init__(**kwargs)
-        # 使用object.__setattr__避免Pydantic验证问题
-        object.__setattr__(self, 'domain_keywords', self._init_domain_keywords())
+        self.settings = get_settings()
+        self.llm_service = None  # 将在需要时初始化
     
     def _run(self, *args, **kwargs) -> str:
-        """执行工具分析"""
-        # 提取输入文本
-        input_text = args[0] if args else kwargs.get('input', '')
-        # 1. 清空上次执行的三元组
-        self._clear_generated_triples()
-        self._log_execution_start(input_text)
+        """执行领域分析 - 基于LLM的智能分析流程"""
+        self.logger.info(f"🔧 {self.name}: 开始执行 - 基于LLM的领域分析")
         
         try:
-            # 2. 检查依赖：需要schema_extraction工具的结果
-            self._check_dependencies(["schema_extraction"])
+            # 1. 验证依赖：确保schema_extraction_tool已执行
+            self._check_schema_extraction_dependency()
             
-            # 3. 获取数据库结构信息
-            schema_memory = self.get_memory_by_source_tool("schema_extraction")
-            schema_info = self._extract_schema_info(schema_memory)
+            # 2. 从Neo4j读取数据库结构信息
+            database_schema = self._query_neo4j_schema()
             
-            # 4. 分析业务领域
-            domain_analysis = self._analyze_business_domain(schema_info)
+            # 3. 格式化为LLM可理解的DDL格式
+            ddl_content = self._format_schema_to_ddl(database_schema)
             
-            # 5. 生成领域三元组
-            self._generate_domain_triples(domain_analysis, schema_info)
+            # 4. 使用LLM进行深度领域分析
+            domain_knowledge = self._analyze_domain_with_llm(ddl_content)
             
-            # 6. 持久化三元组到记忆系统
-            self._persist_triples()
+            # 5. 直接存储到Neo4j知识图谱
+            self._store_domain_knowledge_to_neo4j(domain_knowledge, database_schema)
             
-            # 7. 构建执行结果
-            result_message = self._build_result_message(domain_analysis)
+            # 6. 返回分析结果
+            result_message = self._build_analysis_result(domain_knowledge)
             
-            self._log_execution_end(f"识别出主领域: {domain_analysis['primary_domain']}")
+            self.logger.info(f"✅ {self.name}: 执行完成 - 识别领域: {domain_knowledge.domain_type}")
             return result_message
             
         except Exception as e:

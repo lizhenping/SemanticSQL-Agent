@@ -71,11 +71,11 @@ tool = FieldAnalysisTool(
 
 **执行流程**：
 1. 检查依赖（需要schema_extraction_tool的结果）
-2. 从Neo4j读取数据库结构信息（包含entropy_level和sample_values）
-3. 批量组织字段信息进行LLM分类
+2. 从Neo4j直接查询Column节点获取字段信息
+3. 逐字段进行LLM分类（使用entropy_level字符串）
 4. 解析LLM分类结果
-5. 更新Neo4j中Column节点的分类属性
-6. 生成分析统计报告
+5. 直接更新Neo4j Column节点的category/field_type/importance属性
+6. 生成分类统计报告
 7. 返回分析结果
 
 **异常处理**：
@@ -171,33 +171,32 @@ RETURN t.name as table_name,
 
 ## 数据分析方法
 
-### `_prepare_batch_for_llm(field_infos) -> List[Dict[str, Any]]`
+### `_classify_field_with_llm(field_info) -> Optional[Dict[str, Any]]`
 
-**功能**：准备字段信息用于LLM批量分类
+**功能**：使用LLM对单个字段进行分类
 
 **参数**：
-- `field_infos: List[Dict[str, Any]]` - 字段信息列表
+- `field_info: Dict[str, Any]` - 单个字段信息
 
 **返回值**：
 ```python
-[
-    {
-        "field_name": "users.id",
-        "data_type": "int",
-        "samples": [1, 2, 3],  # 取前3个样本用于LLM分析
-        "entropy": 0.95        # 从entropy_level转换为数值
-    }
-]
-```
-
-**熵值等级映射**：
-```python
-ENTROPY_LEVEL_MAPPING = {
-    "high": 0.85,     # 高熵：唯一值比例>=0.8
-    "medium": 0.55,   # 中熵：唯一值比例>=0.4
-    "low": 0.15       # 低熵：唯一值比例<0.4
+{
+    "field_name": "users.id",
+    "table_name": "users",
+    "column_name": "id",
+    "category": "identifier",
+    "field_type": "主键标识符",
+    "importance": "high",
+    "confidence": 0.8,
+    "data_type": "int",
+    "entropy_level": "high"
 }
 ```
+
+**关键点**：
+- 直接使用entropy_level字符串（"high"/"medium"/"low"）
+- 无需数值转换，LLM直接理解语义化等级
+- 逐字段处理，无批量逻辑
 
 ### `_classify_field_with_llm(field_info, context) -> Dict[str, Any]`
 
@@ -401,21 +400,13 @@ def _process_fields_in_batches(self, field_list, batch_size=10):
 
 ### `FIELD_ANALYSIS_CONFIG`
 
-**分析配置**（与Pipeline保持一致）：
+**分析配置**（简化版）：
 ```python
 FIELD_ANALYSIS_CONFIG = {
-    "batch_size": 5,                 # LLM批处理大小（与Pipeline一致）
-    "llm_temperature": 0.1,          # LLM温度（保持一致性）
-    "max_retries": 3,                # 最大重试次数
+    "max_retries": 3,                # LLM重试次数
+    "sample_count": 3,               # 用于LLM分析的样本数量
     
-    # 熵值等级到数值的映射
-    "entropy_mapping": {
-        "high": 0.85,
-        "medium": 0.55, 
-        "low": 0.15
-    },
-    
-    # 默认重要性映射
+    # 默认重要性映射（规则降级时使用）
     "default_importance": {
         "identifier": "high",
         "measure": "medium",
@@ -426,6 +417,9 @@ FIELD_ANALYSIS_CONFIG = {
         "other": "low"
     }
 }
+
+# 注意：移除了batch_size和entropy_mapping
+# entropy_level直接使用字符串，无需数值转换
 ```
 
 ## 错误处理

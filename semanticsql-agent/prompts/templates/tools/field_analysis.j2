@@ -1,0 +1,65 @@
+你是一个数据库字段分析专家，请分析以下字段的语义信息。
+
+## 上下文信息
+数据库名称：{{ database_name }}
+表名：{{ table_name }}
+{% if domain_type %}领域类型：{{ domain_type }}{% endif %}
+{% if domain_description %}业务描述：{{ domain_description }}{% endif %}
+
+## 字段信息
+字段名：{{ field_name }}
+数据类型：{{ data_type }}
+样本值：{{ sample_values[:3] | join(', ') }}
+熵值等级：{{ entropy_level }}
+是否主键：{{ is_primary }}
+是否外键：{{ is_foreign }}
+是否可空：{{ is_nullable }}
+{% if business_desc %}字段注释：{{ business_desc }}{% endif %}
+
+## 分类要求
+请为该字段提供以下分类信息：
+
+1. **category**: 字段类别，必须是以下之一：
+   - identifier: 标识符（如ID、编号、唯一标识等）
+   - measure: 度量值（可计算的数值，如金额、数量、分数等）
+   - dimension: 维度（分类、分组字段，如状态、类型、等级等）
+   - datetime: 日期时间（时间戳、日期、时间等）
+   - text: 文本（描述性文本、名称、地址等）
+   - boolean: 布尔值（是否标志、开关状态等）
+   - other: 其他（无法归类的字段）
+
+2. **field_type**: 更具体的字段类型描述（如：主键、外键、状态标志、金额、用户名等）
+
+3. **importance**: 重要性等级
+   - high: 关键字段（主键、外键、核心业务字段）
+   - medium: 重要字段（度量值、主要维度、时间字段）
+   - low: 普通字段（文本描述、辅助信息等）
+
+4. **business_meaning**: 字段的业务含义描述（1-2句话）
+
+5. **classification_confidence**: 分类置信度（0.0-1.0之间的数值）
+
+## 分析指导
+- 优先考虑字段名称的语义含义
+- 结合数据类型和样本值进行判断
+- 熵值等级可以辅助判断字段的唯一性特征：
+  - high: 高唯一性（通常是标识符）
+  - medium: 中等唯一性（可能是维度或度量值）
+  - low: 低唯一性（通常是维度或状态字段）
+- 考虑数据库领域上下文进行合理推断
+
+请严格按照以下JSON格式返回结果：
+{
+  "category": "上述类别之一",
+  "field_type": "具体类型描述",
+  "importance": "high/medium/low",
+  "business_meaning": "业务含义描述",
+  "classification_confidence": 0.95
+}
+
+注意：
+- category 必须严格从上述7个类别中选择
+- field_type 应该是具体的业务术语
+- importance 要综合考虑字段在业务中的重要程度
+- business_meaning 要简洁明了，体现字段的实际用途
+- classification_confidence 要根据分析的确定性程度设置

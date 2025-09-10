@@ -9,7 +9,7 @@ Field Analysis Tool 是 SemanticSQL Agent 工具链中的核心分析工具，�
 ### 1. 数据复用优化
 - **基础数据复用**：直接使用schema_extraction_tool已采集的sample_values和entropy_level
 - **LLM智能分类**：采用field_classification_pipeline的成熟分类算法
-- **批量处理优化**：支持多字段的高效批量分类
+- **简化处理设计**：逐字段处理，无批量逻辑复杂性
 
 ### 2. 记忆持久化架构
 - **Neo4j图存储**：将分析结果以图结构持久化，支持复杂的关联查询
@@ -35,23 +35,24 @@ Field Analysis Tool 是 SemanticSQL Agent 工具链中的核心分析工具，�
 - **boolean**: 布尔值
 - **other**: 其他类型
 
-### 2. 熵值信息复用
+### 2. 熵值等级直接使用
 
-直接使用schema_extraction_tool已计算的entropy_level信息：
+直接使用schema_extraction_tool已计算的entropy_level字符串：
 
 ```python
-# schema_extraction_tool已提供的熵值等级
+# schema_extraction_tool提供的熵值等级字符串
 entropy_levels = {
     "high": 唯一值比例 >= 0.8,    # 高唯一性字段
     "medium": 唯一值比例 >= 0.4,  # 中等唯一性字段
     "low": 唯一值比例 < 0.4     # 低唯一性字段
 }
 
-# 用于LLM分析的数值映射
-entropy_mapping = {
-    "high": 0.85,
-    "medium": 0.55,
-    "low": 0.15
+# LLM提示词中直接使用字符串
+field_data = {
+    'field_name': 'users.id',
+    'data_type': 'int',
+    'samples': [1, 2, 3],
+    'entropy': 'high'  # 直接使用字符串，无需数值转换
 }
 ```
 
@@ -90,27 +91,23 @@ entropy_mapping = {
 
 ```mermaid
 graph TD
-    A[Neo4j Schema Data] --> B[Field Analysis Tool]
-    C[MySQL Sample Data] --> B
-    B --> D[Pattern Matching]
-    B --> E[Entropy Calculation]
-    B --> F[LLM Analysis]
-    D --> G[Classification Results]
-    E --> G
-    F --> G
-    G --> H[Neo4j Knowledge Storage]
-    H --> I[Downstream Tools]
+    A[Neo4j Column Nodes] --> B[Field Analysis Tool]
+    B --> C[Read Field Info]
+    C --> D[LLM Classification]
+    D --> E[Parse Results]
+    E --> F[Update Column Attributes]
+    F --> G[Generate Stats Report]
+    G --> H[Downstream Tools]
 ```
 
 ### 2. 核心算法流程
 
 1. **依赖检查**：验证 `schema_extraction_tool` 的执行结果
-2. **数据读取**：从Neo4j读取字段元数据（包含entropy_level和sample_values）
-3. **批量准备**：将字段信息按批次组织，准备LLM分析
-4. **LLM分类**：使用field_classification_pipeline的提示词进行批量分类
-5. **结果解析**：解析LLM返回的JSON分类结果
-6. **数据更新**：将分类结果更新到Neo4j的Column节点
-7. **统计报告**：生成分类统计和分析报告
+2. **直接数据读取**：从Neo4j Column节点直接查询字段信息
+3. **逐字段LLM分类**：使用entropy_level字符串进行逐个字段分类
+4. **结果解析**：解析LLM返回的JSON分类结果
+5. **属性更新**：直接更新Column节点的category/field_type/importance属性
+6. **统计报告**：生成分类统计和分析报告
 
 ### 3. Neo4j 图结构扩展
 
@@ -238,20 +235,21 @@ FIELD_PATTERNS = {
 
 ### 1. 性能优化
 
-**批量处理策略**：
+**简化处理策略**：
 ```python
-# 与Pipeline一致的配置
+# 简化设计的配置
 OPTIMAL_CONFIG = {
-    "batch_size": 5,         # 与field_classification_pipeline保持一致
     "max_retries": 3,        # LLM调用重试次数
+    "sample_count": 3,       # 每个字段的样本数量
     "temperature": 0.1,      # 保证分类结果一致性
 }
+# 注意：移除了batch_size，采用逐字段处理
 ```
 
 **数据复用优化**：
 - 无需重复采样，直接使用schema_extraction_tool的数据
-- 大型数据库只需考虑LLM调用效率，无内存压力
-- 采用批量处理减少API调用次数
+- 直接使用entropy_level字符串，无需数值转换
+- 逐字段处理，逻辑简单明了
 
 ### 2. 错误处理
 
@@ -310,7 +308,7 @@ except LLMError:
 
 **分析速度慢**：
 - 无数据采样开销，主要瘤点在LLM调用
-- 增加 `batch_size` 减少LLM调用次数
+- 逐字段处理设计，如需提速可考虑并发处理
 - 检查LLM服务响应时间和网络状况
 
 **LLM服务异常**：
