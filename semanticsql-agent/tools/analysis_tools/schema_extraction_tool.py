@@ -60,23 +60,22 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
             简洁的执行结果，指向下一个工具
         """
         # 提取输入文本
-        input_text = args[0] if args else kwargs.get('input', '')
+
         
         # 自定义日志记录（避免基类中的三元组引用问题）
-        self.logger.info(f"🔧 {self.name}: 开始执行 - 输入: {str(input_text)[:100]}...")
+        self.logger.info(f"🔧 {self.name}: 开始执行 - 输入: ...")
         
         try:
             # 1. 解析输入参数和配置
-            config = self._parse_input_and_config(input_text)
-            
+        
             # 2. 获取数据库管理器
-            db_manager = self._get_database_manager(config)
+            db_manager = self._get_database_manager()
             
             # 3. 从MySQL提取原始数据
-            raw_data = self._extract_mysql_metadata(db_manager, config)
+            raw_data = self._extract_mysql_metadata(db_manager)
             
             # 4. 直接存储到Neo4j图结构
-            self._store_to_neo4j(raw_data, config)
+            self._store_to_neo4j(raw_data)
             
             # 5. 返回简洁成功消息
             result_message = "✅ schema_extraction_tool提取完成，已存储到Neo4j。请继续执行field_analysis_tool工具。"
@@ -92,35 +91,8 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
             return f"❌ {error_msg}"
     
     # ========== 核心业务逻辑 ==========
-    def _parse_input_and_config(self, input_text: str) -> Dict[str, Any]:
-        """解析输入参数和工具配置"""
-        try:
-            # 尝试解析JSON格式输入
-            if isinstance(input_text, dict):
-                config = input_text
-            else:
-                text = str(input_text).strip()
-                if text.startswith('{'):
-                    config = json.loads(text)
-                else:
-                    config = {}
-        except json.JSONDecodeError:
-            config = {}
-        
-        # 合并默认配置
-        default_config = {
-            "table_blacklist": ["aid_info"],  # 根据设计文档的示例
-            "use_db_comments": True
-        }
-        
-        # 更新配置
-        for key, default_value in default_config.items():
-            if key not in config:
-                config[key] = default_value
-                
-        return config
     
-    def _get_database_manager(self, config: Dict[str, Any]) -> DatabaseManager:
+    def _get_database_manager(self) -> DatabaseManager:
         """获取数据库管理器"""
         # 优先使用注入的管理器
         if self.database_manager:
@@ -132,23 +104,23 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
             "未找到数据库连接信息，请通过构造函数注入DatabaseManager"
         )
     
-    def _extract_mysql_metadata(self, db_manager: DatabaseManager, config: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_mysql_metadata(self, db_manager: DatabaseManager) -> Dict[str, Any]:
         """从MySQL提取元数据 - 按设计文档规范"""
         try:
             connection_info = db_manager.get_connection_info()
             database_name = connection_info["database"]
             
             # 1. 获取数据库级别信息
-            database_info = self._get_database_info(db_manager, database_name, config)
+            database_info = self._get_database_info(database_name)
             
             # 2. 获取所有表名并过滤
             all_tables = self._get_all_table_names(db_manager)
-            filtered_tables = self._filter_tables(all_tables, config.get("table_blacklist", []))
+            filtered_tables = self._filter_tables(all_tables, ["aid_info"])
             
             # 3. 提取每个表的详细信息
             tables_data = []
             for table_name in filtered_tables:
-                table_data = self._extract_table_metadata(db_manager, table_name, config)
+                table_data = self._extract_table_metadata(db_manager, table_name)
                 tables_data.append(table_data)
             
             self.logger.info(f"📊 成功提取数据库 {database_name}: {len(filtered_tables)} 个表 (过滤后)")
@@ -163,7 +135,7 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
         except Exception as e:
             raise_tool_error(self.name, f"MySQL元数据提取失败: {str(e)}")
     
-    def _get_database_info(self, db_manager: DatabaseManager, database_name: str, config: Dict[str, Any]) -> Dict[str, Any]:
+    def _get_database_info(self, database_name: str) -> Dict[str, Any]:
         """获取数据库级别信息
         
         MySQL不支持数据库级别的注释，business_desc字段保留在Neo4J中供后期填充
@@ -206,11 +178,12 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
         
         return filtered
     
-    def _extract_table_metadata(self, db_manager: DatabaseManager, table_name: str, config: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_table_metadata(self, db_manager: DatabaseManager, table_name: str) -> Dict[str, Any]:
         """提取单个表的元数据"""
         # 1. 获取表基本信息
         table_comment = ""
-        if config.get("use_db_comments", True):
+        use_db_comments = True
+        if use_db_comments == True:
             try:
                 sql = f"SELECT TABLE_COMMENT as table_comment FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{db_manager.database}' AND TABLE_NAME = '{table_name}'"
                 result = db_manager.execute_sql_safe(sql)
@@ -220,7 +193,7 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
                 self.logger.warning(f"获取表 {table_name} comment失败: {e}")
         
         # 2. 获取列信息
-        columns_data = self._extract_columns_metadata(db_manager, table_name, config)
+        columns_data = self._extract_columns_metadata(db_manager, table_name)
         
         return {
             "name": table_name,
@@ -229,7 +202,7 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
             "columns": columns_data
         }
     
-    def _extract_columns_metadata(self, db_manager: DatabaseManager, table_name: str, config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _extract_columns_metadata(self, db_manager: DatabaseManager, table_name: str) -> List[Dict[str, Any]]:
         """提取列元数据 - 包含当前阶段所有字段"""
         # 获取基础列信息
         result = self._query_column_info(db_manager, table_name)
@@ -239,7 +212,7 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
         # 处理每一列
         columns_data = []
         for row in result["data"]:
-            column_info = self._build_column_info(row, db_manager, table_name, config)
+            column_info = self._build_column_info(row, db_manager, table_name)
             columns_data.append(column_info)
             
         return columns_data
@@ -260,12 +233,12 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
         """
         return db_manager.execute_sql_safe(sql)
     
-    def _build_column_info(self, row: dict, db_manager: DatabaseManager, table_name: str, config: dict) -> dict:
+    def _build_column_info(self, row: dict, db_manager: DatabaseManager, table_name: str) -> dict:
         """构建单个列的完整信息"""
         column_name = row["column_name"]
         
         # 基础字段
-        column_info = self._create_base_column_info(row, config)
+        column_info = self._create_base_column_info(row)
         
         # 增强信息
         column_info["is_foreign"] = self._check_foreign_key(db_manager, table_name, column_name)
@@ -274,7 +247,7 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
         
         return column_info
     
-    def _create_base_column_info(self, row: dict, config: dict) -> dict:
+    def _create_base_column_info(self, row: dict) -> dict:
         """创建列的基础信息"""
         column_info = {
             "name": row["column_name"],
@@ -289,7 +262,8 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
         }
         
         # 处理业务描述
-        if config.get("use_db_comments", True):
+        use_db_comments = True
+        if use_db_comments == True:
             column_info["business_desc"] = row.get("column_comment", "") or ""
             
         return column_info
@@ -372,7 +346,7 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
             self.logger.warning(f"采集样本值失败 {table_name}.{column_name}: {e}")
             return []
     
-    def _store_to_neo4j(self, raw_data: Dict[str, Any], config: Dict[str, Any]) -> None:
+    def _store_to_neo4j(self, raw_data: Dict[str, Any]) -> None:
         """直接存储到Neo4j图结构 - 按设计文档Neo4j结构"""
         # 简单验证: 需要Neo4j连接
         if not self.memory_manager or not getattr(self.memory_manager, 'neo4j_graph', None):
