@@ -160,67 +160,6 @@ class TripleCollection(BaseModel):
         return merged
 
 
-class AgentState(BaseModel):
-    """Agent状态 - 极简设计，只有2个核心字段
-    
-    设计原则：
-    - 极简原则：只保留绝对必要的状态字段
-    - 记忆外置：复杂状态通过Neo4j记忆系统管理
-    - 自主决策：Agent基于记忆状态自主选择工具
-    """
-    
-    current_input: str = Field(description="用户当前输入")
-    database_params: Optional[Dict[str, Any]] = Field(default=None, description="数据库连接参数")
-
-
-class ToolResult(BaseModel):
-    """工具执行结果 - 标准化工具输出格式
-    
-    设计原则：
-    - 统一接口：所有工具返回统一格式
-    - 丰富信息：包含执行状态、结果数据、元数据
-    - 错误处理：支持错误信息传递
-    """
-    
-    success: bool = Field(description="执行是否成功")
-    triples: TripleCollection = Field(description="生成的三元组集合")
-    message: str = Field(default="", description="执行消息")
-    execution_time: Optional[float] = Field(default=None, description="执行耗时(秒)")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="额外元数据")
-    error: Optional[str] = Field(default=None, description="错误信息")
-    
-    @classmethod
-    def success_result(cls, 
-                      triples: TripleCollection, 
-                      message: str = "执行成功",
-                      **kwargs) -> 'ToolResult':
-        """创建成功结果"""
-        return cls(
-            success=True,
-            triples=triples,
-            message=message,
-            **kwargs
-        )
-    
-    @classmethod
-    def error_result(cls, 
-                    error: str, 
-                    tool_name: str = "unknown",
-                    **kwargs) -> 'ToolResult':
-        """创建错误结果"""
-        empty_collection = TripleCollection(source_tool=tool_name)
-        return cls(
-            success=False,
-            triples=empty_collection,
-            error=error,
-            message=f"执行失败: {error}",
-            **kwargs
-        )
-
-
-
-
-
 # 便利函数
 def create_triple(subject: str, 
                  predicate: str, 

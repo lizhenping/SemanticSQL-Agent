@@ -24,7 +24,6 @@ from .schemas import (
     EntityType,
     SemanticTriple,
     TripleCollection,
-    ToolResult,
     create_triple,
     create_triple_collection
 )
@@ -41,7 +40,6 @@ __all__ = [
     "EntityType", 
     "SemanticTriple",
     "TripleCollection",
-    "ToolResult",
     "create_triple",
     "create_triple_collection"
     
