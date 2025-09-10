@@ -14,8 +14,7 @@ import click
 import yaml
 
 from config.settings import Settings
-from utils.database_config import DatabaseConfig
-from agent.sql_agent import create_semantic_sql_agent, SemanticSQLReActAgent
+from agent.sql_agent import create_semantic_sql_agent
 from models.exceptions import (
     DatabaseConnectionError,
     LLMError,

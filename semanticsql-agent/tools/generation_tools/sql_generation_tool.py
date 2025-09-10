@@ -74,8 +74,25 @@ class SQLGenerationTool(BaseSemanticSQLTool):
     description: str = "根据自然语言问题生成SQL查询，自动从记忆中获取schema和分析结果"
     args_schema: Type[BaseModel] = SQLGenerationInput
     
-    def __init__(self, llm=None, db_manager: DatabaseManager = None, **kwargs):
+    def __init__(self, llm=None, db_manager: Optional[DatabaseManager] = None, **kwargs):
+        """初始化SQL生成工具
+        
+        Args:
+            llm: 语言模型 [DEPRECATED - 通过ComponentFactory创建]
+            db_manager: 数据库管理器 [DEPRECATED - 通过ComponentFactory创建]
+            **kwargs: 其他参数
+        """
         super().__init__(**kwargs)
+        
+        # 废弃警告
+        if llm is not None or db_manager is not None:
+            import warnings
+            warnings.warn(
+                "Direct dependency injection is deprecated. Use ComponentFactory to create all components.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+        
         object.__setattr__(self, 'llm', llm)
         object.__setattr__(self, 'db_manager', db_manager)
         object.__setattr__(self, 'prompt_manager', PromptManager())

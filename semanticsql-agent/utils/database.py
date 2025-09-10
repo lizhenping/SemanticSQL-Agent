@@ -4,7 +4,10 @@
 """
 
 import logging
-from typing import Dict, Any, Optional, List, Union
+from typing import Dict, Any, Optional, List, Union, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from config.settings import Settings
 from contextlib import contextmanager
 import json
 
@@ -28,43 +31,69 @@ class DatabaseManager:
     - 结构化输出：返回标准化的数据结构
     - 错误处理：详细的错误分类和日志记录
     - 资源管理：自动连接池管理和资源清理
+    - 统一配置：优先使用Settings统一配置
     """
     
-    def __init__(self, connection_params: Dict[str, Any]):
+    def __init__(self, connection_params: Optional[Dict[str, Any]] = None, settings: Optional['Settings'] = None):
         """
-        初始化数据库管理器
+        初始化数据库管理器 - 支持统一Settings配置
         
         Args:
-            connection_params: 数据库连接参数
-            {
-                "host": "localhost",
-                "port": 3306,
-                "database": "test_db", 
-                "username": "root",
-                "password": "password",
-                "type": "mysql"  # mysql, postgresql, sqlite
-            }
+            connection_params: 数据库连接参数 [DEPRECATED - 使用settings参数]
+            settings: 统一配置对象 (推荐方式)
         """
-        self.connection_params = connection_params
-        self.engine = None
-        self.session_factory = None
         self.logger = logging.getLogger(__name__)
         
-        # 验证必需参数
-        required_params = ["host", "database", "username", "password"]
-        missing_params = [p for p in required_params if p not in connection_params]
-        if missing_params:
+        # 配置优先级：Settings > connection_params
+        if settings is not None:
+            # 优先使用统一Settings配置
+            self.db_type = settings.db_type.lower()
+            self.host = settings.db_host
+            self.port = settings.db_port
+            self.database = settings.db_database
+            self.username = settings.db_username
+            self.password = settings.db_password
+            self.connection_params = {
+                "type": self.db_type,
+                "host": self.host,
+                "port": self.port,
+                "database": self.database,
+                "username": self.username,
+                "password": self.password
+            }
+        elif connection_params is not None:
+            # 兼容模式：使用connection_params
+            import warnings
+            warnings.warn(
+                "connection_params is deprecated. Use 'settings' parameter instead.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            self.connection_params = connection_params
+            
+            # 验证必需参数
+            required_params = ["host", "database", "username", "password"]
+            missing_params = [p for p in required_params if p not in connection_params]
+            if missing_params:
+                raise DatabaseConnectionError(
+                    "参数验证",
+                    {"missing_params": missing_params}
+                )
+            
+            self.db_type = connection_params.get("type", "mysql").lower()
+            self.host = connection_params["host"]
+            self.port = connection_params.get("port", 3306)
+            self.database = connection_params["database"]
+            self.username = connection_params["username"]
+            self.password = connection_params["password"]
+        else:
             raise DatabaseConnectionError(
                 "参数验证",
-                {"missing_params": missing_params}
+                {"error": "必须提供 settings 或 connection_params 参数"}
             )
         
-        self.db_type = connection_params.get("type", "mysql").lower()
-        self.host = connection_params["host"]
-        self.port = connection_params.get("port", 3306)
-        self.database = connection_params["database"]
-        self.username = connection_params["username"]
-        self.password = connection_params["password"]
+        self.engine = None
+        self.session_factory = None
     
     def initialize(self) -> bool:
         """
@@ -465,22 +494,38 @@ class DatabaseManager:
 
 
 # ========== 便利函数 ==========
-def create_database_manager(connection_params: Dict[str, Any]) -> DatabaseManager:
+def create_database_manager(connection_params: Optional[Dict[str, Any]] = None, settings: Optional['Settings'] = None) -> DatabaseManager:
     """
-    创建数据库管理器的便利函数
+    创建数据库管理器的便利函数 - 支持统一Settings配置
     
     Args:
-        connection_params: 数据库连接参数
+        connection_params: 数据库连接参数 [DEPRECATED - 使用settings参数]
+        settings: 统一配置对象 (推荐方式)
         
     Returns:
         初始化的数据库管理器
     """
-    manager = DatabaseManager(connection_params)
+    if settings is not None:
+        manager = DatabaseManager(settings=settings)
+    elif connection_params is not None:
+        import warnings
+        warnings.warn(
+            "connection_params is deprecated. Use 'settings' parameter instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        manager = DatabaseManager(connection_params=connection_params)
+    else:
+        # 尝试使用默认配置
+        from config.settings import get_settings
+        default_settings = get_settings()
+        manager = DatabaseManager(settings=default_settings)
     
     if not manager.initialize():
+        db_type = getattr(manager, 'db_type', 'unknown')
         raise DatabaseConnectionError(
-            connection_params.get("type", "unknown"),
-            connection_params
+            db_type,
+            {"host": getattr(manager, 'host', 'unknown'), "database": getattr(manager, 'database', 'unknown')}
         )
     
     return manager

@@ -10,7 +10,6 @@ from langchain_openai import ChatOpenAI
 from config.settings import Settings, get_settings
 from utils.memory import Neo4jMemoryManager
 from utils.database import DatabaseManager
-from utils.database_config import DatabaseConfig, DatabaseType
 from models.exceptions import (
     AgentInitializationError, 
     DatabaseConnectionError,
@@ -130,18 +129,8 @@ class DatabaseFactory:
                 )
         
         try:
-            # 构建连接参数
-            connection_params = {
-                "host": settings.db_host,
-                "port": settings.db_port,
-                "database": settings.db_database,
-                "username": settings.db_username,
-                "password": settings.db_password,
-                "type": settings.db_type
-            }
-            
-            # 创建数据库管理器
-            db_manager = DatabaseManager(connection_params)
+            # 创建数据库管理器 - 使用统一Settings配置
+            db_manager = DatabaseManager(settings=settings)
             
             # 强制初始化和健康检查
             logger.info("🔍 执行数据库健康检查...")
@@ -200,11 +189,9 @@ class MemoryFactory:
                 raise AgentInitializationError("Neo4j", "密码未配置")
             
         try:
-            # 创建Neo4j记忆管理器 - 遵循fail_fast策略
+            # 创建Neo4j记忆管理器 - 使用统一Settings配置
             memory_manager = Neo4jMemoryManager(
-                neo4j_uri=settings.neo4j_uri,
-                neo4j_user=settings.neo4j_user,
-                neo4j_password=settings.neo4j_password,
+                settings=settings,
                 use_fallback=not settings.fail_fast  # fail_fast=True时不允许降级
             )
             

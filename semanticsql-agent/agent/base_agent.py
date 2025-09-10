@@ -14,7 +14,6 @@ from langchain.tools import BaseTool
 from langchain_core.memory import BaseMemory
 
 from config.settings import Settings
-from utils.database_config import DatabaseConfig
 from models.agent import AgentExecution, AgentStep
 from utils.trajectory import TrajectoryRecorder
 from utils.callbacks import TrajectoryCallbackHandler
@@ -35,15 +34,14 @@ class BaseAgent(ABC):
     - 类型安全：明确的接口和数据流
     """
     
-    def __init__(self, settings: Settings, db_config: DatabaseConfig):
-        """初始化 Agent - 简化版本
+    def __init__(self, settings: Settings):
+        """初始化 Agent - 统一配置版本
         
         Args:
-            settings: 系统配置
-            db_config: 数据库配置
+            settings: 系统配置 (统一配置源)
         """
         self.settings = settings
-        self.db_config = db_config
+            
         self.logger = logging.getLogger(self.__class__.__name__)
         
         # 初始化核心组件
@@ -169,10 +167,13 @@ class BaseAgent(ABC):
     
     # ========== Agent 和参数创建 ==========
     def _create_execution_params(self, task: str, **kwargs) -> Dict[str, Any]:
-        """创建执行参数"""
+        """创建执行参数 - 使用统一Settings配置"""
+        # 统一从Settings获取数据库名称
+        database_name = self.settings.db_database
+            
         params = {
             "input": task,
-            "database_name": getattr(self.db_config, 'database', 'unknown'),
+            "database_name": database_name,
         }
         params.update(kwargs)
         return params
@@ -208,11 +209,14 @@ class BaseAgent(ABC):
     
     def _create_prompt(self) -> ChatPromptTemplate:
         """创建提示词模板 - 使用统一的PromptManager"""
+        # 统一从Settings获取数据库名称
+        database_name = self.settings.db_database
+            
         # 构建模板参数
         template_params = {
             'tools': self._get_tool_descriptions(),
             'tool_names': self._get_tool_names_str(),
-            'database_name': getattr(self.db_config, 'database', 'unknown'),
+            'database_name': database_name,
             'input': '{input}',  # 保留LangChain占位符
         }
         

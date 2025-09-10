@@ -138,6 +138,14 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
             connection_info = db_manager.get_connection_info()
             database_name = connection_info["database"]
             
+            # 运行时配置一致性检查（可选）
+            from config.settings import get_settings
+            settings = get_settings()
+            if settings.fail_fast and database_name != settings.db_database:
+                self.logger.warning(
+                    f"⚠️ 数据库名称不一致: 运行时={database_name}, 配置={settings.db_database}"
+                )
+            
             # 1. 获取数据库级别信息
             database_info = self._get_database_info(db_manager, database_name, config)
             
@@ -358,7 +366,8 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
             
             if result.get("success") and result.get("data"):
                 return [row[column_name] for row in result["data"] if row[column_name] is not None]
-            return []
+            # 如果没有获取到内容，直接报错
+            raise Exception(f"无法获取表 {table_name} 列 {column_name} 的样本数据: {result.get('error', '未知错误')}")
             
         except Exception as e:
             self.logger.warning(f"采集样本值失败 {table_name}.{column_name}: {e}")

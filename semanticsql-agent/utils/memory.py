@@ -55,17 +55,13 @@ class Neo4jMemoryManager:
     """
     
     def __init__(self, 
-                 neo4j_uri: str = "",
-                 neo4j_user: str = "neo4j", 
-                 neo4j_password: str = "",
+                 settings: 'Settings',
                  use_fallback: bool = False):
         """
-        初始化Neo4j记忆管理器 - 强制fail-fast原则
+        初始化Neo4j记忆管理器 - 统一Settings配置
         
         Args:
-            neo4j_uri: Neo4j连接URI
-            neo4j_user: 用户名
-            neo4j_password: 密码
+            settings: 统一配置对象 (必需)
             use_fallback: 是否在连接失败时使用内存后备存储（默认False，强制fail-fast）
         """
         self.logger = logging.getLogger(__name__)
@@ -73,18 +69,23 @@ class Neo4jMemoryManager:
         self.neo4j_graph = None
         self.fallback_storage = {} if use_fallback else None
         
+        # 统一从Settings获取配置
+        self.neo4j_uri = settings.neo4j_uri
+        self.neo4j_user = settings.neo4j_user
+        self.neo4j_password = settings.neo4j_password
+        
         # 检查Neo4j依赖
         if not NEO4J_AVAILABLE:
             raise MemoryConnectionError("Neo4j", {
                 "error": "Neo4j依赖不可用，请安装langchain-neo4j或langchain-community"
             })
         
-        # 强制尝试连接Neo4j - 移除密码空检查
+        # 强制尝试连接Neo4j - 使用统一配置
         try:
             self.neo4j_graph = Neo4jGraph(
-                url=neo4j_uri,
-                username=neo4j_user,
-                password=neo4j_password
+                url=self.neo4j_uri,
+                username=self.neo4j_user,
+                password=self.neo4j_password
             )
             # 测试连接
             self.neo4j_graph.query("MATCH (n) RETURN count(n) LIMIT 1")
@@ -95,8 +96,8 @@ class Neo4jMemoryManager:
             
             if not use_fallback:
                 raise MemoryConnectionError("Neo4j", {
-                    "uri": neo4j_uri,
-                    "user": neo4j_user,
+                    "uri": self.neo4j_uri,
+                    "user": self.neo4j_user,
                     "error": str(e)
                 })
             else:
@@ -462,26 +463,21 @@ class Neo4jMemoryManager:
 
 
 # ========== 便利函数 ==========
-def create_memory_manager(neo4j_uri: Optional[str] = None,
-                         neo4j_user: Optional[str] = None,
-                         neo4j_password: Optional[str] = None) -> Neo4jMemoryManager:
+def create_memory_manager(settings: Optional['Settings'] = None) -> Neo4jMemoryManager:
     """
-    创建记忆管理器的便利函数
+    创建记忆管理器的便利函数 - 统一Settings配置
     
     Args:
-        neo4j_uri: Neo4j连接URI
-        neo4j_user: 用户名
-        neo4j_password: 密码
+        settings: 统一配置对象 (可选，默认使用全局配置)
         
     Returns:
-        配置好的记忆管理器
+        Neo4j记忆管理器实例
     """
-    return Neo4jMemoryManager(
-        neo4j_uri=neo4j_uri or "bolt://localhost:7687",
-        neo4j_user=neo4j_user or "neo4j",
-        neo4j_password=neo4j_password or "",
-        use_fallback=False
-    )
+    if settings is None:
+        from config.settings import get_settings
+        settings = get_settings()
+    
+    return Neo4jMemoryManager(settings=settings)
 
 
 def format_memory_text(memory_triples: List[Dict[str, Any]], limit: int = 10) -> str:
