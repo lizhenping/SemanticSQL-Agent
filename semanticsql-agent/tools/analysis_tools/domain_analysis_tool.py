@@ -483,18 +483,13 @@ class DomainAnalysisTool(BaseSemanticSQLTool):
         # 更新Database节点的business_desc属性
         cypher = '''
         MATCH (db:Database {name: $database_name})
-        SET db.business_desc = $business_desc,
-            db.domain_analysis_confidence = $confidence,
-            db.domain_analysis_timestamp = $timestamp,
-            db.analyzed_by = 'domain_analysis_tool'
+        SET db.business_desc = $business_desc
         RETURN db
         '''
         
         params = {
             "database_name": database_name,
-            "business_desc": domain_analysis_text,
-            "confidence": domain_knowledge.confidence,
-            "timestamp": domain_knowledge.analysis_timestamp
+            "business_desc": domain_analysis_text
         }
         
         self.memory_manager.neo4j_graph.query(cypher, params)
