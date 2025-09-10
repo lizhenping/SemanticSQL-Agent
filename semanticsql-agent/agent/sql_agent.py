@@ -12,13 +12,12 @@ from langchain.agents.format_scratchpad import format_log_to_str
 from langchain_core.tools.render import render_text_description
 from langchain_openai import ChatOpenAI
 
-from agent.state import AgentState, create_agent_state, extract_database_info
+from agent.state import  create_agent_state, extract_database_info
 from agent.parsers import SemanticSQLOutputParser
-from utils.memory import Neo4jMemoryManager
-from utils.database import DatabaseManager
+
 from models.exceptions import AgentExecutionError, AgentInitializationError
 from prompts.manager import PromptManager
-from config.factories import ComponentFactory
+
 
 # 新工具系统导入 - 基于BaseSemanticSQLTool
 from tools.analysis_tools.schema_extraction_tool import create_schema_extraction_tool
@@ -45,66 +44,33 @@ class SemanticSQLReActAgent:
     """
     
     def __init__(self, 
-                 llm: Optional[ChatOpenAI] = None,
+                 settings: Optional['Settings'] = None,
                  tools: Optional[List] = None,
-                 memory_manager: Optional[Neo4jMemoryManager] = None,
-                 database_manager: Optional[DatabaseManager] = None,
                  max_iterations: int = 15,
                  verbose: bool = True):
-        """初始化SemanticSQL智能体
+        """初始化SemanticSQL智能体 - 简化版本
         
         Args:
-            llm: 语言模型实例
+            settings: 配置实例（可选，默认使用全局配置）
             tools: 工具列表（可选，默认使用完整SemanticSQL工具集）
-            memory_manager: Neo4j记忆管理器（可选）
-            database_manager: 数据库管理器（可选）
             max_iterations: 最大迭代次数
             verbose: 是否显示详细执行过程
         """
         self.logger = logging.getLogger(self.__class__.__name__)
         
-        # 核心组件初始化 - 强制统一配置工厂
+        # 获取配置
         from config.settings import get_settings
-        settings = get_settings()
-
-        if llm is None and memory_manager is None and database_manager is None:
-            # 未注入任何组件 → 全部交给工厂创建（包含健康检查与fail-fast）
-            components = ComponentFactory.create_all_components(settings)
-            self.llm = components["llm"]
-            self.memory_manager = components["memory_manager"]
-            self.database_manager = components["database_manager"]
-        else:
-            # 存在部分注入
-            if settings.fail_fast:
-                missing = []
-                if llm is None:
-                    missing.append("llm")
-                if memory_manager is None:
-                    missing.append("memory_manager")
-                if database_manager is None:
-                    missing.append("database_manager")
-                if missing:
-                    raise AgentInitializationError(
-                        "SemanticSQLAgent",
-                        f"fail_fast 模式下不允许部分注入: 缺少 {', '.join(missing)}。请使用ComponentFactory或显式提供全部组件"
-                    )
-                # 全量注入 → 直接使用
-                self.llm = llm
-                self.memory_manager = memory_manager
-                self.database_manager = database_manager
-            else:
-                # 非fail-fast允许按需补全（仍通过统一工厂创建缺失组件）
-                from config.factories import LLMFactory, MemoryFactory, DatabaseFactory
-                self.llm = llm or LLMFactory.create_llm(settings)
-                self.memory_manager = memory_manager or MemoryFactory.create_memory_manager(settings)
-                self.database_manager = database_manager or DatabaseFactory.create_database_manager(settings)
+        self.settings = settings or get_settings()
+        
+        # 创建所有核心组件
+        from config.factories import ComponentManager
+        components = ComponentManager.create_all_components(self.settings)
+        self.llm = components["llm"]
+        self.memory_manager = components["memory_manager"]
+        self.database_manager = components["database_manager"]
             
         self.max_iterations = max_iterations
         self.verbose = verbose
-        
-        # fail-fast: 确认Neo4j连接不可被绕过
-        if settings.fail_fast and not getattr(self.memory_manager, 'neo4j_graph', None):
-            raise AgentInitializationError("Neo4j", "连接不可用，请检查配置并在启动时解决连接问题")
 
         # 工具系统初始化
         self.tools = tools or self._create_semantic_sql_tools()
@@ -114,15 +80,7 @@ class SemanticSQLReActAgent:
         
         self.logger.info(f"✅ SemanticSQL Agent初始化完成 - {len(self.tools)}个工具")
     
-    def _create_default_llm(self) -> ChatOpenAI:
-        """创建默认LLM实例 - 使用统一配置，避免硬编码"""
-        from config.factories import LLMFactory
-        return LLMFactory.create_llm()
-    
-    def _create_default_memory_manager(self) -> Neo4jMemoryManager:
-        """创建默认的Neo4j记忆管理器 - 使用统一配置，避免硬编码"""
-        from config.factories import MemoryFactory
-        return MemoryFactory.create_memory_manager()
+
     
     def _create_semantic_sql_tools(self) -> List:
         """创建完整的SemanticSQL工具集 - 基于新的BaseSemanticSQLTool"""
@@ -346,42 +304,21 @@ class SemanticSQLReActAgent:
 
 # ========== 工厂函数 ==========
 
-def create_llm(config_type="openai", **kwargs) -> ChatOpenAI:
-    """创建语言模型实例 - DEPRECATED: 使用 LLMFactory.create_llm() 代替
-    
-    Args:
-        config_type: LLM类型 ("openai")
-        **kwargs: LLM配置参数
-        
-    Returns:
-        语言模型实例
-    """
-    import warnings
-    warnings.warn(
-        "create_llm() is deprecated. Use config.factories.LLMFactory.create_llm() instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    
-    from config.factories import LLMFactory
-    return LLMFactory.create_llm()
+def create_llm() -> ChatOpenAI:
+    """创建语言模型实例 - 简化版本"""
+    from config.factories import ComponentManager
+    return ComponentManager.create_llm()
 
 
 def create_semantic_sql_agent(
-    config_type="openai", 
-    llm_config: Optional[Dict[str, Any]] = None, 
-    database_config: Optional[Dict[str, Any]] = None,
-    tools: Optional[List] = None,
     settings: Optional['Settings'] = None,
+    tools: Optional[List] = None,
     **agent_kwargs
 ) -> SemanticSQLReActAgent:
-    """创建完整配置的SemanticSQL智能体 - 推荐使用统一Settings配置
+    """创建SemanticSQL智能体 - 简化版本
     
     Args:
-        settings: 统一配置实例 (推荐方式)
-        config_type: LLM类型 ("openai") [DEPRECATED]
-        llm_config: LLM配置字典 [DEPRECATED - 使用settings]
-        database_config: 数据库配置字典 [DEPRECATED - 使用settings]
+        settings: 配置实例（可选，默认使用全局配置）
         tools: 工具列表（可选，默认使用完整SemanticSQL工具集）
         **agent_kwargs: 智能体其他参数
         
@@ -389,7 +326,6 @@ def create_semantic_sql_agent(
         配置完整的SemanticSQL智能体实例
         
     Example:
-        # 推荐方式：使用统一Settings
         from config.settings import get_settings
         settings = get_settings()
         agent = create_semantic_sql_agent(
@@ -397,75 +333,10 @@ def create_semantic_sql_agent(
             max_iterations=15,
             verbose=True
         )
-        
-        # 兼容方式（将被废弃）
-        agent = create_semantic_sql_agent(
-            config_type="openai",
-            llm_config={"model": "gpt-4", "temperature": 0.7},
-            database_config={"host": "localhost", "database": "test_db"}
-        )
     """
-    
-    
-    # 优先使用统一Settings配置
-    if settings is not None:
-        # 使用Settings配置（推荐方式）
-        from config.factories import ComponentFactory
-        components = ComponentFactory.create_all_components(settings)
-        
-        return SemanticSQLReActAgent(
-            llm=components["llm"],
-            tools=tools,
-            memory_manager=components["memory_manager"],
-            database_manager=components["database_manager"],
-            **agent_kwargs
-        )
-    
-    # 向后兼容：使用传统字典配置（将废弃）
-    import warnings
-    warnings.warn(
-        "Using llm_config/database_config is deprecated. Use 'settings' parameter instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    
-    # 1. 创建LLM实例（兼容模式）
-    if llm_config is None:
-        llm_config = {}
-        
-    llm = create_llm(config_type=config_type, **llm_config)
-    
-    # 2. 创建数据库管理器（兼容模式）
-    database_manager = None
-    if database_config:
-        from utils.database_config import DatabaseConfig
-        db_config = DatabaseConfig(**database_config)
-        
-        # 将DatabaseConfig转换为DatabaseManager所需的字典格式
-        db_params = {
-            "host": db_config.host,
-            "port": db_config.port,
-            "database": db_config.database,
-            "username": db_config.username,
-            "password": db_config.password,
-            "type": db_config.type.value,
-            "charset": db_config.charset
-        }
-        
-        database_manager = DatabaseManager(db_params)
-        if not database_manager.initialize():
-            raise AgentInitializationError("DatabaseManager", "数据库连接失败")
-    
-    # 3. 创建记忆管理器（兼容模式）
-    from config.factories import MemoryFactory
-    memory_manager = MemoryFactory.create_memory_manager()
-    
-    # 4. 创建智能体实例
     return SemanticSQLReActAgent(
-        llm=llm,
+        settings=settings,
         tools=tools,
-        memory_manager=memory_manager,
-        database_manager=database_manager,
         **agent_kwargs
     )
 
