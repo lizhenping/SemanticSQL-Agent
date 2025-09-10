@@ -54,20 +54,15 @@ class Neo4jMemoryManager:
     3. get_related_triples() - 获取实体相关三元组
     """
     
-    def __init__(self, 
-                 settings: 'Settings',
-                 use_fallback: bool = False):
+    def __init__(self, settings: 'Settings'):
         """
-        初始化Neo4j记忆管理器 - 统一Settings配置
+        初始化Neo4j记忆管理器
         
         Args:
-            settings: 统一配置对象 (必需)
-            use_fallback: 是否在连接失败时使用内存后备存储（默认False，强制fail-fast）
+            settings: 统一配置对象
         """
         self.logger = logging.getLogger(__name__)
-        self.use_fallback = use_fallback
         self.neo4j_graph = None
-        self.fallback_storage = {} if use_fallback else None
         
         # 统一从Settings获取配置
         self.neo4j_uri = settings.neo4j_uri
@@ -80,7 +75,7 @@ class Neo4jMemoryManager:
                 "error": "Neo4j依赖不可用，请安装langchain-neo4j或langchain-community"
             })
         
-        # 强制尝试连接Neo4j - 使用统一配置
+        # 连接Neo4j
         try:
             self.neo4j_graph = Neo4jGraph(
                 url=self.neo4j_uri,
@@ -93,16 +88,11 @@ class Neo4jMemoryManager:
         except Exception as e:
             error_msg = f"Neo4j连接失败: {e}"
             self.logger.error(f"❌ {error_msg}")
-            
-            if not use_fallback:
-                raise MemoryConnectionError("Neo4j", {
-                    "uri": self.neo4j_uri,
-                    "user": self.neo4j_user,
-                    "error": str(e)
-                })
-            else:
-                self.logger.warning("📦 使用内存后备存储")
-                self.fallback_storage = {}
+            raise MemoryConnectionError("Neo4j", {
+                "uri": self.neo4j_uri,
+                "user": self.neo4j_user,
+                "error": str(e)
+            })
     
     def store_triples(self, 
                      triples: Union[List[SemanticTriple], TripleCollection], 
@@ -134,11 +124,8 @@ class Neo4jMemoryManager:
                 if not triple.source_tool:
                     triple.source_tool = source_tool
             
-            # 尝试存储到Neo4j
-            if self.neo4j_graph:
-                success = self._store_to_neo4j(triple_list, source_tool)
-            else:
-                success = self._store_to_fallback(triple_list, source_tool)
+            # 存储到Neo4j
+            success = self._store_to_neo4j(triple_list, source_tool)
             
             if success:
                 self.logger.info(f"💾 成功存储 {len(triple_list)} 个三元组 (来源: {source_tool})")
@@ -161,11 +148,7 @@ class Neo4jMemoryManager:
             三元组字典列表
         """
         try:
-            if self.neo4j_graph:
-                results = self._query_neo4j_by_source(source_tool, limit)
-            else:
-                results = self._query_fallback_by_source(source_tool, limit)
-            
+            results = self._query_neo4j_by_source(source_tool, limit)
             self.logger.debug(f"🔍 查询 {source_tool} 记忆: {len(results)} 条")
             return results
             
@@ -189,11 +172,7 @@ class Neo4jMemoryManager:
             相关三元组列表
         """
         try:
-            if self.neo4j_graph:
-                results = self._query_neo4j_related(entity, relation_types, limit)
-            else:
-                results = self._query_fallback_related(entity, relation_types, limit)
-            
+            results = self._query_neo4j_related(entity, relation_types, limit)
             self.logger.debug(f"🔍 查询 {entity} 相关记忆: {len(results)} 条")
             return results
             
@@ -227,14 +206,9 @@ class Neo4jMemoryManager:
             清空是否成功
         """
         try:
-            if self.neo4j_graph:
-                success = self._clear_neo4j_memory(source_tool)
-            else:
-                success = self._clear_fallback_memory(source_tool)
-            
+            success = self._clear_neo4j_memory(source_tool)
             if success:
                 self.logger.info(f"🗑️ 清空工具 {source_tool} 的记忆")
-            
             return success
             
         except Exception as e:
@@ -244,10 +218,7 @@ class Neo4jMemoryManager:
     def get_memory_statistics(self) -> Dict[str, Any]:
         """获取记忆统计信息"""
         try:
-            if self.neo4j_graph:
-                return self._get_neo4j_statistics()
-            else:
-                return self._get_fallback_statistics()
+            return self._get_neo4j_statistics()
         except Exception as e:
             self.logger.warning(f"⚠️ 获取记忆统计失败: {e}")
             return {"error": str(e)}
@@ -265,10 +236,7 @@ class Neo4jMemoryManager:
             
         except Exception as e:
             self.logger.error(f"❌ Neo4j存储失败: {e}")
-            # 尝试后备存储
-            if self.use_fallback:
-                return self._store_to_fallback(triples, source_tool)
-            return False
+            raise
     
     def _query_neo4j_by_source(self, source_tool: str, limit: int) -> List[Dict[str, Any]]:
         """从Neo4j按工具查询"""
@@ -339,64 +307,7 @@ class Neo4jMemoryManager:
             "by_tool": {r["tool"]: r["count"] for r in results}
         }
     
-    # ========== 内存后备存储实现 ==========
-    def _store_to_fallback(self, triples: List[SemanticTriple], source_tool: str) -> bool:
-        """存储到内存后备"""
-        if source_tool not in self.fallback_storage:
-            self.fallback_storage[source_tool] = []
-        
-        for triple in triples:
-            self.fallback_storage[source_tool].append({
-                "subject": triple.subject,
-                "predicate": triple.predicate,
-                "object": triple.object,
-                "subject_type": triple.subject_type,
-                "object_type": triple.object_type,
-                "confidence": triple.confidence,
-                "source_tool": triple.source_tool,
-                "timestamp": triple.timestamp,
-                "session_id": triple.session_id
-            })
-        
-        return True
-    
-    def _query_fallback_by_source(self, source_tool: str, limit: int) -> List[Dict[str, Any]]:
-        """从内存后备按工具查询"""
-        tool_data = self.fallback_storage.get(source_tool, [])
-        return tool_data[:limit]
-    
-    def _query_fallback_related(self, entity: str, relation_types: Optional[List[str]], limit: int) -> List[Dict[str, Any]]:
-        """从内存后备查询相关实体"""
-        related_triples = []
-        
-        for tool_data in self.fallback_storage.values():
-            for triple_dict in tool_data:
-                # 检查主体或客体是否匹配
-                if triple_dict["subject"] == entity or triple_dict["object"] == entity:
-                    # 检查关系类型过滤
-                    if not relation_types or triple_dict["predicate"] in relation_types:
-                        related_triples.append(triple_dict)
-        
-        # 按置信度排序
-        related_triples.sort(key=lambda x: x.get("confidence", 0), reverse=True)
-        return related_triples[:limit]
-    
-    def _clear_fallback_memory(self, source_tool: str) -> bool:
-        """清空内存后备中指定工具的记忆"""
-        if source_tool in self.fallback_storage:
-            del self.fallback_storage[source_tool]
-        return True
-    
-    def _get_fallback_statistics(self) -> Dict[str, Any]:
-        """获取内存后备统计信息"""
-        by_tool = {tool: len(triples) for tool, triples in self.fallback_storage.items()}
-        total = sum(by_tool.values())
-        
-        return {
-            "storage_type": "Memory Fallback",
-            "total_triples": total,
-            "by_tool": by_tool
-        }
+
     
     # ========== 辅助方法 ==========
     def _convert_to_graph_document(self, triples: List[SemanticTriple], source_tool: str) -> GraphDocument:
@@ -451,14 +362,13 @@ class Neo4jMemoryManager:
     
     def is_available(self) -> bool:
         """检查记忆系统是否可用"""
-        return self.neo4j_graph is not None or self.use_fallback
+        return self.neo4j_graph is not None
     
     def get_connection_info(self) -> Dict[str, Any]:
         """获取连接信息"""
         return {
             "neo4j_available": self.neo4j_graph is not None,
-            "fallback_enabled": self.use_fallback,
-            "storage_type": "Neo4j" if self.neo4j_graph else "Memory"
+            "storage_type": "Neo4j"
         }
 
 

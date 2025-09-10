@@ -189,11 +189,8 @@ class MemoryFactory:
                 raise AgentInitializationError("Neo4j", "密码未配置")
             
         try:
-            # 创建Neo4j记忆管理器 - 使用统一Settings配置
-            memory_manager = Neo4jMemoryManager(
-                settings=settings,
-                use_fallback=not settings.fail_fast  # fail_fast=True时不允许降级
-            )
+            # 创建Neo4j记忆管理器 - 简化版本
+            memory_manager = Neo4jMemoryManager(settings=settings)
             
             # 验证Neo4j连接
             if not memory_manager.neo4j_graph:

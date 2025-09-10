@@ -32,61 +32,30 @@ logging.basicConfig(
 
 
 def handle_errors(func):
-    """统一的错误处理装饰器"""
+    """简单错误处理装饰器 - KISS原则"""
     import functools
     
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)
-        except DatabaseConnectionError as e:
-            click.echo(f"💥 数据库连接失败: {e}", err=True)
-            sys.exit(1)
-        except LLMError as e:
-            click.echo(f"🤖 LLM服务错误: {e}", err=True) 
-            # 动态获取配置，避免硬编码
-            from config.settings import get_settings
-            settings = get_settings()
-            click.echo(f"请检查VLLM服务是否正常运行: {settings.llm_base_url}", err=True)
-            sys.exit(2)
-        except AgentInitializationError as e:
-            click.echo(f"🚫 Agent初始化失败: {e}", err=True)
-            sys.exit(3)
-        except AgentExecutionError as e:
-            click.echo(f"⚡ Agent执行失败: {e}", err=True)
-            sys.exit(4)
-        except SemanticSQLException as e:
-            click.echo(f"❌ 系统错误: {e}", err=True)
-            sys.exit(5)
         except Exception as e:
-            if hasattr(click.get_current_context(), 'obj') and click.get_current_context().obj and click.get_current_context().obj.get('verbose'):
-                click.echo(traceback.format_exc(), err=True)
-            else:
-                click.echo(f"💢 未预期的错误: {e}", err=True)
-            sys.exit(6)
+            click.echo(f"❌ 执行失败: {e}", err=True)
+            sys.exit(1)
     return wrapper
 
 
 @click.group()
-@click.version_option(version="4.0.0")  # 新架构版本
-@click.option('--config', '-c', help='配置文件路径')
-@click.option('--verbose', '-v', is_flag=True, help='详细输出')
-@click.pass_context
-def cli(ctx, config: Optional[str], verbose: bool):
-    """SemanticSQL Agent v4.0 - 基于极简+自主+记忆驱动架构的SQL训练数据生成系统"""
-    ctx.ensure_object(dict)
-    ctx.obj['config_path'] = config
-    ctx.obj['verbose'] = verbose
-    
-    if verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
-        click.echo("🔍 详细模式已启用")
+@click.version_option(version="4.0.0")
+def cli():
+    """SemanticSQL Agent v4.0 - 基于极简架构的SQL训练数据生成系统"""
+    pass
 
 
-def load_configuration(ctx) -> 'Settings':
-    """加载配置信息 - 使用统一Settings，不重复定义配置"""
-    from config.settings import Settings
-    return Settings()  # 重新创建以获取最新环境变量
+def get_settings() -> 'Settings':
+    """获取统一配置"""
+    from config.settings import get_settings
+    return get_settings()
 
 
 @cli.command()
@@ -110,17 +79,7 @@ def generate(ctx, count: int, output: str, database: Optional[str], config: Opti
     click.echo("=" * 60)
     
     # 加载统一配置
-
-    settings = load_configuration(ctx)
-    
-    # 显示配置信息
-    if ctx.obj.get('verbose'):
-        click.echo(f"📊 配置信息:")
-        click.echo(f"  • LLM模型: {settings.llm_model}")
-        click.echo(f"  • API地址: {settings.llm_base_url}")
-        click.echo(f"  • 数据库: {settings.db_host}:{settings.db_port}/{settings.db_database}")
-        click.echo(f"  • 生成数量: {count}")
-        click.echo(f"  • 输出格式: {format}")
+    settings = get_settings()
     
     # 确保输出文件有正确的扩展名
     if not output.endswith(f'.{format}'):
@@ -172,22 +131,16 @@ def generate(ctx, count: int, output: str, database: Optional[str], config: Opti
         if memory_stats['total_triples'] > 0:
             click.echo(f"  💾 存储知识: {memory_stats['total_triples']} 个三元组")
         
-        # 显示示例
-        if generated_samples and ctx.obj.get('verbose'):
-            click.echo(f"\n📝 生成示例（前3个）:")
-            for i, example in enumerate(generated_samples[:3], 1):
-                click.echo(f"\n  样本 {i}:")
-                click.echo(f"    问题: {example['question']}")
-                click.echo(f"    SQL: {example['sql']}")
-                click.echo(f"    操作: {', '.join(example['operations'])}")
+        # 显示首个示例
+        if generated_samples:
+            example = generated_samples[0]
+            click.echo(f"📝 示例: {example['question']} → {example['sql']}")
         
         click.echo(f"\n✨ 训练数据生成完成！可以使用以下命令查看:")
         click.echo(f"   cat {output} | head -5")
         
     except Exception as e:
         click.echo(f"💥 生成过程失败: {e}", err=True)
-        if ctx.obj.get('verbose'):
-            click.echo(traceback.format_exc(), err=True)
         sys.exit(1)
 
 
@@ -208,10 +161,8 @@ def analyze(ctx, database: str, output: Optional[str], config: Optional[str]):
     click.echo(f"🔍 分析数据库: {database}")
     click.echo("=" * 50)
     
-    # 加载配置（统一Settings），并按CLI参数覆盖数据库名
-    settings = load_configuration(ctx)
-    if database:
-        settings = settings.copy(update={"db_database": database})
+    # 加载统一配置
+    settings = get_settings()
     
     # 创建Agent
     click.echo("🔧 初始化分析Agent...")
@@ -220,7 +171,7 @@ def analyze(ctx, database: str, output: Optional[str], config: Optional[str]):
         agent = create_semantic_sql_agent(
             settings=settings,
             max_iterations=10,
-            verbose=ctx.obj.get('verbose', False)
+            verbose=True
         )
         
         click.echo("✅ Agent创建成功")
@@ -257,9 +208,8 @@ def analyze(ctx, database: str, output: Optional[str], config: Optional[str]):
             "agent_result": result.get("output", "分析完成") if isinstance(result, dict) else str(result)
         }
         
-        if ctx.obj.get('verbose'):
-            click.echo(f"\n📋 详细结果:")
-            click.echo(f"  Agent输出: {analysis_summary['agent_result'][:200]}...")
+        # 显示简要结果
+        click.echo(f"📋 Agent输出: {analysis_summary['agent_result'][:100]}...")
         
         # 保存结果
         if output:
@@ -269,8 +219,6 @@ def analyze(ctx, database: str, output: Optional[str], config: Optional[str]):
             
     except Exception as e:
         click.echo(f"💥 分析过程失败: {e}", err=True)
-        if ctx.obj.get('verbose'):
-            click.echo(traceback.format_exc(), err=True)
         sys.exit(1)
 
 

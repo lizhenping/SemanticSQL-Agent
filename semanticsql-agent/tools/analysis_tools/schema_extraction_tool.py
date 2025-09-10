@@ -138,14 +138,6 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
             connection_info = db_manager.get_connection_info()
             database_name = connection_info["database"]
             
-            # 运行时配置一致性检查（可选）
-            from config.settings import get_settings
-            settings = get_settings()
-            if settings.fail_fast and database_name != settings.db_database:
-                self.logger.warning(
-                    f"⚠️ 数据库名称不一致: 运行时={database_name}, 配置={settings.db_database}"
-                )
-            
             # 1. 获取数据库级别信息
             database_info = self._get_database_info(db_manager, database_name, config)
             
@@ -376,14 +368,9 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
     
     def _store_to_neo4j(self, raw_data: Dict[str, Any], config: Dict[str, Any]) -> None:
         """直接存储到Neo4j图结构 - 按设计文档Neo4j结构"""
-        # 强制fail-fast：不允许跳过Neo4j存储（复用基类统一校验）
-        from config.settings import get_settings
-        if get_settings().fail_fast:
-            self._require_neo4j_connection()
-        else:
-            if not self.memory_manager or not getattr(self.memory_manager, 'neo4j_graph', None):
-                self.logger.warning("⚠️ 未配置Neo4j连接，跳过存储（非fail-fast模式）")
-                return
+        # 简单验证: 需要Neo4j连接
+        if not self.memory_manager or not getattr(self.memory_manager, 'neo4j_graph', None):
+            raise Exception("Neo4j连接不可用，无法存储schema信息")
         
         try:
             neo4j_graph = self.memory_manager.neo4j_graph
