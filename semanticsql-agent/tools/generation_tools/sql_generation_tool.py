@@ -9,7 +9,7 @@ from typing import Dict, Any, Type, List, Optional
 from pydantic import BaseModel, Field, model_validator
 
 from models.base import SQLOperation
-from models.exceptions import ToolExecutionError, LLMError
+from models.exceptions import ToolExecutionError, LLMException
 from prompts.manager import PromptManager
 from utils.database import DatabaseManager
 from ..base_tool import BaseSemanticSQLTool

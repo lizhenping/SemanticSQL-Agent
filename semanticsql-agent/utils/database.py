@@ -34,63 +34,34 @@ class DatabaseManager:
     - 统一配置：优先使用Settings统一配置
     """
     
-    def __init__(self, connection_params: Optional[Dict[str, Any]] = None, settings: Optional['Settings'] = None):
+    def __init__(self, settings: Optional['Settings'] = None):
         """
-        初始化数据库管理器 - 支持统一Settings配置
+        初始化数据库管理器
         
         Args:
-            connection_params: 数据库连接参数 [DEPRECATED - 使用settings参数]
-            settings: 统一配置对象 (推荐方式)
+            settings: 统一配置对象（可选，默认使用全局配置）
         """
         self.logger = logging.getLogger(__name__)
         
-        # 配置优先级：Settings > connection_params
-        if settings is not None:
-            # 优先使用统一Settings配置
-            self.db_type = settings.db_type.lower()
-            self.host = settings.db_host
-            self.port = settings.db_port
-            self.database = settings.db_database
-            self.username = settings.db_username
-            self.password = settings.db_password
-            self.connection_params = {
-                "type": self.db_type,
-                "host": self.host,
-                "port": self.port,
-                "database": self.database,
-                "username": self.username,
-                "password": self.password
-            }
-        elif connection_params is not None:
-            # 兼容模式：使用connection_params
-            import warnings
-            warnings.warn(
-                "connection_params is deprecated. Use 'settings' parameter instead.",
-                DeprecationWarning,
-                stacklevel=2
-            )
-            self.connection_params = connection_params
+        # 使用Settings配置
+        if settings is None:
+            from config.settings import get_settings
+            settings = get_settings()
             
-            # 验证必需参数
-            required_params = ["host", "database", "username", "password"]
-            missing_params = [p for p in required_params if p not in connection_params]
-            if missing_params:
-                raise DatabaseConnectionError(
-                    "参数验证",
-                    {"missing_params": missing_params}
-                )
-            
-            self.db_type = connection_params.get("type", "mysql").lower()
-            self.host = connection_params["host"]
-            self.port = connection_params.get("port", 3306)
-            self.database = connection_params["database"]
-            self.username = connection_params["username"]
-            self.password = connection_params["password"]
-        else:
-            raise DatabaseConnectionError(
-                "参数验证",
-                {"error": "必须提供 settings 或 connection_params 参数"}
-            )
+        self.db_type = settings.db_type.lower()
+        self.host = settings.db_host
+        self.port = settings.db_port
+        self.database = settings.db_database
+        self.username = settings.db_username
+        self.password = settings.db_password
+        self.connection_params = {
+            "type": self.db_type,
+            "host": self.host,
+            "port": self.port,
+            "database": self.database,
+            "username": self.username,
+            "password": self.password
+        }
         
         self.engine = None
         self.session_factory = None
@@ -143,53 +114,18 @@ class DatabaseManager:
         Returns:
             数据库信息对象
         """
+        if not self.engine:
+            raise SchemaExtractionError(self.database, "数据库连接未初始化")
+        
         try:
-            if not self.engine:
-                raise SchemaExtractionError(self.database, "数据库连接未初始化")
-            
-            # 使用SQLAlchemy的inspect功能
             inspector = inspect(self.engine)
             table_names = inspector.get_table_names()
             
             # 构建结构信息
-            schema_info = {}
-            total_columns = 0
+            schema_info, total_columns = self._build_schema_info(inspector, table_names)
             
-            for table_name in table_names:
-                columns = inspector.get_columns(table_name)
-                column_info = []
-                
-                for column in columns:
-                    column_data = {
-                        "name": column["name"],
-                        "type": self._safe_type_string(column["type"]),
-                        "nullable": column.get("nullable", True),
-                        "primary_key": column.get("primary_key", False),
-                        "default": self._safe_default_value(column.get("default"))
-                    }
-                    column_info.append(column_data)
-                    total_columns += 1
-                
-                schema_info[table_name] = {
-                    "columns": column_info,
-                    "primary_keys": [c["name"] for c in column_info if c["primary_key"]],
-                    "column_count": len(column_info)
-                }
-            
-            # 获取外键关系
-            relationships = self._extract_foreign_keys(inspector, table_names)
-            
-            database_info = DatabaseInfo(
-                name=self.database,
-                tables=list(table_names),
-                schema_info=schema_info,
-                connection_params={
-                    "host": self.host,
-                    "port": self.port,
-                    "database": self.database,
-                    "type": self.db_type
-                }
-            )
+            # 创建数据库信息对象
+            database_info = self._create_database_info(table_names, schema_info)
             
             self.logger.info(f"📊 提取数据库结构: {len(table_names)} 表, {total_columns} 列")
             return database_info
@@ -197,6 +133,53 @@ class DatabaseManager:
         except Exception as e:
             self.logger.error(f"❌ 数据库结构提取失败: {e}")
             raise SchemaExtractionError(self.database, str(e))
+    
+    def _build_schema_info(self, inspector, table_names: list) -> tuple:
+        """构建数据库schema信息"""
+        schema_info = {}
+        total_columns = 0
+        
+        for table_name in table_names:
+            table_info, column_count = self._extract_table_info(inspector, table_name)
+            schema_info[table_name] = table_info
+            total_columns += column_count
+            
+        return schema_info, total_columns
+    
+    def _extract_table_info(self, inspector, table_name: str) -> tuple:
+        """提取单个表的信息"""
+        columns = inspector.get_columns(table_name)
+        column_info = [self._extract_column_info(column) for column in columns]
+        
+        return {
+            "columns": column_info,
+            "primary_keys": [c["name"] for c in column_info if c["primary_key"]],
+            "column_count": len(column_info)
+        }, len(column_info)
+    
+    def _extract_column_info(self, column: dict) -> dict:
+        """提取列信息"""
+        return {
+            "name": column["name"],
+            "type": self._safe_type_string(column["type"]),
+            "nullable": column.get("nullable", True),
+            "primary_key": column.get("primary_key", False),
+            "default": self._safe_default_value(column.get("default"))
+        }
+    
+    def _create_database_info(self, table_names: list, schema_info: dict) -> DatabaseInfo:
+        """创建DatabaseInfo对象"""
+        return DatabaseInfo(
+            name=self.database,
+            tables=list(table_names),
+            schema_info=schema_info,
+            connection_params={
+                "host": self.host,
+                "port": self.port,
+                "database": self.database,
+                "type": self.db_type
+            }
+        )
     
     def execute_sql_safe(self, sql: str, limit: int = 100) -> Dict[str, Any]:
         """
@@ -209,50 +192,18 @@ class DatabaseManager:
         Returns:
             执行结果字典
         """
+        # 清理和验证SQL
+        sql_clean = self._prepare_sql(sql, limit)
+        
+        if not self._is_safe_sql(sql_clean):
+            return self._create_error_response(sql_clean, "安全检查失败：只允许SELECT查询", "SecurityError")
+        
+        # 执行查询
         try:
-            # 清理和验证SQL
-            sql_clean = sql.strip().rstrip(';')
-            
-            if not self._is_safe_sql(sql_clean):
-                return {
-                    "success": False,
-                    "error": "安全检查失败：只允许SELECT查询",
-                    "error_type": "SecurityError",
-                    "sql": sql_clean
-                }
-            
-            # 添加LIMIT限制
-            if "LIMIT" not in sql_clean.upper():
-                sql_clean = f"{sql_clean} LIMIT {limit}"
-            
-            # 执行查询
             with self.engine.connect() as conn:
                 result = conn.execute(text(sql_clean))
+                return self._process_query_result(result, sql_clean)
                 
-                if result.returns_rows:
-                    rows = result.fetchall()
-                    columns = list(result.keys())
-                    
-                    # 转换为字典列表
-                    data = []
-                    for row in rows:
-                        row_dict = {columns[i]: self._safe_value(row[i]) for i in range(len(columns))}
-                        data.append(row_dict)
-                    
-                    return {
-                        "success": True,
-                        "data": data,
-                        "row_count": len(data),
-                        "columns": columns,
-                        "sql": sql_clean
-                    }
-                else:
-                    return {
-                        "success": True,
-                        "message": "查询执行成功，无返回数据",
-                        "sql": sql_clean
-                    }
-            
         except SQLAlchemyError as e:
             self.logger.error(f"❌ SQL执行失败: {sql} - {e}")
             raise SQLExecutionError(sql, str(e), "SQLAlchemyError")
@@ -260,6 +211,53 @@ class DatabaseManager:
         except Exception as e:
             self.logger.error(f"❌ 查询执行异常: {sql} - {e}")
             raise SQLExecutionError(sql, str(e), type(e).__name__)
+    
+    def _prepare_sql(self, sql: str, limit: int) -> str:
+        """准备SQL语句：清理并添加LIMIT"""
+        sql_clean = sql.strip().rstrip(';')
+        
+        # 添加LIMIT限制
+        if "LIMIT" not in sql_clean.upper():
+            sql_clean = f"{sql_clean} LIMIT {limit}"
+            
+        return sql_clean
+    
+    def _create_error_response(self, sql: str, error_msg: str, error_type: str) -> Dict[str, Any]:
+        """创建错误响应"""
+        return {
+            "success": False,
+            "error": error_msg,
+            "error_type": error_type,
+            "sql": sql
+        }
+    
+    def _process_query_result(self, result, sql_clean: str) -> Dict[str, Any]:
+        """处理查询结果"""
+        if not result.returns_rows:
+            return {
+                "success": True,
+                "message": "查询执行成功，无返回数据",
+                "sql": sql_clean
+            }
+        
+        # 获取数据
+        rows = result.fetchall()
+        columns = list(result.keys())
+        
+        # 转换为字典列表
+        data = [self._row_to_dict(row, columns) for row in rows]
+        
+        return {
+            "success": True,
+            "data": data,
+            "row_count": len(data),
+            "columns": columns,
+            "sql": sql_clean
+        }
+    
+    def _row_to_dict(self, row, columns: list) -> Dict[str, Any]:
+        """将数据行转换为字典"""
+        return {columns[i]: self._safe_value(row[i]) for i in range(len(columns))}
     
     def validate_sql_syntax(self, sql: str) -> Dict[str, Any]:
         """

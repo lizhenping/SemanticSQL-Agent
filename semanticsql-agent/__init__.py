@@ -6,17 +6,13 @@
 __version__ = "0.3.0"
 __author__ = "lizhenping18@mails.ucas.ac.cn"
 
-# 简化导入，只保留必要的组件
+# 核心组件导入
 try:
     from config.settings import Settings
     from models.schemas import SQLQueryResult
     
-    # DatabaseConfig 已废弃，但保留兼容性
-    from utils.database_config import DatabaseConfig
-    
     __all__ = [
         "Settings",
-        "DatabaseConfig", 
         "SQLQueryResult"
     ]
 except ImportError:

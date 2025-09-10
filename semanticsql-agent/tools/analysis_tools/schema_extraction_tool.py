@@ -231,62 +231,68 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
     
     def _extract_columns_metadata(self, db_manager: DatabaseManager, table_name: str, config: Dict[str, Any]) -> List[Dict[str, Any]]:
         """提取列元数据 - 包含当前阶段所有字段"""
-        try:
-            # 获取基础列信息
-            sql = f"""
-            SELECT 
-                COLUMN_NAME as column_name,
-                DATA_TYPE as data_type,
-                IS_NULLABLE as is_nullable,
-                COLUMN_KEY as column_key,
-                COLUMN_COMMENT as column_comment
-            FROM INFORMATION_SCHEMA.COLUMNS 
-            WHERE TABLE_SCHEMA = '{db_manager.database}' 
-              AND TABLE_NAME = '{table_name}'
-            ORDER BY ORDINAL_POSITION
-            """
-            
-            result = db_manager.execute_sql_safe(sql)
-            if not (result.get("success") and result.get("data")):
-                return []
-            
-            columns_data = []
-            for row in result["data"]:
-                column_name = row["column_name"]
-                
-                # 基础字段映射
-                column_info = {
-                    "name": column_name,
-                    "data_type": row["data_type"],
-                    "is_nullable": row["is_nullable"] == "YES",
-                    "is_primary": row["column_key"] == "PRI",
-                    "is_foreign": None,  # 当前阶段：从MySQL获取，需要分析外键关系
-                    "category": None,  # 后续阶段填充
-                    "entropy_level": None,  # 当前阶段：从MySQL获取
-                    "sample_values": [],  # 当前阶段：从MySQL获取
-                    "business_desc": ""
-                }
-                
-                # 处理business_desc
-                if config.get("use_db_comments", True):
-                    column_info["business_desc"] = row.get("column_comment", "") or ""
-                
-                # 分析外键关系
-                column_info["is_foreign"] = self._check_foreign_key(db_manager, table_name, column_name)
-                
-                # 计算熵值等级
-                column_info["entropy_level"] = self._calculate_entropy_level(db_manager, table_name, column_name)
-                
-                # 采集样本值
-                column_info["sample_values"] = self._collect_sample_values(db_manager, table_name, column_name)
-                
-                columns_data.append(column_info)
-                
-            return columns_data
-            
-        except Exception as e:
-            self.logger.error(f"提取表 {table_name} 列信息失败: {e}")
+        # 获取基础列信息
+        result = self._query_column_info(db_manager, table_name)
+        if not (result.get("success") and result.get("data")):
             return []
+        
+        # 处理每一列
+        columns_data = []
+        for row in result["data"]:
+            column_info = self._build_column_info(row, db_manager, table_name, config)
+            columns_data.append(column_info)
+            
+        return columns_data
+    
+    def _query_column_info(self, db_manager: DatabaseManager, table_name: str) -> dict:
+        """查询列的基础信息"""
+        sql = f"""
+        SELECT 
+            COLUMN_NAME as column_name,
+            DATA_TYPE as data_type,
+            IS_NULLABLE as is_nullable,
+            COLUMN_KEY as column_key,
+            COLUMN_COMMENT as column_comment
+        FROM INFORMATION_SCHEMA.COLUMNS 
+        WHERE TABLE_SCHEMA = '{db_manager.database}' 
+          AND TABLE_NAME = '{table_name}'
+        ORDER BY ORDINAL_POSITION
+        """
+        return db_manager.execute_sql_safe(sql)
+    
+    def _build_column_info(self, row: dict, db_manager: DatabaseManager, table_name: str, config: dict) -> dict:
+        """构建单个列的完整信息"""
+        column_name = row["column_name"]
+        
+        # 基础字段
+        column_info = self._create_base_column_info(row, config)
+        
+        # 增强信息
+        column_info["is_foreign"] = self._check_foreign_key(db_manager, table_name, column_name)
+        column_info["entropy_level"] = self._calculate_entropy_level(db_manager, table_name, column_name)
+        column_info["sample_values"] = self._collect_sample_values(db_manager, table_name, column_name)
+        
+        return column_info
+    
+    def _create_base_column_info(self, row: dict, config: dict) -> dict:
+        """创建列的基础信息"""
+        column_info = {
+            "name": row["column_name"],
+            "data_type": row["data_type"],
+            "is_nullable": row["is_nullable"] == "YES",
+            "is_primary": row["column_key"] == "PRI",
+            "is_foreign": None,
+            "category": None,
+            "entropy_level": None,
+            "sample_values": [],
+            "business_desc": ""
+        }
+        
+        # 处理业务描述
+        if config.get("use_db_comments", True):
+            column_info["business_desc"] = row.get("column_comment", "") or ""
+            
+        return column_info
     
     def _check_foreign_key(self, db_manager: DatabaseManager, table_name: str, column_name: str) -> Optional[bool]:
         """检查列是否为外键"""

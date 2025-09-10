@@ -186,8 +186,6 @@ class LLMTimeoutError(LLMException):
         super().__init__(message, {"timeout_seconds": timeout_seconds, "operation": operation})
 
 
-# 向后兼容的别名
-LLMError = LLMException
 
 
 # ========== 配置相关异常 ==========
@@ -210,9 +208,6 @@ class InvalidConfigurationError(ConfigurationException):
         super().__init__(message, {"config_key": config_key, "value": str(value)})
 
 
-# 向后兼容的别名
-InvalidConfigError = InvalidConfigurationError
-MissingConfigError = MissingConfigurationError
 
 
 # ========== 数据验证异常 ==========

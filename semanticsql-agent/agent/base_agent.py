@@ -101,21 +101,17 @@ class BaseAgent(ABC):
         Returns:
             执行结果
         """
-        execution = self._create_execution_record(task)
+        execution = AgentExecution(
+            task=task,
+            agent_type=self.__class__.__name__,
+            status="running"
+        )
         self._prepare_execution(execution)
         
         result = self._execute_task(task, execution, **kwargs)
         self._finalize_execution(execution, result)
         
         return result
-    
-    def _create_execution_record(self, task: str) -> AgentExecution:
-        """创建执行记录"""
-        return AgentExecution(
-            task=task,
-            agent_type=self.__class__.__name__,
-            status="running"
-        )
     
     def _prepare_execution(self, execution: AgentExecution) -> None:
         """准备执行环境"""
@@ -214,8 +210,8 @@ class BaseAgent(ABC):
             
         # 构建模板参数
         template_params = {
-            'tools': self._get_tool_descriptions(),
-            'tool_names': self._get_tool_names_str(),
+            'tools': "\n".join([f"- {tool.name}: {tool.description}" for tool in self.tools]),
+            'tool_names': ", ".join([tool.name for tool in self.tools]),
             'database_name': database_name,
             'input': '{input}',  # 保留LangChain占位符
         }
@@ -223,13 +219,6 @@ class BaseAgent(ABC):
         # 使用PromptManager的统一接口创建Agent提示词
         return self.prompt_manager.create_agent_prompt(**template_params)
     
-    def _get_tool_descriptions(self) -> str:
-        """获取工具描述字符串"""
-        return "\n".join([f"- {tool.name}: {tool.description}" for tool in self.tools])
-    
-    def _get_tool_names_str(self) -> str:
-        """获取工具名称字符串"""
-        return ", ".join([tool.name for tool in self.tools])
     
     
     
@@ -237,17 +226,3 @@ class BaseAgent(ABC):
     def get_tool_names(self) -> List[str]:
         """获取所有工具名称"""
         return [tool.name for tool in self.tools]
-    
-    def get_memory_state(self) -> Dict[str, Any]:
-        """获取当前记忆状态"""
-        return self.memory.load_memory_variables({})
-    
-    def clear_memory(self) -> None:
-        """清空记忆"""
-        if hasattr(self.memory, 'clear'):
-            self.memory.clear()
-    
-    def save_trajectory(self, filepath: str) -> None:
-        """保存执行轨迹"""
-        if self.trajectory_recorder:
-            self.trajectory_recorder.save_to_file(filepath)

@@ -47,72 +47,90 @@ class SemanticSQLReActAgent:
                  settings: Optional['Settings'] = None,
                  tools: Optional[List] = None,
                  max_iterations: int = 15,
-                 verbose: bool = True):
-        """初始化SemanticSQL智能体 - 简化版本
-        
-        Args:
-            settings: 配置实例（可选，默认使用全局配置）
-            tools: 工具列表（可选，默认使用完整SemanticSQL工具集）
-            max_iterations: 最大迭代次数
-            verbose: 是否显示详细执行过程
-        """
+                 verbose: bool = True,
+                 use_database: bool = True,
+                 use_memory: bool = True):
+        """初始化SemanticSQL智能体 - 按需创建版本"""
         self.logger = logging.getLogger(self.__class__.__name__)
         
-        # 获取配置
+        # 基础配置
         from config.settings import get_settings
         self.settings = settings or get_settings()
-        
-        # 创建所有核心组件
-        from config.factories import ComponentManager
-        components = ComponentManager.create_all_components(self.settings)
-        self.llm = components["llm"]
-        self.memory_manager = components["memory_manager"]
-        self.database_manager = components["database_manager"]
-            
         self.max_iterations = max_iterations
         self.verbose = verbose
-
-        # 工具系统初始化
-        self.tools = tools or self._create_semantic_sql_tools()
         
-        # 创建智能体执行器
+        # 初始化组件
+        self._init_components(use_database, use_memory)
+        
+        # 初始化工具和执行器
+        self.tools = tools or self._create_available_tools()
         self.agent_executor = self._create_agent_executor()
         
         self.logger.info(f"✅ SemanticSQL Agent初始化完成 - {len(self.tools)}个工具")
     
+    def _init_components(self, use_database: bool, use_memory: bool):
+        """初始化组件：LLM、数据库、记忆系统"""
+        from config.factories import ComponentManager
+        
+        # LLM是必需的
+        self.llm = ComponentManager.create_llm(self.settings)
+        
+        # 数据库是可选的
+        self.database_manager = None
+        if use_database:
+            self.database_manager = ComponentManager.create_database_manager(self.settings)
+            self._log_component_status("Database", self.database_manager)
+        
+        # 记忆系统是可选的
+        self.memory_manager = None
+        if use_memory:
+            self.memory_manager = ComponentManager.create_memory_manager(self.settings)
+            self._log_component_status("Memory", self.memory_manager)
+    
+    def _log_component_status(self, component_name: str, component):
+        """记录组件状态"""
+        if component:
+            self.logger.info(f"✅ {component_name} manager created")
+        else:
+            self.logger.warning(f"⚠️ {component_name} manager not available")
+    
 
     
-    def _create_semantic_sql_tools(self) -> List:
-        """创建完整的SemanticSQL工具集 - 基于新的BaseSemanticSQLTool"""
+    def _create_available_tools(self) -> List:
+        """根据可用组件创建工具集"""
         tools = []
         
-        try:
-            # 分析工具组 - 基于新架构的完全自主工具
-            analysis_tools = [
-                create_schema_extraction_tool(
-                    memory_manager=self.memory_manager,
+        # 需要数据库的工具
+        if self.database_manager:
+            try:
+                tools.append(create_schema_extraction_tool(
+                    memory_manager=self.memory_manager,  # 可以是None
                     database_manager=self.database_manager
-                ),
-                create_domain_analysis_tool(memory_manager=self.memory_manager),
-                create_field_analysis_tool(memory_manager=self.memory_manager),
-                create_column_analysis_tool(memory_manager=self.memory_manager),
-                create_table_analysis_tool(memory_manager=self.memory_manager),
-                create_er_analysis_tool(memory_manager=self.memory_manager)
-            ]
-            tools.extend(analysis_tools)
-            
-            self.logger.info(f"📊 创建了 {len(analysis_tools)} 个分析工具")
-            
-            # TODO: 后续在Phase 2中会添加其他工具组
-            # generation_tools = self._create_generation_tools()
-            # validation_tools = self._create_validation_tools() 
-            # reflection_tools = self._create_reflection_tools()
-            
-        except Exception as e:
-            self.logger.error(f"❌ 工具创建失败: {e}")
-            raise AgentInitializationError("SemanticSQLAgent", f"工具创建失败: {e}")
+                ))
+                self.logger.info("Added schema extraction tool")
+            except Exception as e:
+                self.logger.warning(f"Failed to create schema extraction tool: {e}")
+        
+        # 只需要记忆的工具
+        if self.memory_manager:
+            try:
+                tools.extend([
+                    create_domain_analysis_tool(memory_manager=self.memory_manager),
+                    create_field_analysis_tool(memory_manager=self.memory_manager),
+                    create_column_analysis_tool(memory_manager=self.memory_manager),
+                    create_table_analysis_tool(memory_manager=self.memory_manager),
+                    create_er_analysis_tool(memory_manager=self.memory_manager)
+                ])
+                self.logger.info("Added memory-based analysis tools")
+            except Exception as e:
+                self.logger.warning(f"Failed to create memory-based tools: {e}")
+        
+        # 如果没有任何工具，至少添加一个基础工具
+        if not tools:
+            self.logger.warning("No specialized tools available, agent will use LLM only")
         
         return tools
+    
     
     def _create_agent_executor(self) -> AgentExecutor:
         """创建AgentExecutor - 使用官方API和自定义解析器"""
@@ -195,27 +213,17 @@ class SemanticSQLReActAgent:
         prompt_manager = PromptManager()
         return prompt_manager.create_agent_prompt_template(agent_type="semantic_sql_agent")
     
-    def invoke(self, user_input: str, database_params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """标准invoke接口 - 兼容官方API
+    def invoke(self, user_input: str) -> Dict[str, Any]:
+        """标准invoke接口
         
         Args:
             user_input: 用户输入
-            database_params: 数据库参数 [DEPRECATED - 使用Settings统一配置]
             
         Returns:
             执行结果字典
         """
-        # 废弃警告
-        if database_params is not None:
-            import warnings
-            warnings.warn(
-                "database_params parameter is deprecated. Database configuration is handled via Settings.",
-                DeprecationWarning,
-                stacklevel=2
-            )
-        
         try:
-            # 创建Agent状态（忽略废弃的database_params）
+            # 创建Agent状态
             state = create_agent_state(user_input, None)
             
             # 构建执行参数
@@ -242,73 +250,18 @@ class SemanticSQLReActAgent:
         return [tool.name for tool in self.tools]
     
     def get_memory_stats(self) -> Dict[str, Any]:
-        """获取记忆系统统计"""
+        """获取记忆系统统计信息"""
         if not self.memory_manager:
-            return {"status": "no_memory_manager"}
+            return {"status": "no_memory", "total_triples": 0}
         
-        return {
-            "total_triples": getattr(self.memory_manager, 'count_triples', lambda: 0)(),
-            "sources": getattr(self.memory_manager, 'get_source_tools', lambda: [])(),
-            "status": "active"
-        }
-    
-    def clear_memory(self) -> bool:
-        """清空记忆系统"""
-        if not self.memory_manager:
-            return False
-        
-        return self.memory_manager.clear_all()
-    
-    def _clean_think_content(self, text: str) -> str:
-        """清理文本中的think内容
-        
-        Args:
-            text: 原始文本
-            
-        Returns:
-            清理后的文本
-        """
-        import re
-        
-        if not isinstance(text, str):
-            return text
-        
-        # 1. 过滤 <think>...</think> 标签及其内容
-        cleaned_text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
-        
-        # 2. 过滤其他think变种标签
-        cleaned_text = re.sub(r'<thought>.*?</thought>', '', cleaned_text, flags=re.DOTALL)
-        
-        # 3. 过滤详细的中文分析内容，保留标准ReAct格式
-        lines = cleaned_text.split('\n')
-        filtered_lines = []
-        
-        for line in lines:
-            line = line.strip()
-            # 跳过过长的中文分析行（非标准ReAct格式）
-            if (line.startswith('Thought:') and 
-                len(line) > 100 and 
-                '工具' in line and 
-                'Action' not in line):
-                # 替换为简化版本
-                filtered_lines.append('Thought: 分析问题并选择合适的工具')
-            elif line:
-                filtered_lines.append(line)
-        
-        # 4. 清理多余的空行
-        result = '\n'.join(filtered_lines)
-        result = re.sub(r'\n\s*\n\s*\n', '\n\n', result)  # 最多保留一个空行
-        
-        return result.strip()
+        try:
+            stats = self.memory_manager.get_memory_statistics()
+            return stats
+        except:
+            return {"status": "error", "total_triples": 0}
 
 
 # ========== 工厂函数 ==========
-
-def create_llm() -> ChatOpenAI:
-    """创建语言模型实例 - 简化版本"""
-    from config.factories import ComponentManager
-    return ComponentManager.create_llm()
-
 
 def create_semantic_sql_agent(
     settings: Optional['Settings'] = None,
@@ -341,30 +294,3 @@ def create_semantic_sql_agent(
     )
 
 
-# ========== 向后兼容性包装 ==========
-
-class SQLAgent:
-    """向后兼容的SQLAgent包装器"""
-    
-    def __init__(self, *args, **kwargs):
-        self.logger = logging.getLogger(__name__)
-        self.logger.warning("🔄 SQLAgent已重构为SemanticSQLReActAgent，建议使用新接口")
-        
-        # 创建新的智能体实例
-        self.react_agent = create_semantic_sql_agent(**kwargs)
-    
-    def run(self, task: str, **kwargs) -> Dict[str, Any]:
-        """兼容旧接口的run方法"""
-        result = self.react_agent.invoke(task, **kwargs)
-        
-        # 转换为旧格式
-        return {
-            "success": True,
-            "result": result.get("output", result),
-            "agent_type": "SemanticSQLReActAgent"
-        }
-    
-    def generate_training_data(self, output_file: str = "training_data.jsonl") -> List[Dict[str, Any]]:
-        """兼容的训练数据生成方法"""
-        self.logger.warning("训练数据生成功能需要在新架构中重新实现")
-        return []
