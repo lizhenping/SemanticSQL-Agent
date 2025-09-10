@@ -458,257 +458,80 @@ class DomainAnalysisTool(BaseSemanticSQLTool):
     
     def _store_domain_knowledge_to_neo4j(self, domain_knowledge: DomainKnowledge, 
                                        database_schema: Dict[str, Any]) -> None:
-        """直接存储领域知识到Neo4j图谱"""
+        """将领域知识注入到现有Database节点属性中"""
         
-        self.logger.info("💾 开始存储业务知识到Neo4j图谱...")
+        self.logger.info("💾 开始将领域分析结果注入到Database节点...")
         
         database_name = database_schema.get("database_name", "unknown")
-        domain_name = domain_knowledge.domain_type
-        timestamp = domain_knowledge.analysis_timestamp
         
         try:
-            # 1. 创建Domain节点
-            self._create_domain_node(database_name, domain_knowledge)
+            # 将领域分析结果注入到Database节点的business_desc属性
+            self._update_database_with_domain_knowledge(database_name, domain_knowledge)
             
-            # 2. 批量创建业务知识节点
-            nodes_created = self._create_business_knowledge_nodes(domain_knowledge)
-            
-            # 3. 建立关系网络
-            relationships_created = self._create_business_relationships(database_name, domain_knowledge)
-            
-            self.logger.info(f"✅ Neo4j存储完成: 创建 {nodes_created} 个节点，{relationships_created} 个关系")
+            self.logger.info(f"✅ Neo4j存储完成: Database节点'{database_name}'已更新业务领域分析结果")
             
         except Exception as e:
             self.logger.error(f"❌ Neo4j存储失败: {e}")
             raise
     
-    def _create_domain_node(self, database_name: str, domain_knowledge: DomainKnowledge) -> None:
-        """创建Domain节点"""
+    def _update_database_with_domain_knowledge(self, database_name: str, domain_knowledge: DomainKnowledge) -> None:
+        """将领域分析结果注入到现有Database节点的business_desc属性中"""
+        
+        # 将复杂的领域知识对象序列化为结构化字符串
+        domain_analysis_text = self._serialize_domain_knowledge(domain_knowledge)
+        
+        # 更新Database节点的business_desc属性
         cypher = '''
-        MERGE (d:Domain {name: $domain_name})
-        SET d.domain_type = $domain_type,
-            d.confidence = $confidence,
-            d.analysis_timestamp = $timestamp,
-            d.created_by = 'domain_analysis_tool'
-        RETURN d
+        MATCH (db:Database {name: $database_name})
+        SET db.business_desc = $business_desc,
+            db.domain_analysis_confidence = $confidence,
+            db.domain_analysis_timestamp = $timestamp,
+            db.analyzed_by = 'domain_analysis_tool'
+        RETURN db
         '''
         
         params = {
-            "domain_name": domain_knowledge.domain_type,
-            "domain_type": domain_knowledge.domain_type,
+            "database_name": database_name,
+            "business_desc": domain_analysis_text,
             "confidence": domain_knowledge.confidence,
             "timestamp": domain_knowledge.analysis_timestamp
         }
         
         self.memory_manager.neo4j_graph.query(cypher, params)
         
-        # 建立Database到Domain的关系
-        relationship_cypher = '''
-        MATCH (db:Database {name: $database_name})
-        MATCH (d:Domain {name: $domain_name})
-        MERGE (db)-[:BELONGS_TO_DOMAIN {
-            confidence: $confidence,
-            analysis_method: 'llm_structured_analysis',
-            created_timestamp: $timestamp
-        }]->(d)
-        '''
-        
-        rel_params = {
-            "database_name": database_name,
-            "domain_name": domain_knowledge.domain_type,
-            "confidence": domain_knowledge.confidence,
-            "timestamp": domain_knowledge.analysis_timestamp
-        }
-        
-        self.memory_manager.neo4j_graph.query(relationship_cypher, rel_params)
+        self.logger.info(f"✅ 已将领域分析结果注入到Database节点 '{database_name}' 的business_desc属性")
     
-    def _create_business_knowledge_nodes(self, domain_knowledge: DomainKnowledge) -> int:
-        """批量创建业务知识节点"""
+    def _serialize_domain_knowledge(self, domain_knowledge: DomainKnowledge) -> str:
+        """将领域知识对象序列化为结构化字符串"""
         
-        nodes_created = 0
+        sections = [
+            f"【业务领域】{domain_knowledge.domain_type}",
+            f"【置信度】{domain_knowledge.confidence:.2f}",
+            "",
+            "【业务问题】",
+            *[f"• {problem}" for problem in domain_knowledge.business_problems],
+            "",
+            "【解决方案】", 
+            *[f"• {solution}" for solution in domain_knowledge.solution_approaches],
+            "",
+            "【核心实体】",
+            *[f"• {entity}" for entity in domain_knowledge.key_entities],
+            "",
+            "【业务规则】",
+            *[f"• {rule}" for rule in domain_knowledge.business_rules],
+        ]
         
-        # 创建BusinessProblem节点
-        for i, problem in enumerate(domain_knowledge.business_problems):
-            cypher = '''
-            MERGE (bp:BusinessProblem {id: $problem_id})
-            SET bp.description = $description,
-                bp.domain_name = $domain_name,
-                bp.priority = $priority,
-                bp.created_timestamp = $timestamp
-            RETURN bp
-            '''
-            
-            params = {
-                "problem_id": f"bp_{i+1}",
-                "description": problem,
-                "domain_name": domain_knowledge.domain_type,
-                "priority": "high" if i == 0 else "medium",
-                "timestamp": domain_knowledge.analysis_timestamp
-            }
-            
-            self.memory_manager.neo4j_graph.query(cypher, params)
-            nodes_created += 1
+        if domain_knowledge.special_fields:
+            sections.extend([
+                "",
+                "【特殊字段】",
+                *[f"• {field}" for field in domain_knowledge.special_fields]
+            ])
         
-        # 创建KeyEntity节点
-        for i, entity in enumerate(domain_knowledge.key_entities):
-            cypher = '''
-            MERGE (ke:KeyEntity {id: $entity_id})
-            SET ke.description = $description,
-                ke.entity_type = $entity_type,
-                ke.domain_name = $domain_name,
-                ke.business_importance = $importance,
-                ke.created_timestamp = $timestamp
-            RETURN ke
-            '''
-            
-            params = {
-                "entity_id": f"ke_{i+1}",
-                "description": entity,
-                "entity_type": "core_business_object",
-                "domain_name": domain_knowledge.domain_type,
-                "importance": "critical" if i < 2 else "important",
-                "timestamp": domain_knowledge.analysis_timestamp
-            }
-            
-            self.memory_manager.neo4j_graph.query(cypher, params)
-            nodes_created += 1
+        sections.append(f"\n【分析时间】{domain_knowledge.analysis_timestamp}")
         
-        # 创建BusinessRule节点
-        for i, rule in enumerate(domain_knowledge.business_rules):
-            cypher = '''
-            MERGE (br:BusinessRule {id: $rule_id})
-            SET br.description = $description,
-                br.rule_type = $rule_type,
-                br.domain_name = $domain_name,
-                br.created_timestamp = $timestamp
-            RETURN br
-            '''
-            
-            params = {
-                "rule_id": f"br_{i+1}",
-                "description": rule,
-                "rule_type": "business_constraint" if "必须" in rule else "business_process",
-                "domain_name": domain_knowledge.domain_type,
-                "timestamp": domain_knowledge.analysis_timestamp
-            }
-            
-            self.memory_manager.neo4j_graph.query(cypher, params)
-            nodes_created += 1
-        
-        return nodes_created
+        return "\n".join(sections)
     
-    def _create_business_relationships(self, database_name: str, domain_knowledge: DomainKnowledge) -> int:
-        """创建业务关系网络"""
-        
-        relationships_created = 0
-        domain_name = domain_knowledge.domain_type
-        
-        # Domain与BusinessProblem的关系
-        for i in range(len(domain_knowledge.business_problems)):
-            cypher = '''
-            MATCH (d:Domain {name: $domain_name})
-            MATCH (bp:BusinessProblem {id: $problem_id})
-            MERGE (d)-[:HAS_PROBLEM {
-                relevance_score: $relevance,
-                created_timestamp: $timestamp
-            }]->(bp)
-            '''
-            
-            params = {
-                "domain_name": domain_name,
-                "problem_id": f"bp_{i+1}",
-                "relevance": 0.9 if i == 0 else 0.7,
-                "timestamp": domain_knowledge.analysis_timestamp
-            }
-            
-            self.memory_manager.neo4j_graph.query(cypher, params)
-            relationships_created += 1
-        
-        # Domain与KeyEntity的关系
-        for i in range(len(domain_knowledge.key_entities)):
-            cypher = '''
-            MATCH (d:Domain {name: $domain_name})
-            MATCH (ke:KeyEntity {id: $entity_id})
-            MERGE (d)-[:CONTAINS_ENTITY {
-                importance_score: $importance,
-                created_timestamp: $timestamp
-            }]->(ke)
-            '''
-            
-            params = {
-                "domain_name": domain_name,
-                "entity_id": f"ke_{i+1}",
-                "importance": 0.9 if i < 2 else 0.7,
-                "timestamp": domain_knowledge.analysis_timestamp
-            }
-            
-            self.memory_manager.neo4j_graph.query(cypher, params)
-            relationships_created += 1
-        
-        # Domain与BusinessRule的关系
-        for i in range(len(domain_knowledge.business_rules)):
-            cypher = '''
-            MATCH (d:Domain {name: $domain_name})
-            MATCH (br:BusinessRule {id: $rule_id})
-            MERGE (d)-[:FOLLOWS_RULE {
-                compliance_level: $compliance,
-                created_timestamp: $timestamp
-            }]->(br)
-            '''
-            
-            params = {
-                "domain_name": domain_name,
-                "rule_id": f"br_{i+1}",
-                "compliance": 0.8,
-                "timestamp": domain_knowledge.analysis_timestamp
-            }
-            
-            self.memory_manager.neo4j_graph.query(cypher, params)
-            relationships_created += 1
-        
-        return relationships_created
-    
-    def _build_analysis_result(self, domain_knowledge: DomainKnowledge) -> str:
-        """构建执行结果消息"""
-        
-        confidence = domain_knowledge.confidence
-        problems_count = len(domain_knowledge.business_problems)
-        entities_count = len(domain_knowledge.key_entities)
-        rules_count = len(domain_knowledge.business_rules)
-        
-        # 构建简洁的实体描述
-        entity_preview = ""
-        if domain_knowledge.key_entities:
-            first_entity = domain_knowledge.key_entities[0]
-            # 提取实体描述的核心部分
-            entity_core = first_entity.split("：")[0] if "：" in first_entity else first_entity[:20]
-            entity_preview = f"{entity_core}等{entities_count}个核心实体"
-        
-        # 构建业务问题预览
-        problem_preview = ""
-        if domain_knowledge.business_problems:
-            first_problem = domain_knowledge.business_problems[0][:30] + "..." if len(domain_knowledge.business_problems[0]) > 30 else domain_knowledge.business_problems[0]
-            problem_preview = first_problem
-        
-        result = f"""✅ 业务领域分析完成
-
-🎯 领域识别结果:
-  • 主要领域: {domain_knowledge.domain_type} (置信度: {confidence:.2f})
-  • 核心业务问题: {problem_preview}
-  • 关键业务实体: {entity_preview}
-  • 业务规则: {rules_count}项规则
-
-📊 分析统计:
-  • 业务问题识别: {problems_count}个
-  • 解决方案设计: {len(domain_knowledge.solution_approaches)}个
-  • 业务规则提取: {rules_count}个
-  • 特殊字段规则: {len(domain_knowledge.special_fields)}个
-
-💾 业务知识图谱已构建完成，包含Domain、BusinessProblem、KeyEntity、BusinessRule等节点
-
-⚡ 建议执行: field_analysis_tool - 进行字段语义分析"""
-        
-        return result
     
     
     def _optimize_ddl_for_llm(self, ddl_content: str) -> str:
