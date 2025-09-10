@@ -13,9 +13,6 @@ from pydantic import Field
 from models.schemas import SemanticTriple, TripleCollection, create_triple
 from utils.memory import Neo4jMemoryManager
 from models.exceptions import (
-    ToolInitializationError,
-    ToolExecutionError, 
-    ToolDependencyError,
     raise_tool_error,
     raise_dependency_error
 )
@@ -56,55 +53,6 @@ class BaseSemanticSQLTool(BaseTool):
         object.__setattr__(self, 'memory_manager', memory_manager)
         object.__setattr__(self, '_generated_triples', [])
         object.__setattr__(self, 'logger', logging.getLogger(self.__class__.__name__))
-    
-    # ========== 核心方法1：记忆查询 ==========
-    def get_memory_by_source_tool(self, source_tool: str, limit: int = 50) -> List[Dict[str, Any]]:
-        """
-        获取指定工具生成的记忆三元组 - 唯一的记忆查询方法
-        
-        这是工具间协作的核心机制：
-        - 工具通过此方法查询其他工具的分析结果
-        - 基于查询到的记忆进行自己的分析处理
-        - 实现工具间的智能依赖关系
-        
-        Args:
-            source_tool: 来源工具名称
-            limit: 返回数量限制
-            
-        Returns:
-            三元组字典列表，格式：
-            [
-                {
-                    "subject": "主体",
-                    "predicate": "关系",
-                    "object": "客体", 
-                    "confidence": 0.95,
-                    "source_tool": "工具名"
-                },
-                ...
-            ]
-        """
-        if not self.memory_manager:
-            from config.settings import get_settings
-            settings = get_settings()
-            if settings.fail_fast:
-                raise_dependency_error(
-                    self.name,
-                    "memory_manager",
-                    "记忆管理器未配置，请在Agent初始化时提供memory_manager"
-                )
-            else:
-                self.logger.warning(f"⚠️ {self.name}: 记忆管理器未配置，无法查询记忆")
-                return []
-        
-        try:
-            results = self.memory_manager.query_by_source_tool(source_tool, limit)
-            self.logger.debug(f"🔍 {self.name}: 从 {source_tool} 查询到 {len(results)} 条记忆")
-            return results
-            
-        except Exception as e:
-            self.logger.error(f"❌ {self.name}: 查询 {source_tool} 记忆失败: {e}")
-            return []
     
     # ========== 核心方法2：三元组添加 ==========
     def add_analysis_triple(self, 
@@ -308,61 +256,3 @@ class BaseSemanticSQLTool(BaseTool):
             "generated_triples_count": len(self._generated_triples)
         }
 
-
-# ========== 便利函数 ==========
-def create_tool_with_memory(tool_class, 
-                           memory_manager: Neo4jMemoryManager,
-                           **tool_kwargs) -> BaseSemanticSQLTool:
-    """
-    创建带记忆管理器的工具实例
-    
-    Args:
-        tool_class: 工具类
-        memory_manager: 记忆管理器
-        **tool_kwargs: 工具构造参数
-        
-    Returns:
-        配置好的工具实例
-    """
-    try:
-        tool = tool_class(memory_manager=memory_manager, **tool_kwargs)
-        logging.getLogger(__name__).info(f"✅ 创建工具 {tool_class.__name__} 成功")
-        return tool
-        
-    except Exception as e:
-        logging.getLogger(__name__).error(f"❌ 创建工具 {tool_class.__name__} 失败: {e}")
-        raise ToolInitializationError(tool_class.__name__, str(e))
-
-
-def batch_create_tools(tool_configs: List[Dict[str, Any]], 
-                      memory_manager: Neo4jMemoryManager) -> List[BaseSemanticSQLTool]:
-    """
-    批量创建工具实例
-    
-    Args:
-        tool_configs: 工具配置列表，格式：[{"class": ToolClass, "kwargs": {...}}, ...]
-        memory_manager: 记忆管理器
-        
-    Returns:
-        工具实例列表
-    """
-    tools = []
-    
-    for config in tool_configs:
-        tool_class = config["class"]
-        tool_kwargs = config.get("kwargs", {})
-        
-        try:
-            tool = create_tool_with_memory(tool_class, memory_manager, **tool_kwargs)
-            tools.append(tool)
-        except Exception as e:
-            from config.settings import get_settings
-            settings = get_settings()
-            if settings.fail_fast:
-                logging.getLogger(__name__).error(f"❌ 工具创建失败: {tool_class.__name__}: {e}")
-                raise ToolInitializationError(tool_class.__name__, str(e))
-            else:
-                logging.getLogger(__name__).warning(f"⚠️ 跳过工具 {tool_class.__name__}: {e}")
-    
-    logging.getLogger(__name__).info(f"📦 批量创建完成: {len(tools)} 个工具")
-    return tools
