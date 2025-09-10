@@ -274,44 +274,6 @@ def analyze(ctx, database: str, output: Optional[str], config: Optional[str]):
         sys.exit(1)
 
 
-@cli.command()
-def config_template():
-    """生成配置文件模板
-    
-    示例:
-    \b
-    python cli.py config-template > config.yaml
-    vim config.yaml
-    """
-    template = {
-        "settings": {
-            "llm_model": "Qwen3-14B",
-            "llm_temperature": 0.7,
-            "llm_max_tokens": 20000,
-            "llm_base_url": "http://127.0.0.1:9991/v1",
-            "llm_api_key": "not-needed",
-            "max_steps": 15,
-            "verbose": True
-        },
-        "database": {
-            "host": "192.168.200.216",
-            "port": 13306,
-            "username": "testuser",
-            "password": "testpass",
-            "database": "testdb"
-        },
-        "generation": {
-            "validation_enabled": True,
-            "max_retries": 3
-        }
-    }
-    
-    click.echo("# SemanticSQL Agent v4.0 配置文件")
-    click.echo("# 基于极简+自主+记忆驱动架构")
-    click.echo()
-    click.echo(yaml.dump(template, default_flow_style=False, allow_unicode=True))
-
-
 # ========== 辅助函数 ==========
 
 def simulate_training_data_generation(count: int, database: str) -> list:
