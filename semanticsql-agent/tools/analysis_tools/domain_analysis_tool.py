@@ -143,14 +143,14 @@ class DomainAnalysisTool(BaseSemanticSQLTool):
             raise_dependency_error(self.name, "memory_manager", "Neo4j内存管理器未初始化")
             
         cypher = '''
-        MATCH (d:Database)-[:HAS_TABLE]->(t:Table)-[:HAS_COLUMN]->(c:Column)
+        MATCH (d:Database)-[:CONTAINS]->(t:Table)-[:HAS_COLUMN]->(c:Column)
         RETURN count(DISTINCT d) as db_count, 
                count(DISTINCT t) as table_count, 
                count(DISTINCT c) as column_count
         '''
         
         try:
-            result = self.memory_manager.query(cypher)
+            result = self.memory_manager.neo4j_graph.query(cypher)
             if not result or result[0]["db_count"] == 0:
                 raise_dependency_error(
                     self.name, 
@@ -178,37 +178,46 @@ class DomainAnalysisTool(BaseSemanticSQLTool):
         """
         cypher = '''
         MATCH (d:Database)
-        OPTIONAL MATCH (d)-[:HAS_TABLE]->(t:Table)
+        OPTIONAL MATCH (d)-[:CONTAINS]->(t:Table)
         OPTIONAL MATCH (t)-[:HAS_COLUMN]->(c:Column)
         RETURN d.name as database_name,
+               d.business_desc as database_desc,
                collect(DISTINCT {
                    name: t.name,
-                   comment: t.comment,
+                   business_desc: t.business_desc,
                    row_count: t.row_count,
                    columns: [(t)-[:HAS_COLUMN]->(col:Column) | {
                        name: col.name,
                        data_type: col.data_type,
                        is_nullable: col.is_nullable,
-                       is_primary_key: col.is_primary_key,
-                       default_value: col.default_value,
-                       comment: col.comment,
-                       sample_values: col.sample_values,
-                       entropy_level: col.entropy_level
+                       is_primary: col.is_primary,
+                       is_foreign: col.is_foreign,
+                       category: col.category,
+                       entropy_level: col.entropy_level,
+                       sample_values: CASE 
+                           WHEN size(col.sample_values) > 5 
+                           THEN col.sample_values[0..5] 
+                           ELSE col.sample_values 
+                       END,
+                       business_desc: col.business_desc
                    }]
                }) as tables
         '''
         
         try:
-            result = self.memory_manager.query(cypher)
+            result = self.memory_manager.neo4j_graph.query(cypher)
             if not result:
                 raise_dependency_error(self.name, "schema_extraction_tool", "Neo4j查询返回空结果")
             
             schema_data = result[0]
-            # 过滤掉空的表记录
+            # 过滤掉空的表记录并确保结构完整
             if schema_data and "tables" in schema_data:
                 schema_data["tables"] = [table for table in schema_data["tables"] if table.get("name")]
+                # 确保database_desc字段存在
+                if "database_desc" not in schema_data:
+                    schema_data["database_desc"] = ""
             else:
-                schema_data = {"database_name": "unknown", "tables": []}
+                schema_data = {"database_name": "unknown", "database_desc": "", "tables": []}
             
             self.logger.info(f"📊 从Neo4j读取到 {len(schema_data['tables'])} 个表的结构信息")
             
@@ -257,16 +266,13 @@ class DomainAnalysisTool(BaseSemanticSQLTool):
                 if not col.get('is_nullable', True):
                     col_def += " NOT NULL"
                 
-                if col.get('default_value'):
-                    col_def += f" DEFAULT {col['default_value']}"
-                
-                if col.get('comment'):
-                    col_def += f" COMMENT '{col['comment']}'"
+                if col.get('business_desc'):
+                    col_def += f" COMMENT '{col['business_desc']}'"
                 
                 column_defs.append(col_def)
                 
                 # 收集主键信息
-                if col.get('is_primary_key', False):
+                if col.get('is_primary', False):
                     primary_keys.append(col['name'])
             
             # 添加列定义
@@ -307,7 +313,10 @@ class DomainAnalysisTool(BaseSemanticSQLTool):
             
             # 2. 直接调用LLM服务
             self.logger.info("📡 调用LLM服务进行分析...")
-            llm_response = self.llm.invoke(structured_prompt)
+            llm_response_obj = self.llm.invoke(structured_prompt)
+            
+            # 提取响应内容
+            llm_response = llm_response_obj.content if hasattr(llm_response_obj, 'content') else str(llm_response_obj)
             self.logger.info(f"✅ LLM响应长度: {len(llm_response)} 字符")
             
             # 3. 解析结构化响应
@@ -491,7 +500,7 @@ class DomainAnalysisTool(BaseSemanticSQLTool):
             "timestamp": domain_knowledge.analysis_timestamp
         }
         
-        self.memory_manager.execute(cypher, params)
+        self.memory_manager.neo4j_graph.query(cypher, params)
         
         # 建立Database到Domain的关系
         relationship_cypher = '''
@@ -511,7 +520,7 @@ class DomainAnalysisTool(BaseSemanticSQLTool):
             "timestamp": domain_knowledge.analysis_timestamp
         }
         
-        self.memory_manager.execute(relationship_cypher, rel_params)
+        self.memory_manager.neo4j_graph.query(relationship_cypher, rel_params)
     
     def _create_business_knowledge_nodes(self, domain_knowledge: DomainKnowledge) -> int:
         """批量创建业务知识节点"""

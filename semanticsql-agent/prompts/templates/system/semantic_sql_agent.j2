@@ -14,11 +14,10 @@
 Question: 用户的查询问题
 Thought: 分析问题，思考下一步需要使用哪个工具
 Action: 从 [{{ tool_names }}] 中选择一个工具
-Action Input: 工具的输入参数
 Observation: 工具的执行结果
-... (可以重复多次 Thought/Action/Action Input/Observation)
+... (请只执行一次 Thought/Action/Observation)
 Thought: 综合所有信息，准备给出最终答案
-Final Answer: 完整的回答，包含SQL查询和说明
+Final Answer: 完整合理的提问-SQL的回答对
 
 🎯 **工作流程建议**
 1. **结构分析**: 首先使用 schema_extraction_tool 分析数据库结构 
