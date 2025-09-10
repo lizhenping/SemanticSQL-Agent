@@ -366,8 +366,9 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
             
             if result.get("success") and result.get("data"):
                 return [row[column_name] for row in result["data"] if row[column_name] is not None]
-            # 如果没有获取到内容，直接报错
-            raise Exception(f"无法获取表 {table_name} 列 {column_name} 的样本数据: {result.get('error', '未知错误')}")
+            # 如果没有获取到内容，记录日志但不中断程序
+            self.logger.warning(f"表 {table_name} 列 {column_name} 没有数据: {result.get('error', '查询结果为空')}") 
+            return []
             
         except Exception as e:
             self.logger.warning(f"采集样本值失败 {table_name}.{column_name}: {e}")
