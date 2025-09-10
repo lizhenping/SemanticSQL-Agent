@@ -115,8 +115,8 @@ class SemanticSQLReActAgent:
         if self.memory_manager:
             try:
                 tools.extend([
-                    create_domain_analysis_tool(memory_manager=self.memory_manager),
                     create_field_analysis_tool(memory_manager=self.memory_manager),
+                    # create_domain_analysis_tool(memory_manager=self.memory_manager),
                     create_column_analysis_tool(memory_manager=self.memory_manager),
                     create_table_analysis_tool(memory_manager=self.memory_manager),
                     create_er_analysis_tool(memory_manager=self.memory_manager)
@@ -195,14 +195,14 @@ class SemanticSQLReActAgent:
         
         # 构建agent（官方RunnablePassthrough.assign模式）
         # 绑定停止序列确保LLM在正确位置停止
-        # llm_with_stop = llm.bind(stop=["\nObservation:", "\nObservation"])
+        llm_with_stop = llm.bind(stop=["\nObservation:", "\nObservation"])
         
         agent = (
             RunnablePassthrough.assign(
                 agent_scratchpad=agent_scratchpad,
             )
             | prompt
-            # | llm_with_stop  # 使用带停止序列的LLM
+            | llm  # 使用原始LLM，不带停止序列
             | output_parser  # 解析器内部会过滤think内容
         )
         
