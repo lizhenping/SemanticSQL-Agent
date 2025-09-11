@@ -1,536 +1,438 @@
 """
-列语义分析工具 - 极简架构重构版本
-基于新的BaseSemanticSQLTool，实现完全自主的列语义分析
+列描述分析工具 - 基于field_analysis_tool架构重构
+
+基于schema_extraction_tool和field_analysis_tool的结果，
+为数据库列生成详细的业务描述和领域特定说明。
+整合pipeline的column_description_pipeline算法。
 """
 
 from typing import Dict, Any, List, Optional
 import json
-import re
+import logging
+from datetime import datetime
+from pydantic import Field
+from langchain_openai import ChatOpenAI
 
 from tools.base_tool import BaseSemanticSQLTool
-from models.schemas import PredicateType, EntityType
+from utils.database import DatabaseManager
 from models.exceptions import raise_tool_error, raise_dependency_error
+from config.settings import get_settings
+from utils.memory import Neo4jMemoryManager
+
+# 导入提示词管理和LLM组件
+from prompts.manager import PromptManager
+from config.factories import ComponentManager
 
 
 class ColumnAnalysisTool(BaseSemanticSQLTool):
-    """列语义分析工具 - 极简重构版本
+    """列描述分析工具 - 重构版本
     
-    职责：
-    - 基于数据库结构和字段分析进行列语义分析
-    - 生成详细的业务含义描述
-    - 识别列间的语义关系和模式
-    - 为后续工具提供列语义上下文
+    核心职责：
+    - 从Neo4j读取schema和field_analysis结果
+    - 使用LLM生成列的业务描述和领域说明
+    - 将描述结果注入到Neo4j Column节点
+    - 支持领域知识和熵值信息的智能分析
     
     设计原则：
-    - 依赖记忆：基于schema_extraction和field_analysis工具的结果
-    - 智能推断：结合字段语义和业务域知识
-    - 三元组输出：结构化列语义关系
+    - 数据复用：直接从Neo4j读取已有信息
+    - LLM驱动：采用column_description模板进行智能分析
+    - 快速失败：错误立即暴露，无降级逻辑
+    - 属性注入：将结果直接存储到Column节点属性
     """
     
-    name: str = "column_analysis"
-    description: str = "分析数据库列语义，生成业务含义描述和语义关系"
+    name: str = "column_analysis_tool"
+    description: str = "基于LLM的列业务描述生成，结合领域知识和字段分类信息"
     
-    def __init__(self, **kwargs):
-        """初始化列分析工具"""
-        super().__init__(**kwargs)
+    # 组件依赖（可选注入）
+    memory_manager: Optional[Neo4jMemoryManager] = Field(default=None, exclude=True)
+    database_manager: Optional[DatabaseManager] = Field(default=None, exclude=True)
+    llm: Optional[ChatOpenAI] = Field(default=None, exclude=True)
+    settings: Optional[Any] = Field(default=None, exclude=True)
+    prompt_manager: Optional[Any] = Field(default=None, exclude=True)
+    
+    def __init__(self, memory_manager: Optional['Neo4jMemoryManager'] = None, 
+                 database_manager: Optional[DatabaseManager] = None, **kwargs):
+        """
+        初始化列描述分析工具
+        
+        Args:
+            memory_manager: Neo4j记忆管理器实例
+            database_manager: 数据库管理器实例（可选）
+        """
+        super().__init__(memory_manager=memory_manager, **kwargs)
         # 使用object.__setattr__避免Pydantic验证问题
-        object.__setattr__(self, 'meaning_patterns', self._init_meaning_patterns())
+        object.__setattr__(self, 'settings', get_settings())
+        object.__setattr__(self, 'memory_manager', memory_manager)
+        object.__setattr__(self, 'database_manager', database_manager)
+        object.__setattr__(self, 'llm', ComponentManager.create_llm(get_settings()))
+        object.__setattr__(self, 'prompt_manager', PromptManager())
     
     def _run(self, *args, **kwargs) -> str:
-        """执行工具分析"""
-        # 提取输入文本
-        input_text = args[0] if args else kwargs.get('input', '')
-        # 1. 清空上次执行的三元组
-        self._clear_generated_triples()
-        self._log_execution_start(input_text)
+        """执行列描述分析的主入口方法"""
+        self.logger.info(f"🔧 {self.name}: 开始列描述分析")
         
         try:
-            # 2. 检查依赖：需要schema_extraction和field_analysis工具的结果
-            self._check_dependencies(["schema_extraction", "field_analysis"])
+            # 初始化必要的服务
+            if not self.memory_manager:
+                self.memory_manager = ComponentManager.create_memory_manager(self.settings)
             
-            # 3. 获取依赖分析结果
-            analysis_context = self._gather_analysis_context()
+            # 1. 检查依赖：需要schema_extraction_tool和field_analysis_tool的结果
+            self._check_dependencies()
             
-            # 4. 分析列语义
-            column_analysis = self._analyze_columns_semantics(analysis_context)
+            # 2. 从Neo4j读取数据库结构和字段分类信息
+            analysis_context = self._read_analysis_context_from_neo4j()
+            if not analysis_context['columns']:
+                return "❌ 列描述分析失败: 未找到列信息"
             
-            # 5. 生成列语义三元组
-            self._generate_column_triples(column_analysis, analysis_context)
+            self.logger.info(f"📖 从Neo4j读取到 {len(analysis_context['columns'])} 个列")
             
-            # 6. 持久化三元组到记忆系统
-            self._persist_triples()
+            # 3. 逐列生成业务描述
+            descriptions = []
+            llm_success_count = 0
             
-            # 7. 构建执行结果
-            result_message = self._build_result_message(column_analysis)
+            for column_info in analysis_context['columns']:
+                description = self._generate_column_description_with_llm(column_info, analysis_context)
+                if description:
+                    descriptions.append(description)
+                    llm_success_count += 1
+                    self.logger.debug(f"✅ 列 {column_info['field_name']} 描述生成完成")
+                else:
+                    raise_tool_error(
+                        self.name,
+                        f"列 {column_info['field_name']} LLM描述生成失败"
+                    )
             
-            self._log_execution_end(f"分析了 {column_analysis['total_columns']} 个列")
+            # 4. 将描述结果注入到Neo4j Column节点属性
+            updated_count = 0
+            for description in descriptions:
+                try:
+                    self._update_column_description(description)
+                    updated_count += 1
+                except Exception as e:
+                    self.logger.error(f"注入列描述失败 {description['field_name']}: {e}")
+                    raise_tool_error(self.name, f"列描述注入失败: {str(e)}")
+            
+            # 5. 生成统计报告
+            success_rate = (llm_success_count / len(analysis_context['columns'])) * 100 if analysis_context['columns'] else 0
+            
+            # 6. 构建返回消息
+            result_message = self._build_success_message(len(analysis_context['columns']), updated_count, success_rate)
+            
+            self.logger.info(f"✅ {self.name}: 列描述分析完成 - 分析了 {len(analysis_context['columns'])} 个列")
             return result_message
             
         except Exception as e:
-            error_msg = f"列语义分析失败: {str(e)}"
+            error_msg = f"列描述分析失败: {str(e)}"
             self.logger.error(f"❌ {self.name}: {error_msg}")
             return f"❌ {error_msg}"
     
-    # ========== 核心业务逻辑 ==========
-    def _gather_analysis_context(self) -> Dict[str, Any]:
-        """收集分析上下文"""
-        # 获取基础结构信息
-        schema_memory = self.get_memory_by_source_tool("schema_extraction")
-        schema_info = self._extract_schema_info(schema_memory)
-        
-        # 获取字段分析结果
-        field_memory = self.get_memory_by_source_tool("field_analysis")
-        field_semantics = self._extract_field_semantics(field_memory)
-        
-        # 尝试获取领域信息（可选）
-        domain_memory = self.get_memory_by_source_tool("domain_analysis")
-        domain_info = self._extract_domain_info(domain_memory) if domain_memory else {"primary_domain": "通用业务"}
-        
-        return {
-            "schema_info": schema_info,
-            "field_semantics": field_semantics,
-            "domain_info": domain_info
-        }
-    
-    def _extract_schema_info(self, schema_memory: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """从记忆中提取结构信息"""
-        if not schema_memory:
-            raise_dependency_error(self.name, "schema_extraction", "数据库结构信息")
-        
-        # 从三元组中重建结构信息
-        tables = set()
-        table_columns = {}
-        column_details = {}
-        database_name = "unknown"
-        
-        for triple in schema_memory:
-            subject = triple.get("subject", "")
-            predicate = triple.get("predicate", "")
-            obj = triple.get("object", "")
+    def _check_dependencies(self) -> None:
+        """检查schema_extraction_tool和field_analysis_tool依赖 - 采用快速失败模式"""
+        if not self.memory_manager or not getattr(self.memory_manager, 'neo4j_graph', None):
+            raise_dependency_error(
+                self.name,
+                "Neo4j连接不可用，无法读取schema和field信息"
+            )
             
-            if predicate == PredicateType.HAS_TABLE.value:
-                database_name = subject
-                tables.add(obj)
-            elif predicate == PredicateType.HAS_COLUMN.value:
-                table_name = subject
-                column_name = obj
-                if table_name not in table_columns:
-                    table_columns[table_name] = []
-                table_columns[table_name].append(column_name)
-            elif predicate == "has_type":
-                column_details[subject] = {"type": obj}
-            elif predicate == "is_primary_key" and obj == "true":
-                if subject not in column_details:
-                    column_details[subject] = {}
-                column_details[subject]["is_primary_key"] = True
+        # 检查是否存在Column节点（验证schema_extraction_tool已执行）
+        cypher = "MATCH (c:Column) RETURN count(c) as count LIMIT 1"
+        result = self.memory_manager.neo4j_graph.query(cypher)
         
-        return {
-            "database_name": database_name,
-            "tables": list(tables),
-            "table_columns": table_columns,
-            "column_details": column_details
-        }
+        if not result or result[0]['count'] == 0:
+            raise_dependency_error(
+                self.name,
+                "未找到Column节点，需要先执行schema_extraction_tool"
+            )
+        
+        # 检查是否存在category属性（验证field_analysis_tool已执行）
+        cypher = "MATCH (c:Column) WHERE c.category IS NOT NULL RETURN count(c) as count LIMIT 1"
+        result = self.memory_manager.neo4j_graph.query(cypher)
+        
+        if not result or result[0]['count'] == 0:
+            raise_dependency_error(
+                self.name,
+                "未找到字段分类信息，需要先执行field_analysis_tool"
+            )
     
-    def _extract_field_semantics(self, field_memory: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """从记忆中提取字段语义信息"""
-        field_semantics = {}
-        field_importance = {}
-        field_meanings = {}
-        
-        for triple in field_memory:
-            subject = triple.get("subject", "")
-            predicate = triple.get("predicate", "")
-            obj = triple.get("object", "")
-            
-            if predicate == "has_semantic_type":
-                field_semantics[subject] = obj
-            elif predicate == "has_importance":
-                field_importance[subject] = obj
-            elif predicate == "has_business_meaning":
-                field_meanings[subject] = obj
-        
-        return {
-            "field_semantics": field_semantics,
-            "field_importance": field_importance,
-            "field_meanings": field_meanings
-        }
-    
-    def _extract_domain_info(self, domain_memory: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """从记忆中提取领域信息"""
-        primary_domain = "通用业务"
-        core_entities = []
-        business_concepts = []
-        
-        for triple in domain_memory:
-            subject = triple.get("subject", "")
-            predicate = triple.get("predicate", "")
-            obj = triple.get("object", "")
-            
-            if predicate == PredicateType.BELONGS_TO.value:
-                primary_domain = obj
-            elif predicate == PredicateType.CONTAINS.value:
-                core_entities.append(obj)
-            elif predicate == "has_concept":
-                business_concepts.append(obj)
-        
-        return {
-            "primary_domain": primary_domain,
-            "core_entities": core_entities,
-            "business_concepts": business_concepts
-        }
-    
-    def _init_meaning_patterns(self) -> Dict[str, Dict[str, Any]]:
-        """初始化语义描述模式库"""
-        return {
-            "标识符": {
-                "template": "{table_name}表的唯一标识符，用于区分不同的{entity_name}记录",
-                "entity_keywords": ["用户", "产品", "订单", "账户", "项目"],
-                "confidence_boost": 0.9
-            },
-            "时间字段": {
-                "template": "记录{entity_name}在{domain}业务中的时间戳信息，用于跟踪{action}",
-                "action_mapping": {
-                    "created": "创建时间",
-                    "updated": "更新时间", 
-                    "deleted": "删除时间",
-                    "modified": "修改时间",
-                    "login": "登录时间",
-                    "expire": "过期时间"
-                },
-                "confidence_boost": 0.85
-            },
-            "金额字段": {
-                "template": "{entity_name}相关的金额数据，在{domain}业务中用于财务统计和分析",
-                "financial_keywords": ["价格", "费用", "成本", "收入", "支出"],
-                "confidence_boost": 0.9
-            },
-            "数量字段": {
-                "template": "{entity_name}的数量统计信息，支持{domain}业务的数据分析和报表",
-                "quantity_keywords": ["计数", "总数", "长度", "尺寸", "容量"],
-                "confidence_boost": 0.8
-            },
-            "状态字段": {
-                "template": "标识{entity_name}在{domain}业务流程中的当前状态或阶段",
-                "status_keywords": ["待处理", "进行中", "已完成", "已取消", "活跃", "禁用"],
-                "confidence_boost": 0.85
-            },
-            "文本字段": {
-                "template": "{entity_name}的描述性文本信息，提供详细的业务说明和备注",
-                "text_keywords": ["描述", "备注", "说明", "内容", "标题"],
-                "confidence_boost": 0.7
-            },
-            "布尔字段": {
-                "template": "{entity_name}的二元状态标记，表示某个特征的是否状态",
-                "boolean_keywords": ["启用", "可见", "有效", "删除", "推荐"],
-                "confidence_boost": 0.8
-            }
-        }
-    
-    def _analyze_columns_semantics(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """分析列语义"""
-        schema_info = context["schema_info"]
-        field_semantics_info = context["field_semantics"]
-        domain_info = context["domain_info"]
-        
-        table_columns = schema_info["table_columns"]
-        column_details = schema_info["column_details"]
-        field_semantics = field_semantics_info["field_semantics"]
-        field_importance = field_semantics_info["field_importance"]
-        field_meanings = field_semantics_info["field_meanings"]
-        
-        analyzed_columns = []
-        semantic_groups = {}
-        relationship_patterns = []
-        
-        # 分析每个列
-        for table_name, columns in table_columns.items():
-            entity_name = self._infer_entity_name(table_name, domain_info)
-            
-            for column_name in columns:
-                column_key = f"{table_name}.{column_name}"
-                column_type = column_details.get(column_name, {}).get("type", "unknown")
-                semantic_type = field_semantics.get(column_key, "未分类")
-                importance = field_importance.get(column_key, "low")
-                basic_meaning = field_meanings.get(column_key, "")
-                
-                # 生成增强的业务含义
-                enhanced_meaning = self._generate_enhanced_meaning(
-                    table_name, column_name, semantic_type, entity_name, 
-                    domain_info["primary_domain"], basic_meaning
-                )
-                
-                # 分析语义关系
-                relationships = self._analyze_semantic_relationships(
-                    table_name, column_name, semantic_type, columns
-                )
-                
-                column_analysis = {
-                    "table_name": table_name,
-                    "column_name": column_name,
-                    "semantic_type": semantic_type,
-                    "entity_name": entity_name,
-                    "enhanced_meaning": enhanced_meaning,
-                    "importance": importance,
-                    "data_type": column_type,
-                    "relationships": relationships,
-                    "confidence": self._calculate_meaning_confidence(semantic_type, basic_meaning)
-                }
-                
-                analyzed_columns.append(column_analysis)
-                
-                # 更新语义分组统计
-                if semantic_type not in semantic_groups:
-                    semantic_groups[semantic_type] = []
-                semantic_groups[semantic_type].append(column_key)
-                
-                # 收集关系模式
-                relationship_patterns.extend(relationships)
-        
-        return {
-            "analyzed_columns": analyzed_columns,
-            "semantic_groups": semantic_groups,
-            "relationship_patterns": relationship_patterns,
-            "total_columns": len(analyzed_columns),
-            "domain": domain_info["primary_domain"],
-            "analysis_details": {
-                "total_tables": len(table_columns),
-                "high_confidence_columns": len([c for c in analyzed_columns if c["confidence"] > 0.8]),
-                "unique_semantic_types": len(semantic_groups)
-            }
-        }
-    
-    def _infer_entity_name(self, table_name: str, domain_info: Dict[str, Any]) -> str:
-        """推断实体名称"""
-        # 清理表名
-        clean_name = table_name.lower()
-        clean_name = re.sub(r'^(t_|tbl_|tb_)', '', clean_name)  # 去前缀
-        clean_name = re.sub(r'(_log|_history|_backup)$', '', clean_name)  # 去后缀
-        
-        # 实体映射词典
-        entity_mapping = {
-            "user": "用户", "customer": "客户", "member": "会员",
-            "product": "产品", "goods": "商品", "item": "项目",
-            "order": "订单", "payment": "支付", "transaction": "交易",
-            "account": "账户", "profile": "档案", "info": "信息",
-            "category": "分类", "type": "类型", "status": "状态",
-            "log": "日志", "record": "记录", "data": "数据"
-        }
-        
-        # 查找匹配
-        for english, chinese in entity_mapping.items():
-            if english in clean_name:
-                return chinese
-        
-        # 使用业务概念
-        for concept in domain_info.get("business_concepts", []):
-            if concept in clean_name:
-                return concept
-        
-        return clean_name.replace("_", "")
-    
-    def _generate_enhanced_meaning(self, table_name: str, column_name: str, semantic_type: str, 
-                                 entity_name: str, domain: str, basic_meaning: str) -> str:
-        """生成增强的业务含义描述"""
-        if semantic_type == "未分类" or not basic_meaning:
-            return f"{entity_name}的{column_name}属性，用于存储相关业务数据"
-        
-        pattern_info = self.meaning_patterns.get(semantic_type, {})
-        template = pattern_info.get("template", basic_meaning)
-        
+    def _read_analysis_context_from_neo4j(self) -> Dict[str, Any]:
+        """从Neo4j读取分析上下文信息"""
         try:
-            # 特殊处理时间字段
-            if semantic_type == "时间字段":
-                action = "时间记录"
-                action_mapping = pattern_info.get("action_mapping", {})
-                for key, value in action_mapping.items():
-                    if key in column_name.lower():
-                        action = value
-                        break
-                
-                return template.format(
-                    entity_name=entity_name,
-                    domain=domain,
-                    action=action
-                )
+            # 读取数据库基本信息
+            cypher = """
+            MATCH (d:Database)
+            OPTIONAL MATCH (d)-[:CONTAINS]->(t:Table)-[:HAS_COLUMN]->(c:Column)
+            RETURN d.name as database_name,
+                   d.business_desc as database_desc,
+                   collect(DISTINCT {
+                       table_name: t.name,
+                       column_name: c.name,
+                       field_name: t.name + '.' + c.name,
+                       data_type: c.data_type,
+                       is_nullable: c.is_nullable,
+                       is_primary: c.is_primary,
+                       is_foreign: c.is_foreign,
+                       category: c.category,
+                       category_desc: c.category_desc,
+                       entropy_level: c.entropy_level,
+                       sample_values: CASE 
+                           WHEN size(c.sample_values) > 5 
+                           THEN c.sample_values[0..5] 
+                           ELSE c.sample_values 
+                       END,
+                       business_desc: c.business_desc,
+                       comment: c.comment
+                   }) as columns
+            """
             
-            # 标准模板替换
-            return template.format(
-                table_name=table_name,
-                entity_name=entity_name,
-                domain=domain
+            result = self.memory_manager.neo4j_graph.query(cypher)
+            if not result:
+                raise_dependency_error(self.name, "Neo4j查询返回空结果")
+            
+            context_data = result[0]
+            # 过滤掉空的列记录
+            if context_data and "columns" in context_data:
+                context_data["columns"] = [col for col in context_data["columns"] if col.get("column_name")]
+            else:
+                context_data = {"database_name": "unknown", "database_desc": "", "columns": []}
+            
+            # 读取表结构DDL信息
+            context_data["table_ddls"] = self._read_table_ddls()
+            
+            self.logger.info(f"📊 从Neo4j读取到 {len(context_data['columns'])} 个列的上下文信息")
+            
+            return context_data
+        except Exception as e:
+            self.logger.error(f"❌ Neo4j上下文查询失败: {e}")
+            raise_dependency_error(
+                self.name,
+                f"Neo4j上下文查询失败: {str(e)}"
             )
+    
+    def _read_table_ddls(self) -> Dict[str, str]:
+        """读取表DDL信息"""
+        try:
+            cypher = """
+            MATCH (d:Database)-[:CONTAINS]->(t:Table)-[:HAS_COLUMN]->(c:Column)
+            RETURN t.name as table_name,
+                   collect({
+                       name: c.name,
+                       data_type: c.data_type,
+                       is_nullable: c.is_nullable,
+                       is_primary: c.is_primary,
+                       is_foreign: c.is_foreign,
+                       comment: c.comment
+                   }) as columns
+            ORDER BY t.name
+            """
             
-        except (KeyError, ValueError):
-            # 模板替换失败时返回基础含义
-            return basic_meaning or f"{entity_name}的{semantic_type}数据字段"
+            result = self.memory_manager.neo4j_graph.query(cypher)
+            table_ddls = {}
+            
+            for row in result:
+                table_name = row['table_name']
+                columns = row['columns']
+                table_ddls[table_name] = self._format_table_ddl(table_name, columns)
+            
+            return table_ddls
+        except Exception as e:
+            self.logger.warning(f"⚠️ 读取表DDL失败: {e}")
+            return {}
     
-    def _analyze_semantic_relationships(self, table_name: str, column_name: str, 
-                                      semantic_type: str, all_columns: List[str]) -> List[Dict[str, str]]:
-        """分析语义关系"""
-        relationships = []
+    def _format_table_ddl(self, table_name: str, columns: List[Dict[str, Any]]) -> str:
+        """格式化表DDL"""
+        lines = [f"CREATE TABLE `{table_name}` ("]
         
-        # 分析命名模式关系
-        if semantic_type == "标识符":
-            # 寻找可能的外键关系
-            for other_column in all_columns:
-                if other_column != column_name and "_id" in other_column.lower():
-                    relationships.append({
-                        "type": "potential_foreign_key",
-                        "target": f"{table_name}.{other_column}",
-                        "description": f"可能存在外键关系"
-                    })
+        column_defs = []
+        for col in columns:
+            col_def = f"  `{col['name']}` {col.get('data_type', 'VARCHAR(255)')}"
+            if not col.get('is_nullable', True):
+                col_def += " NOT NULL"
+            if col.get('is_primary', False):
+                col_def += " PRIMARY KEY"
+            if col.get('comment'):
+                col_def += f" COMMENT '{col['comment']}'"
+            column_defs.append(col_def)
         
-        # 分析时间序列关系
-        if semantic_type == "时间字段":
-            time_columns = [col for col in all_columns 
-                          if any(keyword in col.lower() for keyword in ["time", "date", "created", "updated"])]
-            if len(time_columns) > 1:
-                relationships.append({
-                    "type": "temporal_sequence",
-                    "target": f"{table_name}.{time_columns}",
-                    "description": "时间序列关系"
-                })
+        lines.extend([f"{cd}," if i < len(column_defs) - 1 else cd 
+                     for i, cd in enumerate(column_defs)])
+        lines.append(");")
         
-        # 分析状态-时间关联
-        if semantic_type == "状态字段":
-            time_columns = [col for col in all_columns 
-                          if any(keyword in col.lower() for keyword in ["time", "date", "updated"])]
-            for time_col in time_columns:
-                relationships.append({
-                    "type": "status_time_correlation", 
-                    "target": f"{table_name}.{time_col}",
-                    "description": "状态与时间关联"
-                })
-        
-        return relationships
+        return "\\n".join(lines)
     
-    def _calculate_meaning_confidence(self, semantic_type: str, basic_meaning: str) -> float:
-        """计算语义含义置信度"""
-        base_confidence = 0.7
-        
-        # 基于语义类型的置信度调整
-        confidence_mapping = {
-            "标识符": 0.9,
-            "时间字段": 0.85,
-            "金额字段": 0.9,
-            "状态字段": 0.85,
-            "未分类": 0.3
+    def _generate_column_description_with_llm(self, column_info: Dict[str, Any], 
+                                           context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """使用LLM对单个列生成业务描述"""
+        try:
+            # 使用PromptManager渲染模板
+            prompt_text = self._render_column_description_prompt(column_info, context)
+            
+            # 直接调用LLM（使用预初始化的实例）
+            response = self.llm.invoke(prompt_text)
+            llm_response = response.content if hasattr(response, 'content') else str(response)
+            if not llm_response:
+                return None
+            
+            # 解析LLM响应，提取列描述
+            description_text = self._parse_description_response(llm_response)
+            if not description_text:
+                return None
+            
+            # 构建描述结果
+            description = {
+                "field_name": column_info['field_name'],
+                "table_name": column_info['table_name'],
+                "column_name": column_info['column_name'],
+                "description": description_text,
+                "generated_timestamp": datetime.now().isoformat()
+            }
+            
+            return description
+            
+        except Exception as e:
+            self.logger.error(f"LLM列描述生成失败 {column_info['field_name']}: {e}")
+            return None
+    
+    def _render_column_description_prompt(self, column_info: Dict[str, Any], 
+                                        context: Dict[str, Any]) -> str:
+        """使用PromptManager渲染列描述提示词模板"""
+        # 准备模板变量
+        template_vars = {
+            "table_name": column_info.get('table_name', ''),
+            "column_name": column_info.get('column_name', ''),
+            "database_name": context.get('database_name', '未知数据库'),
+            "database_domain": self._extract_domain_from_desc(context.get('database_desc', '')),
+            "table_ddl": context.get('table_ddls', {}).get(column_info.get('table_name', ''), ''),
+            "column_type": column_info.get('data_type', ''),
+            "is_nullable": column_info.get('is_nullable', True),
+            "is_primary_key": column_info.get('is_primary', False),
+            "is_foreign_key": column_info.get('is_foreign', False),
+            "column_examples": column_info.get('sample_values', []),
+            "field_category": column_info.get('category', 'other'),
+            "dim_or_meas": self._get_dim_or_meas(column_info.get('category', 'other')),
+            "field_importance": self._get_field_importance(column_info.get('category', 'other')),
+            "entropy_info": self._get_entropy_info(column_info)
         }
         
-        semantic_confidence = confidence_mapping.get(semantic_type, base_confidence)
-        
-        # 基于基础含义的置信度调整
-        if basic_meaning and len(basic_meaning) > 10:
-            semantic_confidence += 0.1
-        
-        return min(semantic_confidence, 0.95)
+        # 使用实例级别的prompt_manager渲染模板
+        return self.prompt_manager.get_tool_prompt("column_description", **template_vars)
     
-    def _generate_column_triples(self, analysis: Dict[str, Any], context: Dict[str, Any]) -> None:
-        """生成列语义三元组"""
-        database_name = context["schema_info"]["database_name"]
-        analyzed_columns = analysis["analyzed_columns"]
+    def _extract_domain_from_desc(self, database_desc: str) -> str:
+        """从数据库描述中提取领域信息"""
+        if not database_desc:
+            return "通用业务"
         
-        for column_info in analyzed_columns:
-            table_name = column_info["table_name"]
-            column_name = column_info["column_name"]
-            semantic_type = column_info["semantic_type"]
-            enhanced_meaning = column_info["enhanced_meaning"]
-            entity_name = column_info["entity_name"]
-            confidence = column_info["confidence"]
-            relationships = column_info["relationships"]
-            
-            column_key = f"{table_name}.{column_name}"
-            
-            # 1. 列-增强业务含义关系
-            self.add_analysis_triple(
-                subject=column_key,
-                predicate="has_enhanced_meaning",
-                object=enhanced_meaning,
-                subject_type=EntityType.COLUMN.value,
-                object_type="EnhancedBusinessMeaning",
-                confidence=confidence
-            )
-            
-            # 2. 列-实体关系
-            self.add_analysis_triple(
-                subject=column_key,
-                predicate="belongs_to_entity",
-                object=entity_name,
-                subject_type=EntityType.COLUMN.value,
-                object_type="BusinessEntity",
-                confidence=0.8
-            )
-            
-            # 3. 列-语义分组关系
-            self.add_analysis_triple(
-                subject=semantic_type,
-                predicate="contains_column",
-                object=column_key,
-                subject_type="SemanticGroup",
-                object_type=EntityType.COLUMN.value,
-                confidence=confidence
-            )
-            
-            # 4. 语义关系三元组
-            for rel in relationships:
-                self.add_analysis_triple(
-                    subject=column_key,
-                    predicate=f"has_{rel['type']}",
-                    object=rel["target"],
-                    subject_type=EntityType.COLUMN.value,
-                    object_type="SemanticRelation",
-                    confidence=0.7
-                )
+        # 简单的关键词匹配提取领域
+        if "【业务领域】" in database_desc:
+            start = database_desc.find("【业务领域】") + 6
+            end = database_desc.find("\\n", start)
+            if end > start:
+                return database_desc[start:end].strip()
         
-        self.logger.info(f"📝 生成了 {len(self._generated_triples)} 个列语义三元组")
+        return "通用业务"
     
-    def _build_result_message(self, analysis: Dict[str, Any]) -> str:
-        """构建执行结果消息"""
-        total_columns = analysis["total_columns"]
-        semantic_groups = analysis["semantic_groups"]
-        relationship_patterns = analysis["relationship_patterns"]
-        domain = analysis["domain"]
-        triple_count = len(self._generated_triples)
+    def _get_dim_or_meas(self, category: str) -> str:
+        """根据category获取维度/度量类型"""
+        measure_categories = ['measure']
+        dimension_categories = ['identifier', 'dimension', 'text', 'boolean', 'other']
         
-        # 构建语义分组统计
-        group_stats = []
-        for semantic_type, columns in semantic_groups.items():
-            group_stats.append(f"  • {semantic_type}: {len(columns)}个列")
+        if category in measure_categories:
+            return "度量"
+        elif category in dimension_categories:
+            return "维度"
+        else:
+            return "其他"
+    
+    def _get_field_importance(self, category: str) -> str:
+        """根据category获取字段重要性"""
+        high_importance = ['identifier']
+        medium_importance = ['measure', 'datetime', 'dimension']
+        low_importance = ['text', 'boolean', 'other']
         
-        # 构建关系模式统计
-        relationship_types = {}
-        for rel in relationship_patterns:
-            rel_type = rel["type"]
-            relationship_types[rel_type] = relationship_types.get(rel_type, 0) + 1
+        if category in high_importance:
+            return "高"
+        elif category in medium_importance:
+            return "中"
+        else:
+            return "低"
+    
+    def _get_entropy_info(self, column_info: Dict[str, Any]) -> Dict[str, Any]:
+        """获取熵值信息"""
+        entropy_level = column_info.get('entropy_level', 'medium')
         
-        rel_stats = []
-        for rel_type, count in relationship_types.items():
-            rel_stats.append(f"  • {rel_type}: {count}个")
+        # 模拟熵值数据结构
+        entropy_info = {
+            "level": entropy_level,
+            "value": 0.5,  # 默认值
+            "unique_ratio": 0.5,  # 默认值
+            "null_ratio": 0.0  # 默认值
+        }
         
-        result = f"""✅ 列语义分析完成
+        # 根据level调整数值
+        if entropy_level == 'low':
+            entropy_info["value"] = 0.2
+            entropy_info["unique_ratio"] = 0.1
+        elif entropy_level == 'high':
+            entropy_info["value"] = 0.9
+            entropy_info["unique_ratio"] = 0.9
+        
+        return entropy_info
+    
+    def _parse_description_response(self, response: str) -> Optional[str]:
+        """解析LLM描述响应"""
+        try:
+            # 直接返回响应内容，去除首尾空白
+            description = response.strip()
+            
+            # 检查是否为空或过短
+            if not description or len(description) < 2:
+                return None
+            
+            return description
+            
+        except Exception as e:
+            self.logger.warning(f"解析LLM描述响应失败: {e}")
+            return None
+    
+    def _update_column_description(self, description: Dict[str, Any]) -> None:
+        """将列描述结果注入到Neo4j Column节点属性中"""
+        
+        # 使用CONTAINS关系模式，将description作为Column节点属性注入
+        cypher = '''
+        MATCH (d:Database)-[:CONTAINS]->(t:Table {name: $table_name})-[:HAS_COLUMN]->(c:Column {name: $column_name})
+        SET c.description = $description,
+            c.description_timestamp = datetime()
+        RETURN c
+        '''
+        
+        params = {
+            "table_name": description['table_name'],
+            "column_name": description['column_name'],
+            "description": description['description']
+        }
+        
+        self.memory_manager.neo4j_graph.query(cypher, params)
+        
+        self.logger.info(f"✅ 已将列描述注入到Column节点 '{description['field_name']}'")
+    
+    def _build_success_message(self, total_columns: int, updated_count: int, success_rate: float) -> str:
+        """构建成功返回消息"""
+        result = f"""✅ 列描述分析完成
 
-🎯 分析结果:
+🔍 分析结果:
   • 分析列总数: {total_columns}
-  • 业务域: {domain}
-  • 生成三元组: {triple_count}个
-
-📊 语义分组分布:
-{chr(10).join(group_stats)}
-
-🔗 语义关系模式:
-{chr(10).join(rel_stats) if rel_stats else "  • 未发现特殊关系模式"}
-
-📈 分析质量:
-  • 分析表数: {analysis['analysis_details']['total_tables']}
-  • 高置信度列: {analysis['analysis_details']['high_confidence_columns']}个
-  • 语义类型数: {analysis['analysis_details']['unique_semantic_types']}种
-
-💾 列语义知识已存储到记忆系统，可供后续工具使用"""
+  • 成功注入列: {updated_count}
+  • LLM生成成功率: {success_rate:.1f}%
+  
+💾 列描述结果已注入到Neo4j Column节点的description属性，可供后续工具使用"""
         
         return result
 
 
 # ========== 便利函数 ==========
-def create_column_analysis_tool(memory_manager: Optional['Neo4jMemoryManager'] = None) -> ColumnAnalysisTool:
-    """创建列分析工具的便利函数"""
-    return ColumnAnalysisTool(memory_manager=memory_manager)
+def create_column_analysis_tool(memory_manager: Optional['Neo4jMemoryManager'] = None,
+                               database_manager: Optional[DatabaseManager] = None) -> ColumnAnalysisTool:
+    """创建列描述分析工具的便利函数"""
+    return ColumnAnalysisTool(
+        memory_manager=memory_manager,
+        database_manager=database_manager
+    )

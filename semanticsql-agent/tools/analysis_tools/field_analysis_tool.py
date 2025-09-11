@@ -138,7 +138,7 @@ class FieldAnalysisTool(BaseSemanticSQLTool):
 
             # success_rate = (llm_success_count / len(field_infos)) * 100 if field_infos else 0
             # self.logger.info(f"✅ {self.name}: 字段分析完成 - 分析了 {len(field_infos)} 个字段,其中成功率是{success_rate}")
-            result_message = "✅ field_analysis_tool分析完成，已存储到Neo4j。请继续执行column_analysis_tool工具。"
+            result_message = "✅ field_analysis_tool分析完成，已存储到Neo4j，请继续执行column_analysis_tool工具。"
             return result_message
             
         except Exception as e:
