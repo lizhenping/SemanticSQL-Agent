@@ -111,11 +111,9 @@ class TableAnalysisTool(BaseSemanticSQLTool):
                     self.logger.error(f"注入表描述失败 {description['table_name']}: {e}")
                     raise_tool_error(self.name, f"表描述注入失败: {str(e)}")
             
-            # 5. 生成统计报告
-            success_rate = (llm_success_count / len(analysis_context['tables'])) * 100 if analysis_context['tables'] else 0
-            
+ 
             # 6. 构建返回消息
-            result_message = self._build_success_message(len(analysis_context['tables']), updated_count, success_rate)
+            result_message = "✅ table_analysis_tool 分析完成，已存储到Neo4j，请务必继续执行 er_analysis_tool 工具。"
             
             self.logger.info(f"✅ {self.name}: 表描述分析完成 - 分析了 {len(analysis_context['tables'])} 个表")
             return result_message
@@ -513,19 +511,6 @@ class TableAnalysisTool(BaseSemanticSQLTool):
         self.memory_manager.neo4j_graph.query(cypher, params)
         
         self.logger.info(f"✅ 已将AI业务描述注入到Table节点 '{description['table_name']}' 的ai_business_desc属性")
-    
-    def _build_success_message(self, total_tables: int, updated_count: int, success_rate: float) -> str:
-        """构建成功返回消息"""
-        result = f"""✅ 表描述分析完成
-
-🔍 分析结果:
-  • 分析表总数: {total_tables}
-  • 成功注入表: {updated_count}
-  • LLM生成成功率: {success_rate:.1f}%
-  
-💾 AI业务描述结果已注入到Neo4j Table节点的ai_business_desc属性，可供后续工具使用"""
-        
-        return result
 
 
 # ========== 便利函数 ==========
