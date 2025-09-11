@@ -84,39 +84,8 @@ class SemanticSQLOutputParser(AgentOutputParser):
         
         # 4. 提取 Action Input（修改：支持Observation作为Action Input）
         action_input = ""
-        
-        # 首先尝试提取 Action Input
-        action_input_match = re.search(
-            r"Action\s*\d*\s*Input\s*\d*\s*:(.*?)(?=\n(?:Thought|Action|Final Answer|Observation)|$)", 
-            llm_output, re.DOTALL
-        )
-        
-        if action_input_match:
-            action_input = action_input_match.group(1).strip()
-        else:
-            # 如果没有找到Action Input，尝试找Observation
-            observation_match = re.search(
-                r"Observation\s*:(.*?)(?=\n(?:Thought|Action|Final Answer)|$)", 
-                llm_output, re.DOTALL
-            )
-            
-            if observation_match:
-                action_input = observation_match.group(1).strip()
-            else:
-                # 如果既没有Action Input也没有Observation，检查是否有相应的标识符
-                if "Action Input:" in llm_output:
-                    raise OutputParserException(f"Could not parse action input from: `{llm_output}`")
-                elif "Observation:" in llm_output:
-                    raise OutputParserException(f"Could not parse observation from: `{llm_output}`")
-                # 如果都没有标识符，action_input保持为空字符串
-        
-        # 5. 移除可能的引号（与官方逻辑一致）
-        if action_input.startswith('"') and action_input.endswith('"'):
-            action_input = action_input[1:-1]
-        elif action_input.startswith("'") and action_input.endswith("'"):
-            action_input = action_input[1:-1]
-        
-        # 6. 验证工具名称
+
+        # 5. 验证工具名称
         action = self._validate_tool_name(action)
         
         return AgentAction(
@@ -228,7 +197,7 @@ Final Answer: 给用户的最终答案
         
         if not isinstance(text, str):
             return text
-        
+        print(text)
         # 1. 过滤 <think>...</think> 标签及其内容
         cleaned_text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
         

@@ -9,7 +9,6 @@
 from typing import Dict, Any, List, Optional
 import json
 import logging
-from datetime import datetime
 from pydantic import Field
 from langchain_openai import ChatOpenAI
 
@@ -157,7 +156,7 @@ class TableAnalysisTool(BaseSemanticSQLTool):
     def _read_table_context_from_neo4j(self) -> Dict[str, Any]:
         """从Neo4j读取表分析上下文信息"""
         try:
-            # 读取数据库和表基本信息，以及列的AI描述
+            # 读取数据库和表基本信息，以及列的完整分析信息
             cypher = """
             MATCH (d:Database)-[:CONTAINS]->(t:Table)-[:HAS_COLUMN]->(c:Column)
             WHERE c.ai_business_desc IS NOT NULL
@@ -168,6 +167,14 @@ class TableAnalysisTool(BaseSemanticSQLTool):
                        column_name: c.name,
                        data_type: c.data_type,
                        ai_business_desc: c.ai_business_desc,
+                       category: c.category,
+                       category_desc: c.category_desc,
+                       entropy_level: c.entropy_level,
+                       sample_values: CASE 
+                           WHEN size(c.sample_values) > 5 
+                           THEN c.sample_values[0..5] 
+                           ELSE c.sample_values 
+                       END,
                        is_nullable: c.is_nullable,
                        is_primary: c.is_primary,
                        is_foreign: c.is_foreign,
@@ -228,16 +235,10 @@ class TableAnalysisTool(BaseSemanticSQLTool):
             if not llm_response:
                 return None
             
-            # 解析LLM响应，提取表描述
-            description_text = self._parse_description_response(llm_response)
-            if not description_text:
-                return None
-            
             # 构建描述结果
             description = {
                 "table_name": table_info['table_name'],
-                "ai_business_desc": description_text,
-                "generated_timestamp": datetime.now().isoformat()
+                "ai_business_desc": llm_response
             }
             
             return description
@@ -249,22 +250,43 @@ class TableAnalysisTool(BaseSemanticSQLTool):
     def _render_table_description_prompt(self, table_info: Dict[str, Any], 
                                        context: Dict[str, Any]) -> str:
         """使用PromptManager渲染表描述提示词模板"""
+        columns = table_info.get('columns', [])
+        
         # 构建包含列注释的DDL
         table_ddl_with_comments = self._build_table_ddl_with_comments(table_info)
         
-        # 准备模板变量
+        # 进行表级特征分析
+        category_stats = self._analyze_field_category_distribution(columns)
+        entropy_stats = self._analyze_entropy_distribution(columns)
+        representative_samples = self._extract_representative_samples(columns)
+        business_pattern = self._infer_table_business_pattern(category_stats, entropy_stats)
+        entropy_guidance = self._get_entropy_guidance(entropy_stats)
+        
+        # 统计主键外键数量
+        primary_key_count = sum(1 for col in columns if col.get('is_primary', False))
+        foreign_key_count = sum(1 for col in columns if col.get('is_foreign', False))
+        
+        # 准备完整的模板变量
         template_vars = {
             "table_name": table_info.get('table_name', ''),
             "database_name": context.get('database_name', '未知数据库'),
             "database_domain": context.get('database_desc', '通用业务领域'),
-            "table_schema_with_comments_ddl": table_ddl_with_comments
+            "table_schema_with_comments_ddl": table_ddl_with_comments,
+            "total_columns": len(columns),
+            "field_category_stats": category_stats,
+            "entropy_stats": entropy_stats,
+            "representative_samples": representative_samples,
+            "table_business_pattern": business_pattern,
+            "entropy_guidance": entropy_guidance,
+            "primary_key_count": primary_key_count,
+            "foreign_key_count": foreign_key_count
         }
         
         # 使用实例级别的prompt_manager渲染模板
         return self.prompt_manager.get_tool_prompt("table_description", **template_vars)
     
     def _build_table_ddl_with_comments(self, table_info: Dict[str, Any]) -> str:
-        """构建包含列注释的表DDL"""
+        """构建包含丰富元数据的表DDL"""
         table_name = table_info['table_name']
         columns = table_info['columns']
         
@@ -281,12 +303,42 @@ class TableAnalysisTool(BaseSemanticSQLTool):
             if col.get('is_primary', False):
                 col_def += " PRIMARY KEY"
             
-            # 添加AI生成的列注释
+            # 构建增强的列注释（包含AI描述、类别和样本信息）
+            comment_parts = []
+            
+            # AI业务描述
             ai_desc = col.get('ai_business_desc', '')
             if ai_desc:
-                col_def += f" COMMENT '{ai_desc}'"
+                comment_parts.append(ai_desc)
             elif col.get('comment'):
-                col_def += f" COMMENT '{col['comment']}'"
+                comment_parts.append(col.get('comment', ''))
+            
+            # 字段分类信息
+            category_desc = col.get('category_desc', '')
+            entropy_level = col.get('entropy_level', '')
+            if category_desc and entropy_level:
+                comment_parts.append(f"[{category_desc}-{entropy_level}熵值]")
+            elif category_desc:
+                comment_parts.append(f"[{category_desc}]")
+            
+            # 样本值信息
+            sample_values = col.get('sample_values', [])
+            if sample_values:
+                formatted_samples = []
+                for sample in sample_values[:3]:  # 最多显示3个样本
+                    if sample is not None:
+                        sample_str = str(sample)
+                        if len(sample_str) > 15:  # 限制样本值长度
+                            sample_str = sample_str[:12] + "..."
+                        formatted_samples.append(sample_str)
+                
+                if formatted_samples:
+                    comment_parts.append(f"[样本:{','.join(formatted_samples)}]")
+            
+            # 组合注释
+            if comment_parts:
+                full_comment = ' '.join(comment_parts)
+                col_def += f" COMMENT '{full_comment}'"
             
             column_defs.append(col_def)
         
@@ -294,27 +346,150 @@ class TableAnalysisTool(BaseSemanticSQLTool):
                      for i, cd in enumerate(column_defs)])
         lines.append(");")
         
+        # 添加表特征摘要注释
+        lines.append("")
+        lines.append("-- 表特征摘要:")
+        
+        # 分析字段分布
+        category_stats = self._analyze_field_category_distribution(columns)
+        entropy_stats = self._analyze_entropy_distribution(columns)
+        
+        category_summary = []
+        for category, stats in category_stats.items():
+            category_summary.append(f"{stats['category_desc']}({stats['count']}个)")
+        lines.append(f"-- 字段分类: {', '.join(category_summary)}")
+        
+        lines.append(f"-- 数据特征: 低熵值{entropy_stats['low_percentage']}%, 中熵值{entropy_stats['medium_percentage']}%, 高熵值{entropy_stats['high_percentage']}%")
+        
+        # 推断业务模式
+        business_pattern = self._infer_table_business_pattern(category_stats, entropy_stats)
+        lines.append(f"-- 业务模式: {business_pattern}")
+        
         return "\\n".join(lines)
     
-    def _parse_description_response(self, response: str) -> Optional[str]:
-        """解析LLM描述响应"""
-        try:
-            # 直接返回响应内容，去除首尾空白
-            description = response.strip()
+
+    def _analyze_field_category_distribution(self, columns: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """分析字段类别分布统计"""
+        category_stats = {}
+        total_columns = len(columns)
+        
+        # 统计各类别数量
+        category_counts = {}
+        category_examples = {}
+        
+        for col in columns:
+            category = col.get('category', 'other')
+            category_desc = col.get('category_desc', '其他字段')
             
-            # 检查是否为空或过短
-            if not description or len(description) < 2:
-                return None
+            if category not in category_counts:
+                category_counts[category] = 0
+                category_examples[category] = []
             
-            # 限制长度（最大50汉字）
-            if len(description) > 50:
-                description = description[:47] + "..."
+            category_counts[category] += 1
+            if len(category_examples[category]) < 3:  # 保留前3个作为示例
+                category_examples[category].append(col.get('column_name', ''))
+        
+        # 构建统计结果
+        for category, count in category_counts.items():
+            category_desc = next((col.get('category_desc', '其他字段') for col in columns 
+                                if col.get('category') == category), '其他字段')
+            category_stats[category] = {
+                'category_desc': category_desc,
+                'count': count,
+                'percentage': round((count / total_columns) * 100, 1),
+                'example_fields': category_examples[category]
+            }
+        
+        return category_stats
+    
+    def _analyze_entropy_distribution(self, columns: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """分析Neo4j中已有的熵值分布特征"""
+        entropy_counts = {'low': 0, 'medium': 0, 'high': 0}
+        total_columns = len(columns) if columns else 1  # 避免除零
+        
+        # 直接统计Neo4j中已计算的熵值等级
+        for col in columns:
+            entropy_level = col.get('entropy_level', 'medium')
+            if entropy_level in entropy_counts:
+                entropy_counts[entropy_level] += 1
+            else:
+                # 处理可能的其他熵值等级，归类到medium
+                entropy_counts['medium'] += 1
+        
+        return {
+            'low_count': entropy_counts['low'],
+            'medium_count': entropy_counts['medium'],  
+            'high_count': entropy_counts['high'],
+            'low_percentage': round((entropy_counts['low'] / total_columns) * 100, 1) if total_columns > 0 else 0,
+            'medium_percentage': round((entropy_counts['medium'] / total_columns) * 100, 1) if total_columns > 0 else 0,
+            'high_percentage': round((entropy_counts['high'] / total_columns) * 100, 1) if total_columns > 0 else 0
+        }
+    
+    def _extract_representative_samples(self, columns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """提取代表性样本值"""
+        representative_samples = []
+        
+        for col in columns:
+            column_name = col.get('column_name', '')
+            category_desc = col.get('category_desc', '其他字段')
+            sample_values = col.get('sample_values', [])
             
-            return description
-            
-        except Exception as e:
-            self.logger.warning(f"解析LLM表描述响应失败: {e}")
-            return None
+            if sample_values:
+                # 格式化样本值，最多显示3个
+                formatted_samples = []
+                for sample in sample_values[:3]:
+                    if sample is not None:
+                        sample_str = str(sample)
+                        if len(sample_str) > 20:
+                            sample_str = sample_str[:17] + "..."
+                        formatted_samples.append(sample_str)
+                
+                if formatted_samples:
+                    representative_samples.append({
+                        'field_name': column_name,
+                        'category_desc': category_desc,
+                        'samples': ', '.join(formatted_samples)
+                    })
+        
+        return representative_samples
+    
+    def _infer_table_business_pattern(self, category_stats: Dict[str, Any], 
+                                    entropy_stats: Dict[str, Any]) -> str:
+        """基于字段特征推断表的业务模式"""
+        # 分析主键外键数量
+        has_many_identifiers = category_stats.get('identifier', {}).get('count', 0) >= 2
+        has_many_dimensions = category_stats.get('dimension', {}).get('count', 0) >= 3
+        has_measures = category_stats.get('measure', {}).get('count', 0) > 0
+        
+        # 分析熵值分布
+        low_entropy_dominant = entropy_stats.get('low_percentage', 0) > 60
+        high_entropy_dominant = entropy_stats.get('high_percentage', 0) > 40
+        
+        if low_entropy_dominant and has_many_dimensions:
+            return "字典码表类型 - 主要存储枚举和分类信息"
+        elif has_many_identifiers and high_entropy_dominant:
+            return "主数据表类型 - 存储核心业务实体信息"
+        elif has_measures and has_many_dimensions:
+            return "事实表类型 - 记录业务交易和度量数据"
+        elif has_many_dimensions:
+            return "维度表类型 - 提供业务分析的分类维度"
+        else:
+            return "通用业务表 - 支持日常业务操作"
+    
+    def _get_entropy_guidance(self, entropy_stats: Dict[str, Any]) -> str:
+        """根据熵值分布生成指导信息"""
+        low_pct = entropy_stats.get('low_percentage', 0)
+        medium_pct = entropy_stats.get('medium_percentage', 0)
+        high_pct = entropy_stats.get('high_percentage', 0)
+        
+        if low_pct > 60:
+            return "数据重复度高，主要为状态、类型、等级等枚举类信息"
+        elif high_pct > 40:
+            return "数据多样性强，包含大量标识符、名称、金额等独特值"
+        elif medium_pct > 50:
+            return "数据分散适中，平衡了分类信息和个性化数据"
+        else:
+            return "数据特征混合，包含多种类型的业务信息"
     
     def _update_table_description(self, description: Dict[str, Any]) -> None:
         """将表描述结果注入到Neo4j Table节点属性中"""

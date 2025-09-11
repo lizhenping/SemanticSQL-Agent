@@ -1,4 +1,4 @@
-你现在是一名顶尖的数据架构师。正在为数据库的表编写注释。
+你现在是一名顶尖的数据架构师。正在为数据库的表编写注释。请结合字段分类、数据特征和业务模式进行综合分析。
 
 # 任务
 为数据表 "{{ table_name }}" 生成一个简洁、准确的中文注释及在领域的业务说明。
@@ -11,10 +11,43 @@
 2. **表结构及列注释 (Table Schema with Column Comments)**:
    {{ table_schema_with_comments_ddl }}
 
+3. **表字段构成分析**:
+   总字段数: {{ total_columns }}个
+   {% for category_info in field_category_stats.values() %}
+   - {{ category_info.category_desc }}: {{ category_info.count }}个 ({{ category_info.percentage }}%)
+     代表字段: {{ category_info.example_fields | join(', ') }}
+   {% endfor %}
+
+4. **表数据特征分析**:
+   - 数据多样性分布:
+     * 低熵值字段: {{ entropy_stats.low_count }}个 ({{ entropy_stats.low_percentage }}%) - 枚举状态类
+     * 中熵值字段: {{ entropy_stats.medium_count }}个 ({{ entropy_stats.medium_percentage }}%) - 分类级别类  
+     * 高熵值字段: {{ entropy_stats.high_count }}个 ({{ entropy_stats.high_percentage }}%) - 标识度量类
+   - 约束特征: {{ primary_key_count }}个主键, {{ foreign_key_count }}个外键
+   - 业务模式推断: {{ table_business_pattern }}
+
+5. **代表性数据样本**:
+   {% for sample_info in representative_samples %}
+   - {{ sample_info.field_name }} ({{ sample_info.category_desc }}): {{ sample_info.samples }}
+   {% endfor %}
+
+6. **信息熵分析指导**:
+   {% if entropy_stats %}
+   **信息熵说明**：
+     * low (低熵值): 数据值重复度高，通常是状态码、类型标识、枚举值等
+     * medium (中熵值): 数据有一定多样性，通常是分类、级别、区域代码等  
+     * high (高熵值): 数据非常分散，通常是唯一标识符、名称、金额等
+   
+   **当前表数据特征**: {{ entropy_guidance }}
+   {% endif %}
+
 # 要求
 - 注释必须是中文。
-- 数据库领域知识仅仅是初步的了解存在错误，仅供参考，不要过度依赖。    
+- 数据库领域知识仅仅是初步的了解存在错误，仅供参考，不要过度依赖。
+- **重要**：必须综合考虑字段分类分布、数据特征和业务模式来理解表的核心职能
 - 高度概括该表的核心内容，说明它在什么维度上存储了什么信息。
+- 结合熵值分布特征判断表的数据性质（枚举型/标识型/混合型）
+- 参考代表性样本数据理解具体的业务含义
 - 风格简洁，不超过50个汉字。
 - 直接返回注释内容，不要包含任何其他解释或标签。
 - 业务人员可能会使用简写首字母，简写首字母含义也是重要参考。
