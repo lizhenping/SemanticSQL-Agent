@@ -24,6 +24,7 @@ class SemanticSQLOutputParser(AgentOutputParser):
     3. 解析失败 -> OutputParserException (异常处理)
     """
     
+
     def parse(self, llm_output: str) -> Union[AgentAction, AgentFinish]:
         """解析LLM输出 - 完全基于官方ReAct格式
         
@@ -73,7 +74,7 @@ class SemanticSQLOutputParser(AgentOutputParser):
         
         # 3. 提取 Action（官方逻辑）
         action_match = re.search(
-            r"Action\s*\d*\s*:(.*?)(?=\n|Action\s*\d*\s*Input\s*\d*\s*:|$)", 
+            r"Action\s*\d*\s*:(.*?)(?=\n|Action\s*\d*\s*Input\s*\d*\s*:|Observation\s*:|$)", 
             llm_output, re.DOTALL
         )
         if not action_match:
@@ -81,15 +82,33 @@ class SemanticSQLOutputParser(AgentOutputParser):
         
         action = action_match.group(1).strip()
         
-        # 4. 提取 Action Input（官方逻辑）
+        # 4. 提取 Action Input（修改：支持Observation作为Action Input）
+        action_input = ""
+        
+        # 首先尝试提取 Action Input
         action_input_match = re.search(
-            r"Action\s*\d*\s*Input\s*\d*\s*:(.*?)(?=\n(?:Thought|Action|Final Answer)|$)", 
+            r"Action\s*\d*\s*Input\s*\d*\s*:(.*?)(?=\n(?:Thought|Action|Final Answer|Observation)|$)", 
             llm_output, re.DOTALL
         )
-        if not action_input_match:
-            raise OutputParserException(f"Could not parse action input from: `{llm_output}`")
         
-        action_input = action_input_match.group(1).strip()
+        if action_input_match:
+            action_input = action_input_match.group(1).strip()
+        else:
+            # 如果没有找到Action Input，尝试找Observation
+            observation_match = re.search(
+                r"Observation\s*:(.*?)(?=\n(?:Thought|Action|Final Answer)|$)", 
+                llm_output, re.DOTALL
+            )
+            
+            if observation_match:
+                action_input = observation_match.group(1).strip()
+            else:
+                # 如果既没有Action Input也没有Observation，检查是否有相应的标识符
+                if "Action Input:" in llm_output:
+                    raise OutputParserException(f"Could not parse action input from: `{llm_output}`")
+                elif "Observation:" in llm_output:
+                    raise OutputParserException(f"Could not parse observation from: `{llm_output}`")
+                # 如果都没有标识符，action_input保持为空字符串
         
         # 5. 移除可能的引号（与官方逻辑一致）
         if action_input.startswith('"') and action_input.endswith('"'):
@@ -105,6 +124,7 @@ class SemanticSQLOutputParser(AgentOutputParser):
             tool_input=action_input,
             log=llm_output
         )
+
     
     def _contains_sql_result(self, text: str) -> bool:
         """检查文本是否包含SQL结果
