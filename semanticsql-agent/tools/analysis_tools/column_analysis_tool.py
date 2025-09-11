@@ -175,11 +175,10 @@ class ColumnAnalysisTool(BaseSemanticSQLTool):
                        category_desc: c.category_desc,
                        entropy_level: c.entropy_level,
                        sample_values: CASE 
-                           WHEN size(c.sample_values) > 5 
-                           THEN c.sample_values[0..5] 
+                           WHEN size(c.sample_values) > 3 
+                           THEN c.sample_values[0..3] 
                            ELSE c.sample_values 
                        END,
-                       business_desc: c.business_desc,
                        comment: c.comment
                    }) as columns
             """
@@ -282,7 +281,7 @@ class ColumnAnalysisTool(BaseSemanticSQLTool):
                 "field_name": column_info['field_name'],
                 "table_name": column_info['table_name'],
                 "column_name": column_info['column_name'],
-                "description": description_text,
+                "ai_business_desc": description_text,
                 "generated_timestamp": datetime.now().isoformat()
             }
             
@@ -331,51 +330,18 @@ class ColumnAnalysisTool(BaseSemanticSQLTool):
         return "通用业务"
     
     def _get_dim_or_meas(self, category: str) -> str:
-        """根据category获取维度/度量类型"""
-        measure_categories = ['measure']
-        dimension_categories = ['identifier', 'dimension', 'text', 'boolean', 'other']
-        
-        if category in measure_categories:
-            return "度量"
-        elif category in dimension_categories:
-            return "维度"
-        else:
-            return "其他"
+        """直接返回category给LLM"""
+        return category
     
     def _get_field_importance(self, category: str) -> str:
-        """根据category获取字段重要性"""
-        high_importance = ['identifier']
-        medium_importance = ['measure', 'datetime', 'dimension']
-        low_importance = ['text', 'boolean', 'other']
-        
-        if category in high_importance:
-            return "高"
-        elif category in medium_importance:
-            return "中"
-        else:
-            return "低"
+        """直接返回category给LLM"""
+        return category
     
     def _get_entropy_info(self, column_info: Dict[str, Any]) -> Dict[str, Any]:
-        """获取熵值信息"""
-        entropy_level = column_info.get('entropy_level', 'medium')
-        
-        # 模拟熵值数据结构
-        entropy_info = {
-            "level": entropy_level,
-            "value": 0.5,  # 默认值
-            "unique_ratio": 0.5,  # 默认值
-            "null_ratio": 0.0  # 默认值
+        """直接从Neo4j获取熵值信息"""
+        return {
+            "level": column_info.get('entropy_level', 'medium')
         }
-        
-        # 根据level调整数值
-        if entropy_level == 'low':
-            entropy_info["value"] = 0.2
-            entropy_info["unique_ratio"] = 0.1
-        elif entropy_level == 'high':
-            entropy_info["value"] = 0.9
-            entropy_info["unique_ratio"] = 0.9
-        
-        return entropy_info
     
     def _parse_description_response(self, response: str) -> Optional[str]:
         """解析LLM描述响应"""
@@ -396,23 +362,23 @@ class ColumnAnalysisTool(BaseSemanticSQLTool):
     def _update_column_description(self, description: Dict[str, Any]) -> None:
         """将列描述结果注入到Neo4j Column节点属性中"""
         
-        # 使用CONTAINS关系模式，将description作为Column节点属性注入
+        # 使用CONTAINS关系模式，将ai_business_desc作为Column节点属性注入
         cypher = '''
         MATCH (d:Database)-[:CONTAINS]->(t:Table {name: $table_name})-[:HAS_COLUMN]->(c:Column {name: $column_name})
-        SET c.description = $description,
-            c.description_timestamp = datetime()
+        SET c.ai_business_desc = $ai_business_desc,
+            c.ai_business_desc_timestamp = datetime()
         RETURN c
         '''
         
         params = {
             "table_name": description['table_name'],
             "column_name": description['column_name'],
-            "description": description['description']
+            "ai_business_desc": description['ai_business_desc']
         }
         
         self.memory_manager.neo4j_graph.query(cypher, params)
         
-        self.logger.info(f"✅ 已将列描述注入到Column节点 '{description['field_name']}'")
+        self.logger.info(f"✅ 已将AI业务描述注入到Column节点 '{description['field_name']}' 的ai_business_desc属性")
     
     def _build_success_message(self, total_columns: int, updated_count: int, success_rate: float) -> str:
         """构建成功返回消息"""
@@ -423,7 +389,7 @@ class ColumnAnalysisTool(BaseSemanticSQLTool):
   • 成功注入列: {updated_count}
   • LLM生成成功率: {success_rate:.1f}%
   
-💾 列描述结果已注入到Neo4j Column节点的description属性，可供后续工具使用"""
+💾 AI业务描述结果已注入到Neo4j Column节点的ai_business_desc属性，可供后续工具使用"""
         
         return result
 
