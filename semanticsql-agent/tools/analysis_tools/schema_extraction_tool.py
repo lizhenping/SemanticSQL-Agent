@@ -82,7 +82,7 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
             
             # 自定义执行完成日志
             # table_count = len(raw_data.get('filtered_tables', []))
-            self.logger.info(f"✅ {self.name}: 执行完成 - 成功处理 {table_count} 个表")
+            # self.logger.info(f"✅ {self.name}: 执行完成 - 成功处理 {table_count} 个表")
             return result_message
             
         except Exception as e:

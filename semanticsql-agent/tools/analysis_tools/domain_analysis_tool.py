@@ -121,7 +121,7 @@ class DomainAnalysisTool(BaseSemanticSQLTool):
             # 6. 返回分析结果
             result_message = "✅ domain_analysis_tool提取完成，已存储到Neo4j。请继续执行field_analysis_tool工具。"
             
-            self.logger.info(f"✅ {self.name}: 执行完成 - 识别领域: {domain_knowledge.domain_type}")
+            # self.logger.info(f"✅ {self.name}: 执行完成 - 识别领域: {domain_knowledge.domain_type}")
             return result_message
             
         except Exception as e:

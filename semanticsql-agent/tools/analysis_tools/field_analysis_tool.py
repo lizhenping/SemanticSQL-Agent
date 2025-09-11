@@ -101,47 +101,44 @@ class FieldAnalysisTool(BaseSemanticSQLTool):
             # 1. 检查依赖：需要schema_extraction_tool的结果
             self._check_schema_extraction_dependency()
             
-            # 2. 从Neo4j读取字段信息
-            field_infos = self._read_field_info_from_neo4j()
-            if not field_infos:
-                return "❌ 字段分析失败: 未找到字段信息"
+            # # 2. 从Neo4j读取字段信息
+            # field_infos = self._read_field_info_from_neo4j()
+            # if not field_infos:
+            #     return "❌ 字段分析失败: 未找到字段信息"
             
-            self.logger.info(f"📖 从Neo4j读取到 {len(field_infos)} 个字段")
+            # self.logger.info(f"📖 从Neo4j读取到 {len(field_infos)} 个字段")
             
-            # 3. 逐字段进行LLM分类
-            classifications = []
-            llm_success_count = 0
+            # # 3. 逐字段进行LLM分类
+            # classifications = []
+            # llm_success_count = 0
             
-            for field_info in field_infos:
-                classification = self._classify_field_with_llm(field_info)
-                if classification:
-                    classifications.append(classification)
-                    llm_success_count += 1
-                    self.logger.debug(f"✅ 字段 {field_info['field_name']} 分类完成: {classification.get('category', 'unknown')}")
-                else:
-                    raise_tool_error(
-                        self.name,
-                        f"字段 {field_info['field_name']} LLM分类失败"
-                    )
+            # for field_info in field_infos:
+            #     classification = self._classify_field_with_llm(field_info)
+            #     if classification:
+            #         classifications.append(classification)
+            #         llm_success_count += 1
+            #         self.logger.debug(f"✅ 字段 {field_info['field_name']} 分类完成: {classification.get('category', 'unknown')}")
+            #     else:
+            #         raise_tool_error(
+            #             self.name,
+            #             f"字段 {field_info['field_name']} LLM分类失败"
+            #         )
             
-            # 4. 将分类结果注入到Neo4j Column节点属性
-            updated_count = 0
-            for classification in classifications:
-                try:
-                    self._update_column_classification(classification)
-                    updated_count += 1
-                except Exception as e:
-                    self.logger.error(f"注入字段分类失败 {classification['field_name']}: {e}")
-                    raise_tool_error(self.name, f"字段分类注入失败: {str(e)}")
+            # # 4. 将分类结果注入到Neo4j Column节点属性
+            # updated_count = 0
+            # for classification in classifications:
+            #     try:
+            #         self._update_column_classification(classification)
+            #         updated_count += 1
+            #     except Exception as e:
+            #         self.logger.error(f"注入字段分类失败 {classification['field_name']}: {e}")
+            #         raise_tool_error(self.name, f"字段分类注入失败: {str(e)}")
             
             # 5. 生成统计报告
-            stats = self._generate_classification_stats(classifications)
-            success_rate = (llm_success_count / len(field_infos)) * 100 if field_infos else 0
-            
-            # 6. 构建返回消息
-            result_message = self._build_success_message(stats, len(field_infos), updated_count, success_rate)
-            
-            self.logger.info(f"✅ {self.name}: 字段分析完成 - 分析了 {len(field_infos)} 个字段")
+
+            # success_rate = (llm_success_count / len(field_infos)) * 100 if field_infos else 0
+            # self.logger.info(f"✅ {self.name}: 字段分析完成 - 分析了 {len(field_infos)} 个字段,其中成功率是{success_rate}")
+            result_message = "✅ field_analysis_tool分析完成，已存储到Neo4j。请继续执行column_analysis_tool工具。"
             return result_message
             
         except Exception as e:
@@ -234,23 +231,18 @@ class FieldAnalysisTool(BaseSemanticSQLTool):
             if not llm_response:
                 return None
             
-            # 解析LLM响应
+            # 解析LLM响应，提取category和中文解释
             llm_result = self._parse_llm_response(llm_response)
-            if not llm_result:
+            if not llm_result or 'category' not in llm_result or 'category_desc' not in llm_result:
                 return None
             
-            # 构建分类结果
+            # 构建包含中文解释的分类结果
             classification = {
                 "field_name": field_info['field_name'],
                 "table_name": field_info['table_name'],
                 "column_name": field_info['column_name'],
                 "category": self._parse_category(llm_result.get('category', 'other')),
-                "field_type": llm_result.get('field_type', '未知'),
-                "importance": llm_result.get('importance', 'medium'),
-                "business_meaning": llm_result.get('business_meaning', ''),
-                "confidence": llm_result.get('classification_confidence', 0.8),
-                "data_type": field_info['data_type'],
-                "entropy_level": field_info['entropy_level']
+                "category_desc": llm_result['category_desc']
             }
             
             return classification
@@ -283,7 +275,7 @@ class FieldAnalysisTool(BaseSemanticSQLTool):
     
     
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
-        """解析LLM响应 - 支持单字段JSON格式"""
+        """解析LLM响应 - 提取category和中文解释"""
         try:
             # 提取JSON
             json_start = response.find('{')
@@ -292,18 +284,18 @@ class FieldAnalysisTool(BaseSemanticSQLTool):
                 json_str = response[json_start:json_end]
                 result = json.loads(json_str)
                 
-                # 检查是否是单字段格式（直接包含category等字段）
-                if 'category' in result:
-                    return result
-                
-                # 否则假设是多字段格式，取第一个字段
-                if result:
-                    return list(result.values())[0]
+                # 提取category和category_desc
+                if 'category' in result and 'category_desc' in result:
+                    return {
+                        'category': result['category'],
+                        'category_desc': result['category_desc']
+                    }
                     
         except Exception as e:
             self.logger.warning(f"解析LLM响应失败: {e}")
         
         return {}
+    
     
     def _parse_category(self, category_str: str) -> str:
         """解析类别字符串（移植自Pipeline）"""
@@ -320,21 +312,14 @@ class FieldAnalysisTool(BaseSemanticSQLTool):
     
     
     def _update_column_classification(self, classification: Dict[str, Any]) -> None:
-        """将字段分类结果注入到Neo4j Column节点属性中 - 采用CONTAINS关系模式"""
+        """将字段分类结果注入到Neo4j Column节点属性中"""
         
-        # 将分类结果序列化为结构化字符串
-        classification_text = self._serialize_classification_result(classification)
-        
-        # 使用CONTAINS关系模式更新Column节点属性
+        # 使用CONTAINS关系模式，将category和category_desc作为Column节点属性注入
         cypher = '''
         MATCH (d:Database)-[:CONTAINS]->(t:Table {name: $table_name})-[:HAS_COLUMN]->(c:Column {name: $column_name})
         SET c.category = $category,
-            c.field_type = $field_type,
-            c.importance = $importance,
-            c.business_meaning = $business_meaning,
-            c.classification_confidence = $confidence,
-            c.classification_timestamp = datetime(),
-            c.classification_desc = $classification_desc
+            c.category_desc = $category_desc,
+            c.classification_timestamp = datetime()
         RETURN c
         '''
         
@@ -342,82 +327,28 @@ class FieldAnalysisTool(BaseSemanticSQLTool):
             "table_name": classification['table_name'],
             "column_name": classification['column_name'],
             "category": classification['category'],
-            "field_type": classification['field_type'],
-            "importance": classification['importance'],
-            "business_meaning": classification.get('business_meaning', ''),
-            "confidence": classification.get('confidence', 0.8),
-            "classification_desc": classification_text
+            "category_desc": classification['category_desc']
         }
         
         self.memory_manager.neo4j_graph.query(cypher, params)
         
-        self.logger.info(f"✅ 已将字段分类结果注入到Column节点 '{classification['field_name']}' 的属性中")
+        self.logger.info(f"✅ 已将字段类别 '{classification['category']}({classification['category_desc']})' 注入到Column节点 '{classification['field_name']}'")
     
-    def _serialize_classification_result(self, classification: Dict[str, Any]) -> str:
-        """将字段分类结果序列化为结构化字符串 - 与domain_analysis_tool保持一致的模式"""
-        
-        sections = [
-            f"【字段名称】{classification['field_name']}",
-            f"【语义类别】{classification['category']}",
-            f"【字段类型】{classification['field_type']}",
-            f"【重要程度】{classification['importance']}",
-            f"【置信度】{classification.get('confidence', 0.8):.2f}",
-            "",
-            f"【业务含义】{classification.get('business_meaning', '暂无描述')}",
-            "",
-            f"【技术属性】",
-            f"• 数据类型: {classification.get('data_type', '未知')}",
-            f"• 熵值等级: {classification.get('entropy_level', '未知')}",
-            "",
-            f"【分析时间】{datetime.now().isoformat()}"
-        ]
-        
-        return "\\n".join(sections)
     
     def _generate_classification_stats(self, classifications: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """生成分类统计信息（移植自Pipeline）"""
+        """生成分类统计信息 - 简化版本"""
         from collections import Counter
         
         category_counts = Counter()
-        importance_counts = Counter()
         
         for c in classifications:
             category_counts[c['category']] += 1
-            importance_counts[c['importance']] += 1
         
         return {
             'total_fields': len(classifications),
-            'category_distribution': dict(category_counts),
-            'importance_distribution': dict(importance_counts)
+            'category_distribution': dict(category_counts)
         }
     
-    def _build_success_message(self, stats: Dict[str, Any], total_fields: int, 
-                               updated_count: int, success_rate: float) -> str:
-        """构建成功返回消息"""
-        # 构建分类统计信息
-        category_stats = []
-        for category, count in stats['category_distribution'].items():
-            category_stats.append(f"  • {category}: {count}个")
-        
-        result = f"""✅ 字段语义分析完成
-
-🔍 分析结果:
-  • 分析字段总数: {total_fields}
-  • 成功注入字段: {updated_count}
-  • LLM分类成功率: {success_rate:.1f}%
-
-📊 语义类型分布:
-{chr(10).join(category_stats)}
-
-🎯 重要性分布:
-  • high: {stats['importance_distribution'].get('high', 0)}个
-  • medium: {stats['importance_distribution'].get('medium', 0)}个
-  • low: {stats['importance_distribution'].get('low', 0)}个
-  
-💾 字段分类结果已注入到Neo4j Column节点属性，可供后续工具使用"""
-        
-        return result
-
 
 # ========== 便利函数 ==========
 def create_field_analysis_tool(memory_manager: Optional['Neo4jMemoryManager'] = None,
