@@ -195,14 +195,14 @@ class SemanticSQLReActAgent:
         
         # 构建agent（官方RunnablePassthrough.assign模式）
         # 绑定停止序列确保LLM在正确位置停止
-        llm_with_stop = llm.bind(stop=["\nObservation:", "\nObservation"])
+        # llm_with_stop = llm.bind(stop=["\nObservation:", "\nObservation"])
         
         agent = (
             RunnablePassthrough.assign(
                 agent_scratchpad=agent_scratchpad,
             )
             | prompt
-            | llm  # 使用原始LLM，不带停止序列
+            | llm  # 使用带停止序列的LLM
             | output_parser  # 解析器内部会过滤think内容
         )
         
