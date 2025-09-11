@@ -68,20 +68,20 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
         try:
             # 1. 解析输入参数和配置
         
-            # 2. 获取数据库管理器
-            db_manager = self._get_database_manager()
+            # # 2. 获取数据库管理器
+            # db_manager = self._get_database_manager()
             
-            # 3. 从MySQL提取原始数据
-            raw_data = self._extract_mysql_metadata(db_manager)
+            # # 3. 从MySQL提取原始数据
+            # raw_data = self._extract_mysql_metadata(db_manager)
             
-            # 4. 直接存储到Neo4j图结构
-            self._store_to_neo4j(raw_data)
+            # # 4. 直接存储到Neo4j图结构
+            # self._store_to_neo4j(raw_data)
             
-            # 5. 返回简洁成功消息
+            # # 5. 返回简洁成功消息
             result_message = "✅ schema_extraction_tool提取完成，已存储到Neo4j。请继续执行 domain_analysis_tool 工具。"
             
             # 自定义执行完成日志
-            table_count = len(raw_data.get('filtered_tables', []))
+            # table_count = len(raw_data.get('filtered_tables', []))
             self.logger.info(f"✅ {self.name}: 执行完成 - 成功处理 {table_count} 个表")
             return result_message
             

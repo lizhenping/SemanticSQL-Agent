@@ -9,9 +9,13 @@ import logging
 from datetime import datetime
 
 from pydantic import Field
+from langchain_openai import ChatOpenAI
+
 from tools.base_tool import BaseSemanticSQLTool
 from utils.database import DatabaseManager
-from models.exceptions import raise_tool_error
+from models.exceptions import raise_tool_error, raise_dependency_error
+from config.settings import get_settings
+from utils.memory import Neo4jMemoryManager
 
 # 导入提示词管理和LLM组件
 from prompts.manager import PromptManager
@@ -61,8 +65,12 @@ class FieldAnalysisTool(BaseSemanticSQLTool):
     name: str = "field_analysis_tool"
     description: str = "基于LLM的智能字段语义分析和分类工具"
     
-    # 数据库管理器和LLM服务（可选注入）
+    # 组件依赖（可选注入）
+    memory_manager: Optional[Neo4jMemoryManager] = Field(default=None, exclude=True)
     database_manager: Optional[DatabaseManager] = Field(default=None, exclude=True)
+    llm: Optional[ChatOpenAI] = Field(default=None, exclude=True)
+    settings: Optional[Any] = Field(default=None, exclude=True)
+    prompt_manager: Optional[Any] = Field(default=None, exclude=True)
     
     def __init__(self, memory_manager: Optional['Neo4jMemoryManager'] = None, 
                  database_manager: Optional[DatabaseManager] = None, **kwargs):
@@ -74,17 +82,24 @@ class FieldAnalysisTool(BaseSemanticSQLTool):
             database_manager: 数据库管理器实例（可选）
         """
         super().__init__(memory_manager=memory_manager, **kwargs)
+        # 使用object.__setattr__避免Pydantic验证问题
+        object.__setattr__(self, 'settings', get_settings())
+        object.__setattr__(self, 'memory_manager', memory_manager)
         object.__setattr__(self, 'database_manager', database_manager)
-        object.__setattr__(self, 'config', self._init_config())
+        object.__setattr__(self, 'llm', ComponentManager.create_llm(get_settings()))
+        object.__setattr__(self, 'prompt_manager', PromptManager())
     
     def _run(self, *args, **kwargs) -> str:
         """执行字段分析的主入口方法"""
         self.logger.info(f"🔧 {self.name}: 开始字段分析")
         
         try:
+            # 初始化必要的服务
+            if not self.memory_manager:
+                self.memory_manager = ComponentManager.create_memory_manager(self.settings)
+            
             # 1. 检查依赖：需要schema_extraction_tool的结果
-            if not self._check_schema_extraction_dependency():
-                return "❌ 字段分析失败: 需要先执行schema_extraction_tool"
+            self._check_schema_extraction_dependency()
             
             # 2. 从Neo4j读取字段信息
             field_infos = self._read_field_info_from_neo4j()
@@ -98,23 +113,26 @@ class FieldAnalysisTool(BaseSemanticSQLTool):
             llm_success_count = 0
             
             for field_info in field_infos:
-                try:
-                    classification = self._classify_field_with_llm(field_info)
-                    if classification:
-                        classifications.append(classification)
-                        llm_success_count += 1
-                        self.logger.debug(f"✅ 字段 {field_info['field_name']} 分类完成: {classification.get('category', 'unknown')}")
-                except Exception as e:
-                    self.logger.warning(f"⚠️ 字段 {field_info['field_name']} 分类失败: {e}")
-                    # 创建默认分类
-                    default_classification = self._create_default_classification(field_info)
-                    classifications.append(default_classification)
+                classification = self._classify_field_with_llm(field_info)
+                if classification:
+                    classifications.append(classification)
+                    llm_success_count += 1
+                    self.logger.debug(f"✅ 字段 {field_info['field_name']} 分类完成: {classification.get('category', 'unknown')}")
+                else:
+                    raise_tool_error(
+                        self.name,
+                        f"字段 {field_info['field_name']} LLM分类失败"
+                    )
             
-            # 4. 更新Neo4j Column节点属性
+            # 4. 将分类结果注入到Neo4j Column节点属性
             updated_count = 0
             for classification in classifications:
-                if self._update_column_classification(classification):
+                try:
+                    self._update_column_classification(classification)
                     updated_count += 1
+                except Exception as e:
+                    self.logger.error(f"注入字段分类失败 {classification['field_name']}: {e}")
+                    raise_tool_error(self.name, f"字段分类注入失败: {str(e)}")
             
             # 5. 生成统计报告
             stats = self._generate_classification_stats(classifications)
@@ -147,37 +165,29 @@ class FieldAnalysisTool(BaseSemanticSQLTool):
             }
         }
     
-    def _check_schema_extraction_dependency(self) -> bool:
-        """检查schema_extraction_tool依赖 - 遵循schema_extraction_tool的验证模式"""
-        try:
-            # 简单验证: 需要Neo4j连接（与schema_extraction_tool一致）
-            if not self.memory_manager or not getattr(self.memory_manager, 'neo4j_graph', None):
-                raise_tool_error(
-                    self.name,
-                    "Neo4j连接不可用，无法读取schema信息"
-                )
-                
-            # 检查是否存在Column节点（验证schema_extraction_tool已执行）
-            cypher = "MATCH (c:Column) RETURN count(c) as count LIMIT 1"
-            result = self.memory_manager.neo4j_graph.query(cypher)
+    def _check_schema_extraction_dependency(self) -> None:
+        """检查schema_extraction_tool依赖 - 采用快速失败模式"""
+        if not self.memory_manager or not getattr(self.memory_manager, 'neo4j_graph', None):
+            raise_dependency_error(
+                self.name,
+                "Neo4j连接不可用，无法读取schema信息"
+            )
             
-            if not result or result[0]['count'] == 0:
-                raise_tool_error(
-                    self.name,
-                    "未找到Column节点，需要先执行schema_extraction_tool"
-                )
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"❌ 依赖检查失败: {e}")
-            return False
+        # 检查是否存在Column节点（验证schema_extraction_tool已执行）  
+        cypher = "MATCH (c:Column) RETURN count(c) as count LIMIT 1"
+        result = self.memory_manager.neo4j_graph.query(cypher)
+        
+        if not result or result[0]['count'] == 0:
+            raise_dependency_error(
+                self.name,
+                "未找到Column节点，需要先执行schema_extraction_tool"
+            )
     
     def _read_field_info_from_neo4j(self) -> List[Dict[str, Any]]:
         """从Neo4j读取字段信息"""
         try:
             cypher = """
-            MATCH (t:Table)-[:HAS_COLUMN]->(c:Column)
+            MATCH (d:Database)-[:CONTAINS]->(t:Table)-[:HAS_COLUMN]->(c:Column)
             RETURN t.name as table_name,
                    c.name as column_name,
                    c.data_type as data_type,
@@ -218,8 +228,9 @@ class FieldAnalysisTool(BaseSemanticSQLTool):
             # 使用PromptManager渲染模板
             prompt_text = self._render_classification_prompt(field_info)
             
-            # 调用LLM服务
-            llm_response = self._call_llm_service(prompt_text)
+            # 直接调用LLM（使用预初始化的实例）
+            response = self.llm.invoke(prompt_text)
+            llm_response = response.content if hasattr(response, 'content') else str(response)
             if not llm_response:
                 return None
             
@@ -250,58 +261,26 @@ class FieldAnalysisTool(BaseSemanticSQLTool):
     
     def _render_classification_prompt(self, field_info: Dict[str, Any]) -> str:
         """使用PromptManager渲染分类提示词模板"""
-        try:
-            prompt_manager = PromptManager()
-            
-            # 准备模板变量
-            template_vars = {
-                "database_name": getattr(self, 'database_name', '未知数据库'),
-                "table_name": field_info.get('table_name', ''),
-                "field_name": field_info['field_name'],
-                "data_type": field_info['data_type'], 
-                "sample_values": field_info.get('sample_values', []),
-                "entropy_level": field_info['entropy_level'],
-                "is_primary": field_info.get('is_primary', False),
-                "is_foreign": field_info.get('is_foreign', False),
-                "is_nullable": field_info.get('is_nullable', True),
-                "business_desc": field_info.get('business_desc', ''),
-                "domain_type": getattr(self, 'domain_type', None),
-                "domain_description": getattr(self, 'domain_description', None)
-            }
-            
-            # 渲染模板
-            return prompt_manager.get_tool_prompt("field_analysis", **template_vars)
-            
-        except Exception as e:
-            self.logger.error(f"渲染提示词模板失败: {e}")
-            # 降级到简单提示词
-            return self._build_simple_prompt(field_info)
+        # 准备模板变量
+        template_vars = {
+            "database_name": getattr(self, 'database_name', '未知数据库'),
+            "table_name": field_info.get('table_name', ''),
+            "field_name": field_info['field_name'],
+            "data_type": field_info['data_type'], 
+            "sample_values": field_info.get('sample_values', []),
+            "entropy_level": field_info['entropy_level'],
+            "is_primary": field_info.get('is_primary', False),
+            "is_foreign": field_info.get('is_foreign', False),
+            "is_nullable": field_info.get('is_nullable', True),
+            "business_desc": field_info.get('business_desc', ''),
+            "domain_type": getattr(self, 'domain_type', None),
+            "domain_description": getattr(self, 'domain_description', None)
+        }
+        
+        # 使用实例级别的prompt_manager渲染模板
+        return self.prompt_manager.get_tool_prompt("field_analysis", **template_vars)
     
-    def _build_simple_prompt(self, field_info: Dict[str, Any]) -> str:
-        """简单提示词作为降级方案"""
-        return f"""请分析字段: {field_info['field_name']}
-数据类型: {field_info['data_type']}
-样本值: {field_info.get('sample_values', [])[:3]}
-熵值等级: {field_info['entropy_level']}
-
-请返回JSON格式的分类结果，包含category, field_type, importance, business_meaning, classification_confidence字段。"""
     
-    def _call_llm_service(self, prompt: str) -> Optional[str]:
-        """调用LLM服务 - 使用ComponentManager模式"""
-        try:
-            # 创建LLM实例（如果还没有）
-            if not hasattr(self, '_llm') or self._llm is None:
-                from config.settings import get_settings
-                settings = get_settings()
-                self._llm = ComponentManager.create_llm(settings)
-            
-            # 调用LLM
-            response = self._llm.invoke(prompt)
-            return response.content if hasattr(response, 'content') else str(response)
-            
-        except Exception as e:
-            self.logger.error(f"LLM服务调用失败: {e}")
-            return None
     
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         """解析LLM响应 - 支持单字段JSON格式"""
@@ -339,82 +318,61 @@ class FieldAnalysisTool(BaseSemanticSQLTool):
         }
         return category_map.get(category_str.lower(), FieldCategory.OTHER.value)
     
-    def _create_default_classification(self, field_info: Dict[str, Any]) -> Dict[str, Any]:
-        """创建默认分类（当LLM不可用时）"""
-        # 简单的规则分类作为后备
-        category = "other"
-        field_type = "未知"
-        importance = "medium"
-        
-        field_name_lower = field_info['field_name'].lower()
-        data_type_lower = field_info['data_type'].lower()
-        
-        # 基础规则判断
-        if field_info.get('is_primary', False) or 'id' in field_name_lower:
-            category = "identifier"
-            field_type = "标识符"
-            importance = "high"
-        elif any(keyword in field_name_lower for keyword in ['time', 'date', 'created', 'updated']):
-            category = "datetime"
-            field_type = "时间字段"
-            importance = "medium"
-        elif 'int' in data_type_lower or 'decimal' in data_type_lower or 'float' in data_type_lower:
-            category = "measure"
-            field_type = "数值字段"
-            importance = "medium"
-        elif 'text' in data_type_lower or 'varchar' in data_type_lower:
-            category = "text"
-            field_type = "文本字段"
-            importance = "low"
-        
-        return {
-            "field_name": field_info['field_name'],
-            "table_name": field_info['table_name'],
-            "column_name": field_info['column_name'],
-            "category": category,
-            "field_type": field_type,
-            "importance": importance,
-            "confidence": 0.3,  # 规则分类的低置信度
-            "data_type": field_info['data_type'],
-            "entropy_level": field_info['entropy_level']
-        }
     
-    def _update_column_classification(self, classification: Dict[str, Any]) -> bool:
-        """更新Neo4j Column节点的分类属性"""
-        try:
-            cypher = """
-            MATCH (t:Table {name: $table_name})-[:HAS_COLUMN]->(c:Column {name: $column_name})
-            SET c.category = $category,
-                c.field_type = $field_type,
-                c.importance = $importance,
-                c.business_meaning = $business_meaning,
-                c.classification_confidence = $confidence,
-                c.classification_timestamp = datetime()
-            RETURN c.name as updated_column
-            """
-            
-            params = {
-                "table_name": classification['table_name'],
-                "column_name": classification['column_name'],
-                "category": classification['category'],
-                "field_type": classification['field_type'],
-                "importance": classification['importance'],
-                "business_meaning": classification.get('business_meaning', ''),
-                "confidence": classification.get('confidence', 0.8)
-            }
-            
-            result = self.memory_manager.neo4j_graph.query(cypher, params)
-            
-            if result:
-                self.logger.debug(f"✅ 更新字段分类: {classification['field_name']} -> {classification['category']}")
-                return True
-            else:
-                self.logger.warning(f"⚠️ 字段未找到，更新失败: {classification['field_name']}")
-                return False
-                
-        except Exception as e:
-            self.logger.error(f"更新字段分类失败 {classification['field_name']}: {e}")
-            return False
+    def _update_column_classification(self, classification: Dict[str, Any]) -> None:
+        """将字段分类结果注入到Neo4j Column节点属性中 - 采用CONTAINS关系模式"""
+        
+        # 将分类结果序列化为结构化字符串
+        classification_text = self._serialize_classification_result(classification)
+        
+        # 使用CONTAINS关系模式更新Column节点属性
+        cypher = '''
+        MATCH (d:Database)-[:CONTAINS]->(t:Table {name: $table_name})-[:HAS_COLUMN]->(c:Column {name: $column_name})
+        SET c.category = $category,
+            c.field_type = $field_type,
+            c.importance = $importance,
+            c.business_meaning = $business_meaning,
+            c.classification_confidence = $confidence,
+            c.classification_timestamp = datetime(),
+            c.classification_desc = $classification_desc
+        RETURN c
+        '''
+        
+        params = {
+            "table_name": classification['table_name'],
+            "column_name": classification['column_name'],
+            "category": classification['category'],
+            "field_type": classification['field_type'],
+            "importance": classification['importance'],
+            "business_meaning": classification.get('business_meaning', ''),
+            "confidence": classification.get('confidence', 0.8),
+            "classification_desc": classification_text
+        }
+        
+        self.memory_manager.neo4j_graph.query(cypher, params)
+        
+        self.logger.info(f"✅ 已将字段分类结果注入到Column节点 '{classification['field_name']}' 的属性中")
+    
+    def _serialize_classification_result(self, classification: Dict[str, Any]) -> str:
+        """将字段分类结果序列化为结构化字符串 - 与domain_analysis_tool保持一致的模式"""
+        
+        sections = [
+            f"【字段名称】{classification['field_name']}",
+            f"【语义类别】{classification['category']}",
+            f"【字段类型】{classification['field_type']}",
+            f"【重要程度】{classification['importance']}",
+            f"【置信度】{classification.get('confidence', 0.8):.2f}",
+            "",
+            f"【业务含义】{classification.get('business_meaning', '暂无描述')}",
+            "",
+            f"【技术属性】",
+            f"• 数据类型: {classification.get('data_type', '未知')}",
+            f"• 熵值等级: {classification.get('entropy_level', '未知')}",
+            "",
+            f"【分析时间】{datetime.now().isoformat()}"
+        ]
+        
+        return "\\n".join(sections)
     
     def _generate_classification_stats(self, classifications: List[Dict[str, Any]]) -> Dict[str, Any]:
         """生成分类统计信息（移植自Pipeline）"""
@@ -445,7 +403,7 @@ class FieldAnalysisTool(BaseSemanticSQLTool):
 
 🔍 分析结果:
   • 分析字段总数: {total_fields}
-  • 成功更新字段: {updated_count}
+  • 成功注入字段: {updated_count}
   • LLM分类成功率: {success_rate:.1f}%
 
 📊 语义类型分布:
@@ -456,7 +414,7 @@ class FieldAnalysisTool(BaseSemanticSQLTool):
   • medium: {stats['importance_distribution'].get('medium', 0)}个
   • low: {stats['importance_distribution'].get('low', 0)}个
   
-💾 字段分类结果已更新到Neo4j Column节点，可供后续工具使用"""
+💾 字段分类结果已注入到Neo4j Column节点属性，可供后续工具使用"""
         
         return result
 
