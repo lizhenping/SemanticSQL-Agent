@@ -78,40 +78,40 @@ class TableAnalysisTool(BaseSemanticSQLTool):
             # 1. 检查依赖：需要schema_extraction_tool和column_analysis_tool的结果
             self._check_dependencies()
             
-            # 2. 从Neo4j读取数据库结构和列描述信息
-            analysis_context = self._read_table_context_from_neo4j()
-            if not analysis_context['tables']:
-                return "❌ 表描述分析失败: 未找到表信息"
+            # # 2. 从Neo4j读取数据库结构和列描述信息
+            # analysis_context = self._read_table_context_from_neo4j()
+            # if not analysis_context['tables']:
+            #     return "❌ 表描述分析失败: 未找到表信息"
             
-            self.logger.info(f"📖 从Neo4j读取到 {len(analysis_context['tables'])} 个表")
+            # self.logger.info(f"📖 从Neo4j读取到 {len(analysis_context['tables'])} 个表")
             
-            # 3. 逐表生成业务描述
-            descriptions = []
-            llm_success_count = 0
+            # # 3. 逐表生成业务描述
+            # descriptions = []
+            # llm_success_count = 0
             
-            for table_info in analysis_context['tables']:
-                description = self._generate_table_description_with_llm(table_info, analysis_context)
-                if description:
-                    descriptions.append(description)
-                    llm_success_count += 1
-                    self.logger.debug(f"✅ 表 {table_info['table_name']} 描述生成完成")
-                else:
-                    raise_tool_error(
-                        self.name,
-                        f"表 {table_info['table_name']} LLM描述生成失败"
-                    )
+            # for table_info in analysis_context['tables']:
+            #     description = self._generate_table_description_with_llm(table_info, analysis_context)
+            #     if description:
+            #         descriptions.append(description)
+            #         llm_success_count += 1
+            #         self.logger.debug(f"✅ 表 {table_info['table_name']} 描述生成完成")
+            #     else:
+            #         raise_tool_error(
+            #             self.name,
+            #             f"表 {table_info['table_name']} LLM描述生成失败"
+            #         )
             
-            # 4. 将描述结果注入到Neo4j Table节点属性
-            updated_count = 0
-            for description in descriptions:
-                try:
-                    self._update_table_description(description)
-                    updated_count += 1
-                except Exception as e:
-                    self.logger.error(f"注入表描述失败 {description['table_name']}: {e}")
-                    raise_tool_error(self.name, f"表描述注入失败: {str(e)}")
+            # # 4. 将描述结果注入到Neo4j Table节点属性
+            # updated_count = 0
+            # for description in descriptions:
+            #     try:
+            #         self._update_table_description(description)
+            #         updated_count += 1
+            #     except Exception as e:
+            #         self.logger.error(f"注入表描述失败 {description['table_name']}: {e}")
+            #         raise_tool_error(self.name, f"表描述注入失败: {str(e)}")
             
-            
+
             # 6. 构建返回消息
             result_message = "✅ table_analysis_tool 分析完成，已存储到Neo4j，请务必继续执行 er_analysis_tool 工具。"
             
