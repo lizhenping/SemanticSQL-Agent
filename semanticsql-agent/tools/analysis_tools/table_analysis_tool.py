@@ -22,7 +22,7 @@ from utils.memory import Neo4jMemoryManager
 # 导入提示词管理和LLM组件
 from prompts.manager import PromptManager
 from config.factories import ComponentManager
-
+from agent.parsers import SemanticSQLOutputParser
 
 class TableAnalysisTool(BaseSemanticSQLTool):
     """表描述分析工具 - 重构版本
@@ -326,7 +326,10 @@ class TableAnalysisTool(BaseSemanticSQLTool):
             t.ai_business_desc_timestamp = datetime()
         RETURN t
         '''
-        
+        # 使用CONTAINS关系模式，将ai_business_desc作为Table节点属性注入
+        parser = SemanticSQLOutputParser()
+        description['ai_business_desc'] = parser._clean_think_content(description['ai_business_desc'])
+
         params = {
             "table_name": description['table_name'],
             "ai_business_desc": description['ai_business_desc']
