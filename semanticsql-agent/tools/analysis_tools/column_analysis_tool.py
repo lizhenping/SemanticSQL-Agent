@@ -22,7 +22,7 @@ from utils.memory import Neo4jMemoryManager
 # 导入提示词管理和LLM组件
 from prompts.manager import PromptManager
 from config.factories import ComponentManager
-
+from agent.parsers import SemanticSQLOutputParser
 
 class ColumnAnalysisTool(BaseSemanticSQLTool):
     """列描述分析工具 - 重构版本
@@ -112,13 +112,13 @@ class ColumnAnalysisTool(BaseSemanticSQLTool):
                     self.logger.error(f"注入列描述失败 {description['field_name']}: {e}")
                     raise_tool_error(self.name, f"列描述注入失败: {str(e)}")
             
-            # 5. 生成统计报告
-            success_rate = (llm_success_count / len(analysis_context['columns'])) * 100 if analysis_context['columns'] else 0
+            # # 5. 生成统计报告
+            # success_rate = (llm_success_count / len(analysis_context['columns'])) * 100 if analysis_context['columns'] else 0
             
             # 6. 构建返回消息
-            result_message = self._build_success_message(len(analysis_context['columns']), updated_count, success_rate)
+            result_message = "✅ column_analysis_tool 分析完成，已存储到Neo4j，请务必继续执行 table_analysis_tool 工具。"
             
-            self.logger.info(f"✅ {self.name}: 列描述分析完成 - 分析了 {len(analysis_context['columns'])} 个列")
+            # self.logger.info(f"✅ {self.name}: 列描述分析完成 - 分析了 {len(analysis_context['columns'])} 个列")
             return result_message
             
         except Exception as e:
@@ -299,7 +299,7 @@ class ColumnAnalysisTool(BaseSemanticSQLTool):
             "table_name": column_info.get('table_name', ''),
             "column_name": column_info.get('column_name', ''),
             "database_name": context.get('database_name', '未知数据库'),
-            "database_domain": self._extract_domain_from_desc(context.get('database_desc', '')),
+            "database_domain": context.get('database_desc', '通用业务领域'),
             "table_ddl": context.get('table_ddls', {}).get(column_info.get('table_name', ''), ''),
             "column_type": column_info.get('data_type', ''),
             "is_nullable": column_info.get('is_nullable', True),
@@ -315,19 +315,6 @@ class ColumnAnalysisTool(BaseSemanticSQLTool):
         # 使用实例级别的prompt_manager渲染模板
         return self.prompt_manager.get_tool_prompt("column_description", **template_vars)
     
-    def _extract_domain_from_desc(self, database_desc: str) -> str:
-        """从数据库描述中提取领域信息"""
-        if not database_desc:
-            return "通用业务"
-        
-        # 简单的关键词匹配提取领域
-        if "【业务领域】" in database_desc:
-            start = database_desc.find("【业务领域】") + 6
-            end = database_desc.find("\\n", start)
-            if end > start:
-                return database_desc[start:end].strip()
-        
-        return "通用业务"
     
     def _get_dim_or_meas(self, category: str) -> str:
         """直接返回category给LLM"""
@@ -363,6 +350,8 @@ class ColumnAnalysisTool(BaseSemanticSQLTool):
         """将列描述结果注入到Neo4j Column节点属性中"""
         
         # 使用CONTAINS关系模式，将ai_business_desc作为Column节点属性注入
+        parser = SemanticSQLOutputParser()
+        description['ai_business_desc'] = parser._clean_think_content(description['ai_business_desc'])
         cypher = '''
         MATCH (d:Database)-[:CONTAINS]->(t:Table {name: $table_name})-[:HAS_COLUMN]->(c:Column {name: $column_name})
         SET c.ai_business_desc = $ai_business_desc,
