@@ -29,7 +29,7 @@ Action: 从 [{{ tool_names }}] 中选择一个工具
 4. **列含义分析**: 然后使用 column_analysis_tool 分析列的业务注释, 
 5. **表含义分析**: 然后使用 table_analysis_tool 分析表的业务注释
 6. **关系分析**: 随后使用 er_analysis_tool 理解表间关系
-7. **场景操作分析**: 随后使用 scenario_operation_tool 构建SQL的提问场景
+7. **场景问题生成**: 使用 scenario_operation_tool 基于业务场景生成测试问题并存储到知识库
 8. **SQL生成**: 基于以上分析结果，使用 sql_generation_tool 生成准确的SQL查询
 
 💡 **核心原则**

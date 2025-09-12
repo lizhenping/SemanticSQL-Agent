@@ -342,3 +342,13 @@ CREATE INDEX ON :BusinessDomain(analysis_id)
 | 统计数据量 | `MATCH (n) RETURN labels(n), count(n)` |
 
 使用这些命令可以清晰地分离和管理不同类型的数据，避免显示混乱的问题。
+
+
+显示问题
+
+MATCH (q:Question) 
+WHERE q.database_name = "" 
+  AND q.has_sql = false 
+RETURN q 
+ORDER BY q.created_at 
+LIMIT 10

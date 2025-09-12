@@ -81,6 +81,11 @@ class ScenarioOperationTool(BaseTool):
         """执行问题生成"""
         try:
             questions = self.generate_questions(database_name, target_count)
+            
+            # 存储生成的问题到Neo4j
+            if self.memory_manager and questions:
+                self._store_questions_to_neo4j(questions, database_name)
+            
             return {
                 'success': True,
                 'questions': questions,
@@ -131,9 +136,12 @@ class ScenarioOperationTool(BaseTool):
                         
                         use_case_weights = scenario_use_case_mapping[main_scenario_key][sub_scenario_key][complexity]
                         
-                        # 根据权重选择用例
-                        selected_use_case_name = self._weighted_choice(use_case_weights)
-                        selected_use_case = use_case_operations[selected_use_case_name]
+                        # 简化选择：随机选择一个用例
+                        use_case_names = []
+                        for item in use_case_weights:
+                            use_case_names.extend(item.keys())
+                        selected_use_case_name = random.choice(use_case_names) if use_case_names else 'data_viewing'
+                        selected_use_case = use_case_operations.get(selected_use_case_name, use_case_operations.get('data_viewing', {}))
                         
                         # 准备模板数据（严格按照模板要求）
                         template_data = {
@@ -195,8 +203,13 @@ class ScenarioOperationTool(BaseTool):
                 complexity in scenario_use_case_mapping[main_key][sub_key]):
                 
                 use_case_weights = scenario_use_case_mapping[main_key][sub_key][complexity]
-                selected_use_case_name = self._weighted_choice(use_case_weights)
-                selected_use_case = use_case_operations[selected_use_case_name]
+                
+                # 简化选择：随机选择一个用例
+                use_case_names = []
+                for item in use_case_weights:
+                    use_case_names.extend(item.keys())
+                selected_use_case_name = random.choice(use_case_names) if use_case_names else 'data_viewing'
+                selected_use_case = use_case_operations.get(selected_use_case_name, use_case_operations.get('data_viewing', {}))
                 
                 template_data = {
                     'main_scenario': {
@@ -273,7 +286,7 @@ class ScenarioOperationTool(BaseTool):
             return []
     
     def _prepare_er_data(self, database_name: str) -> Dict[str, List[Dict[str, Any]]]:
-        """准备ER关系数据 - 从Neo4j获取（使用新的BusinessDomain模型）"""
+        """准备ER关系数据 - 从Neo4j获取已分析的ER关系"""
         
         er_data = {
             'physical': [],
@@ -287,66 +300,34 @@ class ScenarioOperationTool(BaseTool):
         try:
             neo4j_graph = self.memory_manager.neo4j_graph
             
-            # 查询新的ER模型
+            # 简化查询，直接获取已分析的ER关系
             cypher = """
-            MATCH (bd:BusinessDomain {database_name: $database_name})-[:CONTAINS]->(er:ERRelation)-[:INVOLVES]->(be:BusinessEntity)
-            OPTIONAL MATCH (be)-[ha:HAS_ATTRIBUTE]->(c:Column)<-[:HAS_COLUMN]-(t:Table)
-            OPTIONAL MATCH (be1:BusinessEntity)-[rel]->(be2:BusinessEntity)
-            WHERE (be1)-[:INVOLVES*0..1]-(:ERRelation)-[:CONTAINS*0..1]-(bd) 
-            AND (be2)-[:INVOLVES*0..1]-(:ERRelation)-[:CONTAINS*0..1]-(bd)
-            
-            WITH collect(DISTINCT {
-                entity: be.name,
-                table: t.name,
-                column: c.name
-            }) as attributes,
-            collect(DISTINCT {
-                from_entity: be1.name,
-                to_entity: be2.name,
-                relation_type: type(rel)
-            }) as relations
-            
-            RETURN attributes, relations
+            MATCH (er:ERAnalysis {database_name: $database_name})
+            WHERE er.created_at IS NOT NULL
+            RETURN er.physical_relations as physical,
+                   er.logical_relations as logical,
+                   er.conceptual_relations as conceptual
+            ORDER BY er.created_at DESC
             LIMIT 1
             """
             
             result = neo4j_graph.query(cypher, {'database_name': database_name})
             
-            if result:
-                # 物理关系（列到实体的映射）
-                for attr in result[0].get('attributes', []):
-                    if attr['table'] and attr['column']:
-                        er_data['physical'].append({
-                            'from': f"{attr['table']}.{attr['column']}",
-                            'to': attr['entity'] or 'Unknown'
-                        })
-                
-                # 概念关系（实体间关系）
-                for rel in result[0].get('relations', []):
-                    if rel['from_entity'] and rel['to_entity']:
-                        er_data['conceptual'].append({
-                            'entity1': rel['from_entity'],
-                            'entity2': rel['to_entity'],
-                            'relationship': rel['relation_type']
-                        })
+            if result and result[0]:
+                # 解析存储的JSON数据
+                if result[0].get('physical'):
+                    er_data['physical'] = json.loads(result[0]['physical']) if isinstance(result[0]['physical'], str) else result[0]['physical']
+                if result[0].get('logical'):
+                    er_data['logical'] = json.loads(result[0]['logical']) if isinstance(result[0]['logical'], str) else result[0]['logical']
+                if result[0].get('conceptual'):
+                    er_data['conceptual'] = json.loads(result[0]['conceptual']) if isinstance(result[0]['conceptual'], str) else result[0]['conceptual']
             
             return er_data
             
         except Exception as e:
-            self.logger.error(f"获取ER数据失败: {e}")
+            self.logger.warning(f"获取ER数据失败，使用空数据: {e}")
             return er_data
     
-    def _weighted_choice(self, use_case_weights: List[Dict[str, float]]) -> str:
-        """根据权重选择用例"""
-        choices = []
-        weights = []
-        
-        for item in use_case_weights:
-            for choice, weight in item.items():
-                choices.append(choice)
-                weights.append(weight)
-        
-        return random.choices(choices, weights=weights, k=1)[0]
     
     def _generate_single_question(self,
                                  prompt: str,
@@ -385,6 +366,12 @@ class ScenarioOperationTool(BaseTool):
                     }
                 }
             
+            # 保留完整的分析结果
+            if 'table_analysis' not in result:
+                result['table_analysis'] = {}
+            if 'column_analysis' not in result:
+                result['column_analysis'] = {}
+            
             # 添加元数据
             result['metadata'] = {
                 'main_scenario': main_scenario,
@@ -402,6 +389,159 @@ class ScenarioOperationTool(BaseTool):
         except Exception as e:
             self.logger.error(f"处理LLM响应失败: {e}")
             return None
+    
+    def _store_questions_to_neo4j(self, questions: List[Dict], database_name: str):
+        """将生成的问题完整存储到Neo4j"""
+        if not self.memory_manager:
+            self.logger.info("未配置Neo4j，跳过存储")
+            return
+        
+        try:
+            neo4j_graph = self.memory_manager.neo4j_graph
+            stored_count = 0
+            
+            for question in questions:
+                # 提取所有数据
+                q_data = question.get('generated_question', {})
+                metadata = question.get('metadata', {})
+                table_analysis = question.get('table_analysis', {})
+                column_analysis = question.get('column_analysis', {})
+                
+                # 创建Question节点，包含所有属性
+                cypher = """
+                CREATE (q:Question {
+                    id: randomUUID(),
+                    database_name: $database_name,
+                    
+                    // 基本问题信息
+                    question_text: $question_text,
+                    question_focus: $question_focus,
+                    expected_output: $expected_output,
+                    value_proposition: $value_proposition,
+                    
+                    // 业务规则（如果有）
+                    business_rules: $business_rules,
+                    
+                    // 表分析
+                    tables_used: $tables_used,
+                    table_analysis: $table_analysis,
+                    
+                    // 列分析
+                    columns_used: $columns_used,
+                    column_analysis: $column_analysis,
+                    
+                    // 元数据
+                    main_scenario: $main_scenario,
+                    sub_scenario: $sub_scenario,
+                    complexity: $complexity,
+                    complexity_level: $complexity_level,
+                    use_case: $use_case,
+                    
+                    // 系统字段
+                    created_at: datetime(),
+                    has_sql: false
+                })
+                RETURN q.id as question_id
+                """
+                
+                try:
+                    # 准备参数
+                    params = {
+                        'database_name': database_name,
+                        
+                        # 基本信息
+                        'question_text': q_data.get('question_text', ''),
+                        'question_focus': q_data.get('question_focus', ''),
+                        'expected_output': q_data.get('expected_output', ''),
+                        'value_proposition': q_data.get('value_proposition', ''),
+                        
+                        # 业务规则（JSON字符串）
+                        'business_rules': json.dumps(q_data.get('business_rules', []), ensure_ascii=False),
+                        
+                        # 表分析（JSON字符串）
+                        'tables_used': json.dumps(table_analysis.get('tables_used', []), ensure_ascii=False),
+                        'table_analysis': json.dumps(table_analysis, ensure_ascii=False),
+                        
+                        # 列分析（JSON字符串）
+                        'columns_used': json.dumps(column_analysis.get('columns_used', []), ensure_ascii=False),
+                        'column_analysis': json.dumps(column_analysis, ensure_ascii=False),
+                        
+                        # 元数据
+                        'main_scenario': metadata.get('main_scenario', ''),
+                        'sub_scenario': metadata.get('sub_scenario', ''),
+                        'complexity': metadata.get('complexity', ''),
+                        'complexity_level': metadata.get('complexity_level', 0),
+                        'use_case': metadata.get('use_case', '')
+                    }
+                    
+                    result = neo4j_graph.query(cypher, params)
+                    
+                    if result:
+                        stored_count += 1
+                        self.logger.debug(f"问题已存储: {result[0]['question_id']}")
+                        
+                except Exception as e:
+                    self.logger.warning(f"存储单个问题失败: {e}")
+                    continue
+            
+            self.logger.info(f"成功存储 {stored_count}/{len(questions)} 个问题到Neo4j")
+            
+        except Exception as e:
+            self.logger.error(f"Neo4j存储过程失败: {e}")
+    
+    @staticmethod
+    def get_questions_without_sql(neo4j_graph, database_name: str, limit: int = 10) -> List[Dict]:
+        """获取还没有SQL的问题 - 供其他工具使用"""
+        cypher = """
+        MATCH (q:Question)
+        WHERE q.database_name = $database_name 
+          AND q.has_sql = false
+        RETURN q.id as id,
+               q.question_text as question_text,
+               q.question_data as question_data,
+               q.metadata as metadata
+        ORDER BY q.created_at
+        LIMIT $limit
+        """
+        
+        try:
+            results = neo4j_graph.query(cypher, {
+                'database_name': database_name,
+                'limit': limit
+            })
+            
+            # 解析JSON字符串
+            for result in results:
+                if result.get('question_data'):
+                    result['question_data'] = json.loads(result['question_data'])
+                if result.get('metadata'):
+                    result['metadata'] = json.loads(result['metadata'])
+            
+            return results
+        except Exception as e:
+            logger.error(f"查询问题失败: {e}")
+            return []
+    
+    @staticmethod
+    def update_question_with_sql(neo4j_graph, question_id: str, sql: str) -> bool:
+        """为问题添加SQL - 供其他工具使用"""
+        cypher = """
+        MATCH (q:Question {id: $question_id})
+        SET q.sql = $sql,
+            q.has_sql = true,
+            q.sql_generated_at = datetime()
+        RETURN q.id
+        """
+        
+        try:
+            result = neo4j_graph.query(cypher, {
+                'question_id': question_id, 
+                'sql': sql
+            })
+            return len(result) > 0
+        except Exception as e:
+            logger.error(f"更新问题SQL失败: {e}")
+            return False
 
 
 # 便利函数
