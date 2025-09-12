@@ -81,7 +81,7 @@ class Settings(BaseModel):
         default=get_env_int("SEMANTICSQL_LLM_MAX_TOKENS", 28000),
         description="Maximum tokens for LLM",
     )
-    llm_timeout: int = 30
+    llm_timeout: int = 300
     llm_max_retries: int = 3
 
     # Neo4j configuration - NO HARDCODED DEFAULTS IN PRODUCTION

@@ -56,7 +56,7 @@ class ERAnalysisTool(BaseSemanticSQLTool):
                 self.memory_manager = ComponentManager.create_memory_manager(self.settings)
             
             # 获取数据库元数据信息
-            neo4j_graph = self.memory_manager.get_graph()
+            neo4j_graph = self.memory_manager.neo4j_graph
             database_context = self._gather_database_context_from_neo4j(neo4j_graph)
             
             # 执行概念ER关系分析
@@ -79,20 +79,20 @@ class ERAnalysisTool(BaseSemanticSQLTool):
     # ========== 核心业务逻辑 ==========
     def _gather_database_context_from_neo4j(self, neo4j_graph) -> Dict[str, Any]:
         """从 Neo4j 获取数据库上下文信息"""
-        # 读取数据库和表基本信息，以及列的完整分析信息
+        # 读取数据库和表基本信息，以及列的完整分析信息（使用 COALESCE 处理可能不存在的属性）
         cypher = """
         MATCH (d:Database)-[:CONTAINS]->(t:Table)-[:HAS_COLUMN]->(c:Column)
         RETURN d.name as database_name,
-               d.business_desc as database_desc,
+               COALESCE(d.business_desc, d.ai_business_desc, '') as database_desc,
                t.name as table_name,
-               t.ai_business_desc as table_desc,
+               COALESCE(t.ai_business_desc, t.business_desc, '') as table_desc,
                collect({
                    name: c.name,
-                   data_type: c.data_type,
-                   is_primary_key: c.is_primary_key,
-                   is_foreign: c.is_foreign,
-                   ai_business_desc: c.ai_business_desc,
-                   sample_values: c.sample_values
+                   data_type: COALESCE(c.data_type, 'unknown'),
+                   is_primary_key: COALESCE(c.is_primary_key, false),
+                   is_foreign: COALESCE(c.is_foreign, false),
+                   comment: COALESCE(c.ai_business_desc, c.business_desc, c.comment, ''),
+                   sample_values: COALESCE(c.sample_values, [])
                }) as columns
         ORDER BY t.name
         """
@@ -111,10 +111,23 @@ class ERAnalysisTool(BaseSemanticSQLTool):
                 table_desc = record.get('table_desc', '')
                 columns = record['columns']
                 
+                # 为模板准备正确的数据结构
+                processed_columns = []
+                for column in columns:
+                    processed_columns.append({
+                        'name': column.get('name', ''),
+                        'data_type': column.get('data_type', 'unknown'),
+                        'comment': column.get('comment', ''),  # 模板期望的字段名
+                        'is_primary_key': column.get('is_primary_key', False),
+                        'is_foreign': column.get('is_foreign', False),
+                        'sample_values': column.get('sample_values', [])
+                    })
+                
                 tables_info[table_name] = {
                     'name': table_name,
-                    'description': table_desc or '',
-                    'columns': columns
+                    'comment': table_desc or '',  # 模板期望的字段名
+                    'description': table_desc or '',  # 保持向后兼容
+                    'columns': processed_columns
                 }
             
             return {
@@ -169,8 +182,13 @@ class ERAnalysisTool(BaseSemanticSQLTool):
         # 格式化表结构信息
         formatted_schema = self._format_schema_with_descriptions(database_context)
         
+        # 生成外键信息
+        fk_info = self._format_foreign_key_info(database_context)
+        
         return {
             'formatted_schema': formatted_schema,
+            'fk_info': fk_info,
+            'tables': database_context['tables'],  # 模板需要的 tables 变量
             'database_name': database_context['database_name']
         }
     
@@ -195,6 +213,37 @@ class ERAnalysisTool(BaseSemanticSQLTool):
                 if column.get('ai_business_desc'):
                     col_info += f" -- {column['ai_business_desc']}"
                 lines.append(col_info)
+        
+        return "\n".join(lines)
+    
+    def _format_foreign_key_info(self, database_context: Dict[str, Any]) -> str:
+        """格式化外键信息"""
+        lines = ["外键关系信息："]
+        
+        # 基于列名和类型推断可能的外键关系
+        tables = database_context['tables']
+        fk_relations = []
+        
+        for table_name, table_info in tables.items():
+            for column in table_info.get('columns', []):
+                col_name = column.get('name', '')
+                
+                # 检查可能的外键模式：table_id, tableid, table_name_id 等
+                if col_name.endswith('_id'):
+                    ref_table = col_name[:-3]  # 去掉 _id
+                    if ref_table in tables or f"{ref_table}s" in tables:
+                        target_table = ref_table if ref_table in tables else f"{ref_table}s"
+                        fk_relations.append(f"  {table_name}.{col_name} -> {target_table}.id (推测外键)")
+                elif col_name.endswith('id') and len(col_name) > 2:
+                    ref_table = col_name[:-2]  # 去掉 id
+                    if ref_table in tables or f"{ref_table}s" in tables:
+                        target_table = ref_table if ref_table in tables else f"{ref_table}s"
+                        fk_relations.append(f"  {table_name}.{col_name} -> {target_table}.id (推测外键)")
+        
+        if fk_relations:
+            lines.extend(fk_relations)
+        else:
+            lines.append("  未发现明显的外键关系")
         
         return "\n".join(lines)
     
@@ -404,7 +453,7 @@ class ERAnalysisTool(BaseSemanticSQLTool):
         if not self.memory_manager:
             return None
             
-        neo4j_graph = self.memory_manager.get_graph()
+        neo4j_graph = self.memory_manager.neo4j_graph
         
         conditions = []
         params = {}
@@ -453,7 +502,7 @@ class ERAnalysisTool(BaseSemanticSQLTool):
         if not self.memory_manager:
             return []
             
-        neo4j_graph = self.memory_manager.get_graph()
+        neo4j_graph = self.memory_manager.neo4j_graph
         
         conditions = []
         params = {}

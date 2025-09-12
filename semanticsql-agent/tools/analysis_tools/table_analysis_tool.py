@@ -115,7 +115,7 @@ class TableAnalysisTool(BaseSemanticSQLTool):
             # 6. 构建返回消息
             result_message = "✅ table_analysis_tool 分析完成，已存储到Neo4j，请务必继续执行 er_analysis_tool 工具。"
             
-            self.logger.info(f"✅ {self.name}: 表描述分析完成 - 分析了 {len(analysis_context['tables'])} 个表")
+            self.logger.info(f"✅ {self.name}: 表描述分析完成。")
             return result_message
             
         except Exception as e:

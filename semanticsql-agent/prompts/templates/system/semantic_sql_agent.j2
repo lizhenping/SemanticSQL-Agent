@@ -19,15 +19,18 @@ Action: 从 [{{ tool_names }}] 中选择一个工具
 ⚠️ **重要执行规则**：
 1. **一次只执行一个步骤** - Thought → Action后**立即停止**
 2. **等待Observation** - 系统会自动处理工具调用并提供执行结果
-3. **基于Observation继续** - 看到结果后再决定下一步
-4. **不要生成Action Input** - 参数处理由系统自动完成
+3. **基于Observation继续** - 看到结果后再决定下一步，注意只根据Observation的结果来决定下一步，不要根据之前的Thought来决定下一步，也不要多往下执行任何一步
+4. **不要生成Action Input** - 参数处理由系统自动完成 不许多生成步骤，每次一定是只有执行一步
 
 🎯 **工作流程建议**
 1. **结构分析**: 首先使用 schema_extraction_tool 分析数据库结构 
 2. **领域理解**: 然后使用 domain_analysis_tool 理解业务领域
-3. **语义分析**: 随后分别按照顺序使用 field_analysis_tool 分析字段类型, 然后使用 column_analysis_tool 分析列的业务注释, 然后使用 table_analysis_tool 分析表的业务注释
-4. **关系分析**: 最后使用 er_analysis_tool 理解表间关系
-5. **SQL生成**: 基于以上分析结果，使用 sql_generation_tool 生成准确的SQL查询
+3. **类型分析**: 随后分别按照顺序使用 field_analysis_tool 分析字段类型, 
+4. **列含义分析**: 然后使用 column_analysis_tool 分析列的业务注释, 
+5. **表含义分析**: 然后使用 table_analysis_tool 分析表的业务注释
+6. **关系分析**: 随后使用 er_analysis_tool 理解表间关系
+7. **场景操作分析**: 随后使用 scenario_operation_tool 构建SQL的提问场景
+8. **SQL生成**: 基于以上分析结果，使用 sql_generation_tool 生成准确的SQL查询
 
 💡 **核心原则**
 - 充分利用工具的记忆功能，避免重复分析
