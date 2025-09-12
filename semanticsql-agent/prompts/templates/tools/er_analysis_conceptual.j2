@@ -1,4 +1,4 @@
-你是一个数据库概念ER关系分析专家。请基于数据库表结构和注释信息，分析表之间的业务概念关系。
+你是一个数据库ER关系分析专家。请基于数据库表结构分析，识别抽象的业务实体和它们之间的关系。
 
 【数据库表结构】
 {{ formatted_schema }}
@@ -15,40 +15,61 @@
 
 {% endfor %}
 
-请进行概念层面的ER关系分析，识别表之间的业务概念关系：
+## ER分析要求
 
-1. **聚合关系（Aggregation）**：识别整体-部分关系，其中部分可以独立存在
-   - 例如：部门聚合员工，订单聚合订单项
-   
-2. **组合关系（Composition）**：识别强依赖的整体-部分关系，部分不能独立存在
-   - 例如：用户组合用户日志，文章组合评论
-   
-3. **依赖关系（Dependency）**：识别业务概念上的依赖关系
-   - 例如：订单依赖客户，产品依赖分类
-   
-4. **关联关系（Association）**：识别业务概念之间的关联
-   - 例如：用户关联角色，产品关联供应商
+**实体（Entity）抽象**：
+- 从数据库表中抽象出业务概念实体（如：Customer、Order、Product）
+- 实体不一定等于表，可能是1:1、1:N或N:1的关系
+- 每个实体要指定在业务流程中的角色（如：initiator、central_object、subject_matter）
 
-分析要点：
-- 结合表和列的注释理解业务语义
-- 基于表名和列名的语义关联识别隐含关系
-- 重点关注业务流程中的概念依赖、聚合和组合关系
-- 可以识别跨多个表的复杂业务概念关系
+**属性（Attribute）映射**：
+- 每个抽象实体的属性必须对应到具体的数据库列
+- 属性类型包括：primary_key、foreign_key、business_name、business_value、status、contact等
 
-请为整个数据库的ER关系分析提供一个整体的业务名称和描述，然后严格按照以下JSON格式返回分析结果：
+**关系（Relationship）分析**：
+- 识别实体间的关系：ONE_TO_ONE、ONE_TO_MANY、MANY_TO_MANY
+- 每个关系要有明确的业务含义
+
+**业务流程整体性**：
+- 分析完整的业务流程，包含多个实体的协同关系
+- 重点关注核心业务场景，如：订单流程、用户管理、产品管理等
+
+请严格按照以下JSON格式返回分析结果：
 
 {
-  "business_name": "业务领域名称（如：客户订单履约流程）",
-  "business_description": "整个业务流程的描述（2-3句话）",
-  "triplets": [
-    {
-      "source_table": "源表名",
-      "source_column": "源列名（关系字段）",
-      "relation_semantic": "关系语义标识（如：customer_relation, order_item_relation）",
-      "target_table": "目标表名",
-      "target_column": "目标列名（被引用字段）",
-      "business_meaning": "关系的业务含义描述（明确说明是聚合/组合/依赖/关联关系）",
-      "confidence": 0.9
-    }
-  ]
+  "business_domain": {
+    "name": "业务领域名称（如：电商订单履约系统）",
+    "description": "整个业务领域的描述（2-3句话，涵盖核心业务流程）"
+  },
+  "er_relation": {
+    "relation_id": "关系标识（如：order_fulfillment_process）",
+    "relation_name": "关系名称（如：订单履约流程）",
+    "business_meaning": "完整业务流程的描述",
+    "complexity_level": "复杂度（simple/medium/high）",
+    "confidence": 0.95,
+    "entities": [
+      {
+        "name": "实体名称（如：Customer）",
+        "description": "实体描述",
+        "entity_type": "实体类型（core/support）",
+        "role": "在业务流程中的角色（initiator/central_object/subject_matter/transaction/fulfillment/destination）",
+        "attributes": [
+          {
+            "column": "数据库列名",
+            "table": "数据库表名",
+            "attr_type": "属性类型（primary_key/foreign_key/business_name/business_value/status/contact）",
+            "description": "属性业务含义"
+          }
+        ]
+      }
+    ],
+    "inter_entity_relations": [
+      {
+        "from_entity": "源实体名称",
+        "to_entity": "目标实体名称", 
+        "relation_type": "关系类型（ONE_TO_ONE/ONE_TO_MANY/MANY_TO_MANY）",
+        "business_meaning": "关系的业务含义描述"
+      }
+    ]
+  }
 }
