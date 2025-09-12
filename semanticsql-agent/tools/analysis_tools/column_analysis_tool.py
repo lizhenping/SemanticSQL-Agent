@@ -22,7 +22,8 @@ from utils.memory import Neo4jMemoryManager
 # 导入提示词管理和LLM组件
 from prompts.manager import PromptManager
 from config.factories import ComponentManager
-from agent.parsers import SemanticSQLOutputParser
+# Removed to avoid circular import - parser not actually used in this file
+# from agent.parsers import SemanticSQLOutputParser
 
 class ColumnAnalysisTool(BaseSemanticSQLTool):
     """列描述分析工具 - 重构版本
