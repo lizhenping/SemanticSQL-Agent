@@ -196,7 +196,13 @@ class SQLGenerationTool(BaseSemanticSQLTool):
             return []
     
     def _fetch_question_from_neo4j(self, question_id: str, database_name: str) -> Dict[str, Any]:
-        """从Neo4j获取Question节点的完整数据"""
+        """从Neo4j获取Question节点的完整数据 - 修复版：添加Question节点存在性检查"""
+        # 首先检查Question节点是否存在
+        check_cypher = "MATCH (q:Question) RETURN count(q) as count"
+        check_result = self.memory_manager.neo4j_graph.query(check_cypher)
+        if not check_result or check_result[0]['count'] == 0:
+            raise_tool_error(self.name, "未找到任何Question节点，请先执行scenario_operation_tool生成问题")
+        
         cypher = """
         MATCH (q:Question)
         WHERE q.id = $question_id 
@@ -308,39 +314,56 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         return schema_info
     
     def _fetch_er_relations_from_neo4j(self, database_name: str) -> Dict[str, Any]:
-        """获取ER关系信息 - 修复版：使用实际的BusinessEntity关系"""
-        # ERAnalysis节点没有正确的关系数据，使用BusinessEntity之间的关系
-        cypher = """
-        MATCH (be1:BusinessEntity)-[r]->(be2:BusinessEntity)
-        WHERE type(r) IN ['ONE_TO_ONE', 'ONE_TO_MANY', 'MANY_TO_MANY']
-        RETURN be1.name as from_entity, 
-               type(r) as rel_type, 
-               be2.name as to_entity
-        """
-        
-        result = self.memory_manager.neo4j_graph.query(cypher, {})
-        
+        """获取ER关系信息 - 修复版：使用实际的ER结构（ERRelation + BusinessEntity）"""
         er_data = {'physical': [], 'logical': [], 'conceptual': []}
         
-        # 将BusinessEntity关系转换为ER关系格式
-        for row in result:
-            relation = {
-                'from': row['from_entity'],
-                'to': row['to_entity'],
-                'relationship': row['rel_type']
-            }
+        try:
+            # 查询BusinessEntity之间的关系（逻辑层）
+            entity_cypher = """
+            MATCH (be1:BusinessEntity)-[r]-(be2:BusinessEntity)
+            WHERE type(r) IN ['ONE_TO_ONE', 'ONE_TO_MANY']
+            RETURN be1.name as from_entity, 
+                   type(r) as rel_type, 
+                   be2.name as to_entity
+            """
             
-            # 根据关系类型分类
-            if row['rel_type'] == 'ONE_TO_MANY':
-                er_data['logical'].append(relation)
-            elif row['rel_type'] == 'MANY_TO_MANY':
-                er_data['conceptual'].append(relation) 
-            else:
-                er_data['physical'].append(relation)
+            entity_result = self.memory_manager.neo4j_graph.query(entity_cypher)
+            
+            # 将BusinessEntity关系转换为逻辑层关系
+            for row in entity_result:
+                if row['from_entity'] and row['to_entity']:
+                    relation = {
+                        'from': row['from_entity'],
+                        'to': row['to_entity'],
+                        'relationship': row['rel_type']
+                    }
+                    er_data['logical'].append(relation)
+            
+            # 查询ERRelation的概念层关系
+            concept_cypher = """
+            MATCH (bd:BusinessDomain)-[:CONTAINS]->(er:ERRelation)-[:INVOLVES]->(be:BusinessEntity)
+            WHERE bd.database_name = $database_name OR bd.database_name IS NULL
+            RETURN er.relation_name as relation_name,
+                   er.business_meaning as business_meaning,
+                   er.complexity_level as complexity_level,
+                   COLLECT(be.name) as involved_entities
+            """
+            
+            concept_result = self.memory_manager.neo4j_graph.query(concept_cypher, {'database_name': database_name})
+            
+            # 将ERRelation转换为概念层关系
+            for row in concept_result:
+                if row['relation_name']:
+                    conceptual_relation = {
+                        'relation_name': row['relation_name'],
+                        'business_meaning': row['business_meaning'],
+                        'complexity_level': row['complexity_level'],
+                        'involved_entities': row['involved_entities']
+                    }
+                    er_data['conceptual'].append(conceptual_relation)
         
-        # 如果没有BusinessEntity关系，返回空的结构
-        if not any([er_data['physical'], er_data['logical'], er_data['conceptual']]):
-            self.logger.info("没有找到ER关系数据，返回空结构")
+        except Exception as e:
+            self.logger.warning(f"获取ER关系数据失败: {e}")
         
         return er_data
     
@@ -491,26 +514,36 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         return table_meanings
     
     def _fetch_business_entities_from_neo4j(self, database_name: str) -> Dict[str, Any]:
-        """获取业务实体信息"""
-        cypher = """
-        MATCH (be:BusinessEntity)-[:MAPS_TO]->(t:Table)<-[:CONTAINS]-(d:Database {name: $database_name})
-        RETURN be.name as entity_name,
-               be.type as entity_type,
-               be.description as entity_description,
-               t.name as table_name
-        """
+        """获取业务实体信息 - 修复版：使用实际的HAS_ATTRIBUTE关系推断表关联"""
+        try:
+            # 修正查询：BusinessEntity没有MAPS_TO关系，使用HAS_ATTRIBUTE间接推断
+            cypher = """
+            MATCH (be:BusinessEntity)-[:HAS_ATTRIBUTE]->(c:Column)<-[:HAS_COLUMN]-(t:Table)<-[:CONTAINS]-(d:Database {name: $database_name})
+            RETURN DISTINCT be.name as entity_name,
+                   be.entity_type as entity_type,
+                   be.description as entity_description,
+                   COLLECT(DISTINCT t.name) as related_tables
+            """
+            
+            result = self.memory_manager.neo4j_graph.query(cypher, {'database_name': database_name})
+            
+            business_entities = {}
+            for row in result:
+                entity_name = row.get('entity_name', '')
+                if entity_name:
+                    business_entities[entity_name] = {
+                        'entity_type': row.get('entity_type', ''),
+                        'entity_description': row.get('entity_description', ''),
+                        'related_tables': row.get('related_tables', [])
+                    }
+            
+            # Fail fast: 如果没有找到BusinessEntity关联，直接报错
+            if not business_entities:
+                raise_tool_error(self.name, f"未找到数据库{database_name}的BusinessEntity关联数据")
         
-        result = self.memory_manager.neo4j_graph.query(cypher, {'database_name': database_name})
-        
-        business_entities = {}
-        for row in result:
-            entity_name = row.get('entity_name', '')
-            if entity_name:
-                business_entities[entity_name] = {
-                    'entity_type': row.get('entity_type', ''),
-                    'entity_description': row.get('entity_description', ''),
-                    'table_name': row.get('table_name', '')
-                }
+        except Exception as e:
+            self.logger.error(f"获取业务实体数据失败: {e}")
+            raise_tool_error(self.name, f"获取业务实体数据失败: {str(e)}")
         
         return business_entities
 

@@ -82,20 +82,20 @@ class ERAnalysisTool(BaseSemanticSQLTool):
     # ========== 核心业务逻辑 ==========
     def _gather_database_context_from_neo4j(self, neo4j_graph) -> Dict[str, Any]:
         """从 Neo4j 获取数据库上下文信息"""
-        # 读取数据库和表基本信息，以及列的完整分析信息（使用 COALESCE 处理可能不存在的属性）
+        # 修复版：只使用实际存在的属性，fail fast模式
         cypher = """
         MATCH (d:Database)-[:CONTAINS]->(t:Table)-[:HAS_COLUMN]->(c:Column)
         RETURN d.name as database_name,
-               COALESCE(d.business_desc, d.ai_business_desc, '') as database_desc,
+               d.business_desc as database_desc,
                t.name as table_name,
-               COALESCE(t.ai_business_desc, t.business_desc, '') as table_desc,
+               t.ai_business_desc as table_desc,
                collect({
                    name: c.name,
-                   data_type: COALESCE(c.data_type, 'unknown'),
-                   is_primary_key: COALESCE(c.is_primary_key, false),
-                   is_foreign: COALESCE(c.is_foreign, false),
-                   comment: COALESCE(c.ai_business_desc, c.business_desc, c.comment, ''),
-                   sample_values: COALESCE(c.sample_values, [])
+                   data_type: c.data_type,
+                   is_primary: c.is_primary,
+                   is_foreign: c.is_foreign,
+                   comment: c.ai_business_desc,
+                   sample_values: c.sample_values
                }) as columns
         ORDER BY t.name
         """
@@ -187,8 +187,8 @@ class ERAnalysisTool(BaseSemanticSQLTool):
             
         except Exception as e:
             self.logger.error(f"ER关系分析失败: {e}")
-            # 返回默认的业务域+ER关系结构
-            return self._create_default_er_result()
+            # Fail fast: 直接抛出错误，不返回默认值
+            raise_tool_error(self.name, f"ER关系分析失败: {str(e)}")
     
     def _prepare_er_analysis_prompt_data(self, database_context: Dict[str, Any]) -> Dict[str, Any]:
         """准备ER分析的提示词数据"""
@@ -295,51 +295,25 @@ class ERAnalysisTool(BaseSemanticSQLTool):
                         
                     return result
             
-            # 如果解析失败，返回默认结构
-            return self._create_default_er_result()
+            # Fail fast: 如果解析失败，直接抛出错误
+            raise_tool_error(self.name, "LLM响应解析失败：无法识别有效的JSON结构")
         
         except Exception as e:
             self.logger.error(f"解析LLM ER响应失败: {e}")
-            return self._create_default_er_result()
+            raise_tool_error(self.name, f"解析LLM ER响应失败: {str(e)}")
     
-    def _create_default_er_result(self) -> Dict[str, Any]:
-        """创建默认的ER分析结果"""
-        return {
-            'business_domain': {
-                'name': '默认业务域',
-                'description': 'LLM分析失败，使用默认结果'
-            },
-            'er_relation': {
-                'relation_id': f'default_relation_{int(time.time())}',
-                'relation_name': '默认ER关系',
-                'business_meaning': '分析失败，无法获取业务含义',
-                'complexity_level': 'simple',
-                'confidence': 0.1,
-                'entities': [],
-                'inter_entity_relations': []
-            }
-        }
     
     def _validate_er_analysis(self, er_analysis: Dict[str, Any], database_context: Dict[str, Any]) -> Dict[str, Any]:
         """验证ER分析结果的有效性"""
         tables = database_context['tables']
         validated_analysis = er_analysis.copy()
         
-        # 验证business_domain
+        # Fail fast验证：必需字段缺失直接报错
         if 'business_domain' not in er_analysis:
-            self.logger.warning("缺少business_domain，使用默认值")
-            validated_analysis['business_domain'] = {'name': '默认业务域', 'description': '无描述'}
+            raise_tool_error(self.name, "LLM响应缺少business_domain字段")
         
-        # 验证er_relation
         if 'er_relation' not in er_analysis:
-            self.logger.warning("缺少er_relation，使用默认值")
-            validated_analysis['er_relation'] = {
-                'relation_id': f'default_{int(time.time())}',
-                'relation_name': '默认关系',
-                'business_meaning': '无业务含义',
-                'entities': [],
-                'inter_entity_relations': []
-            }
+            raise_tool_error(self.name, "LLM响应缺少er_relation字段")
         
         # 验证实体和属性
         er_relation = validated_analysis['er_relation']

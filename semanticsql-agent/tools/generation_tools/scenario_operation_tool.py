@@ -261,14 +261,14 @@ class ScenarioOperationTool(BaseTool):
         try:
             neo4j_graph = self.memory_manager.neo4j_graph
             
-            # 查询数据库表结构
+            # 查询数据库表结构 - 修复版：只使用实际存在的属性
             cypher = """
             MATCH (d:Database {name: $database_name})-[:CONTAINS]->(t:Table)-[:HAS_COLUMN]->(c:Column)
             WITH t, collect({
                 name: c.name,
                 type: c.data_type,
-                comment: coalesce(c.ai_business_desc, c.business_desc, c.comment, ''),
-                description: coalesce(c.ai_business_desc, c.business_desc, c.comment, ''),
+                comment: coalesce(c.ai_business_desc, c.business_desc, ''),
+                description: coalesce(c.ai_business_desc, c.business_desc, ''),
                 classification: CASE 
                     WHEN c.data_type CONTAINS 'int' OR c.data_type CONTAINS 'decimal' THEN {category: 'numeric'}
                     WHEN c.data_type CONTAINS 'date' OR c.data_type CONTAINS 'time' THEN {category: 'date'}
@@ -277,9 +277,8 @@ class ScenarioOperationTool(BaseTool):
                 END
             }) as columns
             RETURN t.name as name,
-                   coalesce(t.ai_business_desc, t.business_desc, t.comment, '') as description,
-                   columns,
-                   t.row_count as row_count
+                   coalesce(t.ai_business_desc, t.business_desc, '') as description,
+                   columns
             ORDER BY t.name
             """
             
@@ -305,27 +304,42 @@ class ScenarioOperationTool(BaseTool):
         try:
             neo4j_graph = self.memory_manager.neo4j_graph
             
-            # 简化查询，直接获取已分析的ER关系
+            # 修复版：使用实际存在的ER结构（ERRelation + BusinessEntity）
             cypher = """
-            MATCH (er:ERAnalysis {database_name: $database_name})
-            WHERE er.created_at IS NOT NULL
-            RETURN er.physical_relations as physical,
-                   er.logical_relations as logical,
-                   er.conceptual_relations as conceptual
-            ORDER BY er.created_at DESC
-            LIMIT 1
+            MATCH (bd:BusinessDomain)-[:CONTAINS]->(er:ERRelation)-[:INVOLVES]->(be:BusinessEntity)
+            WHERE bd.database_name = $database_name OR bd.database_name IS NULL
+            WITH er, COLLECT(DISTINCT be) as entities
+            OPTIONAL MATCH (be1:BusinessEntity)-[rel]-(be2:BusinessEntity)
+            WHERE be1 IN entities AND be2 IN entities AND type(rel) IN ['ONE_TO_ONE', 'ONE_TO_MANY']
+            RETURN er.relation_name as relation_name,
+                   er.business_meaning as business_meaning,
+                   er.complexity_level as complexity_level,
+                   COLLECT(DISTINCT {from: be1.name, to: be2.name, type: type(rel)}) as entity_relations
             """
             
             result = neo4j_graph.query(cypher, {'database_name': database_name})
             
-            if result and result[0]:
-                # 解析存储的JSON数据
-                if result[0].get('physical'):
-                    er_data['physical'] = json.loads(result[0]['physical']) if isinstance(result[0]['physical'], str) else result[0]['physical']
-                if result[0].get('logical'):
-                    er_data['logical'] = json.loads(result[0]['logical']) if isinstance(result[0]['logical'], str) else result[0]['logical']
-                if result[0].get('conceptual'):
-                    er_data['conceptual'] = json.loads(result[0]['conceptual']) if isinstance(result[0]['conceptual'], str) else result[0]['conceptual']
+            if result:
+                # 处理实际的ER结构数据
+                for row in result:
+                    # 概念层关系（来自ERRelation的业务含义）
+                    conceptual_relation = {
+                        'relation_name': row.get('relation_name', ''),
+                        'business_meaning': row.get('business_meaning', ''),
+                        'complexity_level': row.get('complexity_level', 'medium')
+                    }
+                    er_data['conceptual'].append(conceptual_relation)
+                    
+                    # 逻辑层关系（BusinessEntity之间的关系）
+                    entity_relations = row.get('entity_relations', [])
+                    for rel in entity_relations:
+                        if rel and rel.get('from') and rel.get('to'):
+                            logical_relation = {
+                                'from': rel['from'],
+                                'to': rel['to'],
+                                'relationship': rel['type']
+                            }
+                            er_data['logical'].append(logical_relation)
             
             return er_data
             

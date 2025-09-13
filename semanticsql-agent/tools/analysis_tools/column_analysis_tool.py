@@ -180,7 +180,7 @@ class ColumnAnalysisTool(BaseSemanticSQLTool):
                            THEN c.sample_values[0..3] 
                            ELSE c.sample_values 
                        END,
-                       comment: c.comment
+                       comment: ''
                    }) as columns
             """
             
@@ -220,7 +220,7 @@ class ColumnAnalysisTool(BaseSemanticSQLTool):
                        is_nullable: c.is_nullable,
                        is_primary: c.is_primary,
                        is_foreign: c.is_foreign,
-                       comment: c.comment
+                       comment: ''
                    }) as columns
             ORDER BY t.name
             """
