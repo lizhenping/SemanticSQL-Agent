@@ -47,17 +47,24 @@ class QuestionGenerationTool(BaseSemanticSQLTool):
     description: str = "基于记忆中的场景组合生成自然语言问题，自动注入场景信息和专用提示词"
     args_schema: Type[BaseModel] = QuestionGenerationInput
     
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, memory_manager: Optional[Neo4jMemoryManager] = None, **kwargs):
+        """初始化问题生成工具"""
+        super().__init__(memory_manager=memory_manager, **kwargs)
+        # 使用object.__setattr__避免Pydantic验证问题
+        settings = get_settings()
+        object.__setattr__(self, 'settings', settings)
+        object.__setattr__(self, 'memory_manager', memory_manager)
+        object.__setattr__(self, 'llm', ComponentManager.create_llm(settings))
         object.__setattr__(self, 'prompt_manager', PromptManager())
     
-    def _run(
-        self,
-        combination_index: int = 0,
-        **kwargs
-    ) -> str:
+    def _run(self, *args, **kwargs) -> str:
         """生成问题（新设计：基于记忆中的场景组合）"""
+        self.logger.info(f"🔧 {self.name}: 开始问题生成")
+        
         try:
+            # 初始化必要的服务
+            if not self.memory_manager:
+                self.memory_manager = ComponentManager.create_memory_manager(self.settings)
             # # 从记忆中获取场景组合信息
             # all_combinations = self.get_from_memory("all_scenario_combinations")
             # if not all_combinations:
@@ -105,10 +112,9 @@ class QuestionGenerationTool(BaseSemanticSQLTool):
             # return json.dumps(result, ensure_ascii=False)
             
         except Exception as e:
-            raise ToolExecutionError(
-                tool_name=self.name,
-                reason=f"问题生成失败: {str(e)}"
-            )
+            error_msg = f"问题生成失败: {str(e)}"
+            self.logger.error(f"❌ {self.name}: {error_msg}")
+            return f"❌ {error_msg}"
     
     def _build_context(
         self,
@@ -135,8 +141,8 @@ class QuestionGenerationTool(BaseSemanticSQLTool):
     
     def _generate_question_with_llm(self, context: Dict[str, Any]) -> str:
         """使用LLM生成问题"""
-        # 从记忆中获取LLM
-        llm = self.get_from_memory("llm")
+        # 使用初始化的LLM
+        llm = self.llm
         if not llm:
             # 如果没有LLM，使用简化生成
             return self._generate_question_by_rules(context)
@@ -169,13 +175,6 @@ class QuestionGenerationTool(BaseSemanticSQLTool):
         # 简单的问题模板
         return f"请帮我分析{main_name}中的{sub_name}相关信息？"
     
-    async def _arun(
-        self,
-        combination_index: int = 0,
-        **kwargs
-    ) -> str:
-        """异步执行（当前实现为同步）"""
-        return self._run(combination_index, **kwargs)
 
 
 # ========== 工具工厂函数 ==========

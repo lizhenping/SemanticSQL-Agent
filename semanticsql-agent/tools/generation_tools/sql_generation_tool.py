@@ -34,21 +34,29 @@ class SQLOperation(Enum):
 
 class SQLGenerationInput(BaseModel):
     """SQL生成输入参数 - Neo4j版本"""
-    question_id: str = Field(description="Question节点ID")
-    database_name: str = Field(description="数据库名称")
+    question_id: str = Field(default="", description="Question节点ID")
+    database_name: str = Field(default="testdb", description="数据库名称")
     execute_sql: bool = Field(default=True, description="是否执行SQL")
     dialect: str = Field(default="mysql", description="SQL方言")
     
     @model_validator(mode='before')
     @classmethod
     def validate_input(cls, data):
-        """处理字符串输入"""
+        """处理字符串输入和不完整输入"""
         if isinstance(data, str):
             try:
                 data = json.loads(data)
             except:
                 # 如果是单个字符串，尝试解析为question_id
-                data = {"question_id": data, "database_name": "testdb"}
+                data = {"question_id": data}
+        
+        # 确保有默认值
+        if isinstance(data, dict):
+            if "database_name" not in data:
+                data["database_name"] = "testdb"
+            if "question_id" not in data:
+                data["question_id"] = ""
+                
         return data
 
 
@@ -68,8 +76,8 @@ class SQLGenerationTool(BaseSemanticSQLTool):
     - 依赖检查：验证Question和schema数据存在
     """
     
-    name: str = "sql_generation_tool"
-    description: str = "从Neo4j获取Question分析数据并生成、执行SQL查询"
+    name: str = "sql_generation_tool" 
+    description: str = "基于Neo4j中的Question节点生成SQL查询。需要参数：question_id（Question节点的ID）和database_name（数据库名称）。在使用前必须先运行scenario_operation_tool生成Question数据。"
     args_schema: Type[BaseModel] = SQLGenerationInput
     
     def __init__(self, memory_manager: Optional[Neo4jMemoryManager] = None, 
@@ -91,18 +99,27 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         object.__setattr__(self, 'llm', ComponentManager.create_llm(settings))
         object.__setattr__(self, 'prompt_manager', PromptManager())
 
-    def _run(
-        self,
-        question_id: str,
-        database_name: str,
-        execute_sql: bool = True,
-        dialect: str = "mysql",
-        **kwargs
-    ) -> str:
+    def _run(self, *args, **kwargs) -> str:
         """生成SQL查询 - 主流程"""
+        # 从kwargs中提取参数
+        question_id = kwargs.get('question_id', '')
+        database_name = kwargs.get('database_name', 'testdb')
+        execute_sql = kwargs.get('execute_sql', True)
+        dialect = kwargs.get('dialect', 'mysql')
+        
         self.logger.info(f"🔧 {self.name}: 开始处理Question {question_id}")
         
         try:
+            # 验证输入参数
+            if not question_id or question_id.strip() == "":
+                # 尝试查找可用的Question
+                available_questions = self._find_available_questions(database_name)
+                if available_questions:
+                    question_id = available_questions[0]['id']
+                    self.logger.info(f"自动选择Question: {question_id}")
+                else:
+                    return "❌ SQL生成失败: 需要提供有效的question_id，且Neo4j中没有找到可用的Question。请先运行scenario_operation_tool生成问题。"
+            
             # 初始化组件
             if not self.memory_manager:
                 self.memory_manager = ComponentManager.create_memory_manager(self.settings)
@@ -155,6 +172,27 @@ class SQLGenerationTool(BaseSemanticSQLTool):
                 self.name,
                 "Neo4j连接不可用，无法获取Question和schema信息"
             )
+    
+    def _find_available_questions(self, database_name: str) -> List[Dict[str, Any]]:
+        """查找可用的Question节点"""
+        if not self.memory_manager:
+            return []
+        
+        try:
+            cypher = """
+            MATCH (q:Question)
+            WHERE q.database_name = $database_name AND q.has_sql = false
+            RETURN q.id as id, q.question_text as question_text
+            ORDER BY q.created_at DESC
+            LIMIT 5
+            """
+            
+            result = self.memory_manager.neo4j_graph.query(cypher, {'database_name': database_name})
+            return result if result else []
+            
+        except Exception as e:
+            self.logger.warning(f"查找可用Question失败: {e}")
+            return []
     
     def _fetch_question_from_neo4j(self, question_id: str, database_name: str) -> Dict[str, Any]:
         """从Neo4j获取Question节点的完整数据"""
@@ -564,16 +602,6 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         
         return sql
 
-    async def _arun(
-        self,
-        question_id: str,
-        database_name: str,
-        execute_sql: bool = True,
-        dialect: str = "mysql",
-        **kwargs
-    ) -> str:
-        """异步执行（当前实现为同步）"""
-        return self._run(question_id, database_name, execute_sql, dialect, **kwargs)
 
 
 # ========== 工具工厂函数 ==========

@@ -76,10 +76,19 @@ class ScenarioOperationTool(BaseTool):
         with open(config_path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f)
     
-    def _run(self, database_name: str = "testdb", 
-            target_count: int = 10, **kwargs) -> Dict[str, Any]:
+    def _run(self, *args, **kwargs) -> str:
         """执行问题生成"""
+        # 从kwargs中提取参数
+        database_name = kwargs.get('database_name', 'testdb')
+        target_count = kwargs.get('target_count', 10)
+        
+        self.logger.info(f"🔧 {self.name}: 开始场景问题生成，数据库: {database_name}")
+        
         try:
+            # 初始化必要的服务
+            if not self.memory_manager:
+                self.memory_manager = ComponentManager.create_memory_manager(get_settings())
+            
             # questions = self.generate_questions(database_name, target_count)
             
             # # 存储生成的问题到Neo4j
@@ -89,11 +98,9 @@ class ScenarioOperationTool(BaseTool):
             return result_message
 
         except Exception as e:
-            self.logger.error(f"生成失败: {e}")
-            return {
-                'success': False,
-                'error': str(e)
-            }
+            error_msg = f"场景问题生成失败: {str(e)}"
+            self.logger.error(f"❌ {self.name}: {error_msg}")
+            return f"❌ {error_msg}"
     
     def generate_questions(self, database_name: str, target_count: int) -> List[Dict[str, Any]]:
         """生成问题的主方法 - 核心逻辑与pipeline保持一致
