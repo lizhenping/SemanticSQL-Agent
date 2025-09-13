@@ -670,33 +670,25 @@ class SQLGenerationTool(BaseSemanticSQLTool):
             return None
         
         try:
-            # 切换到指定数据库
-            self.database_manager.switch_database(database_name)
+            # Note: DatabaseManager is already connected to the correct database
+            # via its initialization, no need to switch
             
-            # 执行SQL（限制结果数量）
-            limited_sql = self._add_limit_to_sql(sql)
-            result = self.database_manager.execute_query(limited_sql)
+            # Execute SQL using the correct method
+            result = self.database_manager.execute_sql_safe(sql, limit=100)
             
-            self.logger.info(f"SQL执行成功，返回 {len(result)} 条记录")
-            return result
-            
+            if result.get("success"):
+                data = result.get("data", [])
+                self.logger.info(f"SQL执行成功，返回 {len(data)} 条记录")
+                return data
+            else:
+                error_msg = result.get("error", "Unknown error")
+                self.logger.error(f"SQL执行失败: {error_msg}")
+                return None
+                
         except Exception as e:
             self.logger.error(f"SQL执行失败: {e}")
             return None
     
-    def _add_limit_to_sql(self, sql: str) -> str:
-        """为SQL添加LIMIT子句（如果没有）"""
-        sql_lower = sql.lower().strip()
-        
-        # 如果已经有LIMIT，直接返回
-        if 'limit' in sql_lower:
-            return sql
-        
-        # 移除末尾分号
-        sql = sql.rstrip(';')
-        
-        # 添加LIMIT
-        return f"{sql} LIMIT 100;"
     
     def _store_sql_result_to_neo4j(self, question_id: str, sql: str, execution_result: Optional[List[Dict]], dialect: str) -> None:
         """将SQL和执行结果存储到Neo4j"""
