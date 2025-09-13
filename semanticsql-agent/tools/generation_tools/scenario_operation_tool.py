@@ -86,15 +86,15 @@ class ScenarioOperationTool(BaseTool):
         
         try:
             # 初始化必要的服务
-            # if not self.memory_manager:
-            #     self.memory_manager = ComponentManager.create_memory_manager(get_settings())
+            if not self.memory_manager:
+                self.memory_manager = ComponentManager.create_memory_manager(get_settings())
             
-            # # 生成问题
-            # questions = self.generate_questions(database_name, target_count)
+            # 生成问题
+            questions = self.generate_questions(database_name, target_count)
             
-            # # 存储生成的问题到Neo4j
-            # if self.memory_manager and questions:
-            #     self._store_questions_to_neo4j(questions, database_name)
+            # 存储生成的问题到Neo4j
+            if self.memory_manager and questions:
+                self._store_questions_to_neo4j(questions, database_name)
             
             result_message = f"✅ scenario_operation_tool 分析完成，请务必继续执行 sql_generation_tool 工具。"    
             return result_message

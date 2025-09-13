@@ -98,25 +98,25 @@ class DomainAnalysisTool(BaseSemanticSQLTool):
         
         try:
             # 初始化必要的服务
-            # if not self.memory_manager:
-            #     self.memory_manager = ComponentManager.create_memory_manager(self.settings)
+            if not self.memory_manager:
+                self.memory_manager = ComponentManager.create_memory_manager(self.settings)
             
-            # # 1. 验证依赖：确保schema_extraction_tool已执行
-            # self._check_schema_extraction_dependency()
+            # 1. 验证依赖：确保schema_extraction_tool已执行
+            self._check_schema_extraction_dependency()
                
-            # # 2. 从Neo4j读取数据库结构信息
-            # database_schema = self._query_neo4j_schema()
-            # if not database_schema.get("tables"):
-            #     raise_dependency_error(self.name, "schema_extraction_tool", "未找到数据库表结构信息")
+            # 2. 从Neo4j读取数据库结构信息
+            database_schema = self._query_neo4j_schema()
+            if not database_schema.get("tables"):
+                raise_dependency_error(self.name, "schema_extraction_tool", "未找到数据库表结构信息")
             
-            # # 3. 格式化为LLM可理解的DDL格式
-            # ddl_content = self._format_schema_to_ddl(database_schema)
+            # 3. 格式化为LLM可理解的DDL格式
+            ddl_content = self._format_schema_to_ddl(database_schema)
             
-            # # 4. 使用LLM进行深度领域分析
-            # domain_knowledge = self._analyze_domain_with_llm(ddl_content)
+            # 4. 使用LLM进行深度领域分析
+            domain_knowledge = self._analyze_domain_with_llm(ddl_content)
             
-            # # 5. 直接存储到Neo4j知识图谱
-            # self._store_domain_knowledge_to_neo4j(domain_knowledge, database_schema)
+            # 5. 直接存储到Neo4j知识图谱
+            self._store_domain_knowledge_to_neo4j(domain_knowledge, database_schema)
             
             # 6. 返回分析结果
             result_message = "✅ domain_analysis_tool提取完成，已存储到Neo4j。请继续执行field_analysis_tool工具。"

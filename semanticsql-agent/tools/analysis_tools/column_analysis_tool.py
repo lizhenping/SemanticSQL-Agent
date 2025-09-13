@@ -81,37 +81,37 @@ class ColumnAnalysisTool(BaseSemanticSQLTool):
             self._check_dependencies()
             
             # 2. 从Neo4j读取数据库结构和字段分类信息
-            # analysis_context = self._read_analysis_context_from_neo4j()
-            # if not analysis_context['columns']:
-            #     return "❌ 列描述分析失败: 未找到列信息"
+            analysis_context = self._read_analysis_context_from_neo4j()
+            if not analysis_context['columns']:
+                return "❌ 列描述分析失败: 未找到列信息"
             
-            # self.logger.info(f"📖 从Neo4j读取到 {len(analysis_context['columns'])} 个列")
+            self.logger.info(f"📖 从Neo4j读取到 {len(analysis_context['columns'])} 个列")
             
-            # # 3. 逐列生成业务描述
-            # descriptions = []
-            # llm_success_count = 0
+            # 3. 逐列生成业务描述
+            descriptions = []
+            llm_success_count = 0
             
-            # for column_info in analysis_context['columns']:
-            #     description = self._generate_column_description_with_llm(column_info, analysis_context)
-            #     if description:
-            #         descriptions.append(description)
-            #         llm_success_count += 1
-            #         self.logger.debug(f"✅ 列 {column_info['field_name']} 描述生成完成")
-            #     else:
-            #         raise_tool_error(
-            #             self.name,
-            #             f"列 {column_info['field_name']} LLM描述生成失败"
-            #         )
+            for column_info in analysis_context['columns']:
+                description = self._generate_column_description_with_llm(column_info, analysis_context)
+                if description:
+                    descriptions.append(description)
+                    llm_success_count += 1
+                    self.logger.debug(f"✅ 列 {column_info['field_name']} 描述生成完成")
+                else:
+                    raise_tool_error(
+                        self.name,
+                        f"列 {column_info['field_name']} LLM描述生成失败"
+                    )
             
-            # # 4. 将描述结果注入到Neo4j Column节点属性
-            # updated_count = 0
-            # for description in descriptions:
-            #     try:
-            #         self._update_column_description(description)
-            #         updated_count += 1
-            #     except Exception as e:
-            #         self.logger.error(f"注入列描述失败 {description['field_name']}: {e}")
-            #         raise_tool_error(self.name, f"列描述注入失败: {str(e)}")
+            # 4. 将描述结果注入到Neo4j Column节点属性
+            updated_count = 0
+            for description in descriptions:
+                try:
+                    self._update_column_description(description)
+                    updated_count += 1
+                except Exception as e:
+                    self.logger.error(f"注入列描述失败 {description['field_name']}: {e}")
+                    raise_tool_error(self.name, f"列描述注入失败: {str(e)}")
             
             # # 5. 生成统计报告
             # success_rate = (llm_success_count / len(analysis_context['columns'])) * 100 if analysis_context['columns'] else 0
