@@ -142,7 +142,25 @@ class ERAnalysisTool(BaseSemanticSQLTool):
         except Exception as e:
             self.logger.error(f"从 Neo4j 获取数据库信息失败: {e}")
             raise_tool_error(self.name, f"获取数据库信息失败: {e}")
-    
+
+    def _clean_think_content(self, text: str) -> str:
+            """清理文本中的think内容"""
+            import re
+            
+            if not isinstance(text, str):
+                return text
+            
+            # 过滤 <think>...</think> 标签及其内容
+            cleaned_text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+            
+            # 过滤其他think变种标签
+            cleaned_text = re.sub(r'<thinking>.*?</thinking>', '', cleaned_text, flags=re.DOTALL)
+            
+            # 清理多余空白
+            cleaned_text = cleaned_text.strip()
+            
+            return cleaned_text
+
     def _perform_er_analysis(self, database_context: Dict[str, Any]) -> Dict[str, Any]:
         """执行ER关系分析，基于BusinessDomain->ERRelation->BusinessEntity模型"""
         try:
@@ -159,6 +177,7 @@ class ERAnalysisTool(BaseSemanticSQLTool):
             llm_response = self.llm.invoke(prompt_text)
             
             # 解析LLM响应 - 新的business_domain + er_relation格式
+            llm_response.content = self._clean_think_content(llm_response.content)
             er_result = self._parse_llm_er_response(llm_response.content)
             
             # 验证ER分析有效性 - 使用实体-属性验证

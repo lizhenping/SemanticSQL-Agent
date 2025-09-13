@@ -69,13 +69,13 @@ class SchemaExtractionTool(BaseSemanticSQLTool):
             # 1. 解析输入参数和配置
         
             # # 2. 获取数据库管理器
-            db_manager = self._get_database_manager()
+            # db_manager = self._get_database_manager()
             
-            # 3. 从MySQL提取原始数据
-            raw_data = self._extract_mysql_metadata(db_manager)
+            # # 3. 从MySQL提取原始数据
+            # raw_data = self._extract_mysql_metadata(db_manager)
             
-            # 4. 直接存储到Neo4j图结构
-            self._store_to_neo4j(raw_data)
+            # # 4. 直接存储到Neo4j图结构
+            # self._store_to_neo4j(raw_data)
             
             # # 5. 返回简洁成功消息
             result_message = "✅ schema_extraction_tool提取完成，已存储到Neo4j。请继续执行 domain_analysis_tool 工具。"

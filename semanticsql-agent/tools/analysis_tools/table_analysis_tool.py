@@ -490,6 +490,24 @@ class TableAnalysisTool(BaseSemanticSQLTool):
         else:
             return "数据特征混合，包含多种类型的业务信息"
     
+    def _clean_think_content(self, text: str) -> str:
+        """清理文本中的think内容"""
+        import re
+        
+        if not isinstance(text, str):
+            return text
+        
+        # 过滤 <think>...</think> 标签及其内容
+        cleaned_text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+        
+        # 过滤其他think变种标签
+        cleaned_text = re.sub(r'<thinking>.*?</thinking>', '', cleaned_text, flags=re.DOTALL)
+        
+        # 清理多余空白
+        cleaned_text = cleaned_text.strip()
+        
+        return cleaned_text
+    
     def _update_table_description(self, description: Dict[str, Any]) -> None:
         """将表描述结果注入到Neo4j Table节点属性中"""
         
@@ -500,9 +518,8 @@ class TableAnalysisTool(BaseSemanticSQLTool):
             t.ai_business_desc_timestamp = datetime()
         RETURN t
         '''
-        # 使用CONTAINS关系模式，将ai_business_desc作为Table节点属性注入
-        parser = SemanticSQLOutputParser()
-        description['ai_business_desc'] = parser._clean_think_content(description['ai_business_desc'])
+        # 清理LLM输出中的think内容
+        description['ai_business_desc'] = self._clean_think_content(description['ai_business_desc'])
 
         params = {
             "table_name": description['table_name'],
