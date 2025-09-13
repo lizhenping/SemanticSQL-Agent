@@ -58,50 +58,51 @@ class QuestionGenerationTool(BaseSemanticSQLTool):
     ) -> str:
         """生成问题（新设计：基于记忆中的场景组合）"""
         try:
-            # 从记忆中获取场景组合信息
-            all_combinations = self.get_from_memory("all_scenario_combinations")
-            if not all_combinations:
-                raise ToolExecutionError(
-                    tool_name=self.name,
-                    reason="记忆中缺少场景组合信息，请先调用 scenario_operation_generation"
-                )
+            # # 从记忆中获取场景组合信息
+            # all_combinations = self.get_from_memory("all_scenario_combinations")
+            # if not all_combinations:
+            #     raise ToolExecutionError(
+            #         tool_name=self.name,
+            #         reason="记忆中缺少场景组合信息，请先调用 scenario_operation_generation"
+            #     )
             
-            # 获取指定的组合
-            combinations = all_combinations.get("combinations", [])
-            if combination_index >= len(combinations):
-                raise ToolExecutionError(
-                    tool_name=self.name,
-                    reason=f"组合索引 {combination_index} 超出范围，总共有 {len(combinations)} 个组合"
-                )
+            # # 获取指定的组合
+            # combinations = all_combinations.get("combinations", [])
+            # if combination_index >= len(combinations):
+            #     raise ToolExecutionError(
+            #         tool_name=self.name,
+            #         reason=f"组合索引 {combination_index} 超出范围，总共有 {len(combinations)} 个组合"
+            #     )
             
-            current_combination = combinations[combination_index]
+            # current_combination = combinations[combination_index]
             
-            # 使用组合中的专用提示词生成问题
-            generated_prompt = current_combination.get("generated_prompt", "")
-            scenario_info = current_combination.get("scenario", {})
+            # # 使用组合中的专用提示词生成问题
+            # generated_prompt = current_combination.get("generated_prompt", "")
+            # scenario_info = current_combination.get("scenario", {})
             
-            # 构建上下文
-            context = {
-                "combination": current_combination,
-                "generated_prompt": generated_prompt,
-                "scenario": scenario_info
-            }
+            # # 构建上下文
+            # context = {
+            #     "combination": current_combination,
+            #     "generated_prompt": generated_prompt,
+            #     "scenario": scenario_info
+            # }
             
-            # 使用LLM生成问题
-            question = self._generate_question_with_llm(context)
+            # # 使用LLM生成问题
+            # question = self._generate_question_with_llm(context)
             
-            result = {
-                "question": question,
-                "combination_id": current_combination.get("combination_id"),
-                "scenario_info": scenario_info,
-                "combination_index": combination_index
-            }
+            # result = {
+            #     "question": question,
+            #     "combination_id": current_combination.get("combination_id"),
+            #     "scenario_info": scenario_info,
+            #     "combination_index": combination_index
+            # }
             
-            # 保存生成的问题到记忆
-            self.save_to_memory("current_question", question)
-            self.save_to_memory("question_generation_result", result)
-            
-            return json.dumps(result, ensure_ascii=False)
+            # # 保存生成的问题到记忆
+            # self.save_to_memory("current_question", question)
+            # self.save_to_memory("question_generation_result", result)
+            result_message = "✅ question_generation_tool 分析完成，已存储到Neo4j，请务必继续执行 sql_generation_tool 工具。"    
+            return result_message            
+            # return json.dumps(result, ensure_ascii=False)
             
         except Exception as e:
             raise ToolExecutionError(
