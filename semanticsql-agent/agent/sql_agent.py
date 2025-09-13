@@ -27,6 +27,8 @@ from tools.analysis_tools.column_analysis_tool import create_column_analysis_too
 from tools.analysis_tools.table_analysis_tool import create_table_analysis_tool
 from tools.analysis_tools.er_analysis_tool import create_er_analysis_tool
 from tools.generation_tools.scenario_operation_tool import create_scenario_operation_tool
+from tools.generation_tools.sql_generation_tool import create_sql_generation_tool
+from tools.generation_tools.question_generation_tool import create_question_generation_tool
 
 
 class SemanticSQLReActAgent:
@@ -124,7 +126,12 @@ class SemanticSQLReActAgent:
                     create_scenario_operation_tool(
                         memory_manager=self.memory_manager,
                         database_manager=self.database_manager
-                    )
+                    ),
+                    create_sql_generation_tool(
+                        memory_manager=self.memory_manager,
+                        database_manager=self.database_manager
+                    ),
+                    create_question_generation_tool(memory_manager=self.memory_manager)
                 ])
                 self.logger.info("Added memory-based analysis tools")
             except Exception as e:

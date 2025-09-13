@@ -1,6 +1,6 @@
 """
 问题生成工具 - 根据场景生成自然语言问题
-基于 LangChain BaseTool
+基于 LangChain BaseTool，兼容Neo4j架构
 """
 
 from typing import Dict, Any, Type, List, Optional
@@ -9,6 +9,9 @@ import json
 
 from models.exceptions import ToolExecutionError
 from prompts.manager import PromptManager
+from utils.memory import Neo4jMemoryManager
+from config.settings import get_settings
+from config.factories import ComponentManager
 from ..base_tool import BaseSemanticSQLTool
 
 
@@ -172,3 +175,22 @@ class QuestionGenerationTool(BaseSemanticSQLTool):
     ) -> str:
         """异步执行（当前实现为同步）"""
         return self._run(combination_index, **kwargs)
+
+
+# ========== 工具工厂函数 ==========
+def create_question_generation_tool(memory_manager: Optional[Neo4jMemoryManager] = None) -> QuestionGenerationTool:
+    """创建问题生成工具实例
+    
+    Args:
+        memory_manager: Neo4j记忆管理器（可选）
+        
+    Returns:
+        配置好的问题生成工具实例
+    """
+    settings = get_settings()
+    
+    # 创建组件（如果未提供）
+    if memory_manager is None:
+        memory_manager = ComponentManager.create_memory_manager(settings)
+    
+    return QuestionGenerationTool(memory_manager=memory_manager)

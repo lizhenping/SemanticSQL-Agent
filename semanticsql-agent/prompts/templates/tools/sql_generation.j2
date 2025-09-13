@@ -1,23 +1,66 @@
 ## 任务
-基于数据库结构信息，生成SQL查询来回答用户的问题。
+基于详细的问题分析和数据库结构信息，生成精确的SQL查询。
 
-## 数据库信息
+## 问题信息
+**问题**: {{ question }}
+{% if question_focus %}**关注点**: {{ question_focus }}{% endif %}
+{% if expected_output %}**期望输出**: {{ expected_output }}{% endif %}
+
+## 详细分析上下文
 {{ context }}
 
-## 配置
-- SQL方言：{{ dialect }}
-- 必须使用的操作：{{ operations | join(', ') if operations else '无限制' }}
+{% if business_rules and business_rules|length > 0 %}
+## 业务规则说明
+{% for rule in business_rules %}
+**{{ rule.concept }}** ({{ rule.type }}):
+- 定义: {{ rule.definition }}
+- SQL映射: {{ rule.sql_mapping.condition }}
+- 涉及表: {{ rule.sql_mapping.tables | join(', ') }}
+- 涉及列: {{ rule.sql_mapping.columns | join(', ') }}
 
-## 用户问题
-{{ question }}
+{% endfor %}
+{% endif %}
 
-## 要求
-1. SQL语法必须正确，符合{{ dialect }}方言规范
-2. 只返回SQL语句，不要其他解释
-3. 使用合适的表和字段
-4. 必要时使用JOIN连接表
-5. 需要聚合时使用GROUP BY
-6. 需要排序时使用ORDER BY
-7. 考虑查询性能，避免不必要的复杂度
+## 配置要求
+- **SQL方言**: {{ dialect }}
+- **数据库类型**: MySQL
+- **结果限制**: 自动添加合理的LIMIT子句
+- **性能考虑**: 优先使用索引字段进行连接和过滤
+
+## SQL生成指导原则
+
+### 1. 表和列选择
+- **严格按照分析结果**: 只使用分析中明确指定的表和列
+- **遵循操作目的**: 每个表和列的使用都要符合分析中说明的操作目的
+- **维护数据完整性**: 确保JOIN条件正确，避免数据重复或丢失
+
+### 2. SQL结构设计
+- **FROM子句**: 以分析中指定的主表开始
+- **JOIN策略**: 根据分析中的连接目的选择适当的JOIN类型
+- **WHERE条件**: 严格按照业务规则中的条件逻辑
+- **GROUP BY**: 当分析中指定分组操作时使用
+- **ORDER BY**: 按照分析中的排序要求
+- **聚合函数**: 根据分析中的聚合操作需求
+
+### 3. 性能优化
+- **索引利用**: 优先在主键和外键上进行连接
+- **条件顺序**: 将选择性高的条件放在前面
+- **子查询优化**: 合理使用EXISTS而非IN (当适用时)
+- **LIMIT控制**: 添加合理的LIMIT以避免过大结果集
+
+### 4. 方言特定要求 ({{ dialect }})
+- **字段引用**: 使用反引号包围字段名 `field_name`
+- **字符串**: 使用单引号包围字符串值
+- **日期函数**: 使用MySQL标准日期函数
+- **类型转换**: 使用CAST或CONVERT函数
+
+## 输出要求
+1. **只返回SQL语句**: 不要添加任何解释文字
+2. **语法正确**: 确保SQL能够直接执行
+3. **格式清晰**: 使用适当的换行和缩进
+4. **分号结尾**: SQL语句以分号结束
+5. **完整性**: 包含所有必要的子句
 
 ## SQL查询
+
+```sql

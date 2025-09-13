@@ -1,6 +1,6 @@
 """
-SQL生成工具 - 优化版本
-拆分长方法，移除过度异常处理，按就近原则组织代码
+SQL生成工具 - Neo4j集成版本
+基于Question节点的分析数据生成SQL查询并执行
 """
 
 import re
@@ -8,17 +8,21 @@ import json
 from typing import Dict, Any, Type, List, Optional
 from pydantic import BaseModel, Field, model_validator
 from enum import Enum
+from datetime import datetime
 
-from models.exceptions import ToolExecutionError, LLMException
+from models.exceptions import ToolExecutionError, LLMException, raise_tool_error, raise_dependency_error
 from prompts.manager import PromptManager
 from utils.database import DatabaseManager
+from utils.memory import Neo4jMemoryManager
+from config.settings import get_settings
+from config.factories import ComponentManager
 from ..base_tool import BaseSemanticSQLTool
 
 
-# ========== 工具内部数据模型（就近原则）==========
+# ========== 工具内部数据模型 ==========
 
 class SQLOperation(Enum):
-    """SQL操作类型 - 从 models/base.py 迁移到此处"""
+    """SQL操作类型"""
     SELECT = "SELECT"
     JOIN = "JOIN"
     GROUP = "GROUP"
@@ -29,10 +33,10 @@ class SQLOperation(Enum):
 
 
 class SQLGenerationInput(BaseModel):
-    """SQL生成输入参数"""
-    question: str = Field(description="自然语言问题")
-    scenario: Optional[Dict[str, Any]] = Field(default=None, description="场景信息")
-    operations: Optional[List[str]] = Field(default=None, description="建议的SQL操作")
+    """SQL生成输入参数 - Neo4j版本"""
+    question_id: str = Field(description="Question节点ID")
+    database_name: str = Field(description="数据库名称")
+    execute_sql: bool = Field(default=True, description="是否执行SQL")
     dialect: str = Field(default="mysql", description="SQL方言")
     
     @model_validator(mode='before')
@@ -43,228 +47,508 @@ class SQLGenerationInput(BaseModel):
             try:
                 data = json.loads(data)
             except:
-                data = {"question": data}
+                # 如果是单个字符串，尝试解析为question_id
+                data = {"question_id": data, "database_name": "testdb"}
         return data
 
 
-class SQLAnalysisResult(BaseModel):
-    """SQL分析结果"""
-    tables: List[str]
-    operations: List[str] 
-    has_aggregation: bool
-    has_join: bool
-    complexity: str
-
-
-class GeneratedSQLResult(BaseModel):
-    """生成的SQL结果"""
-    sql: str
-    dialect: str
-    tables_used: List[str]
-    operations_used: List[str]
-    has_aggregation: bool
-    has_join: bool
-    complexity: str
-
-
 class SQLGenerationTool(BaseSemanticSQLTool):
-    """SQL生成工具 - 优化版本
+    """SQL生成工具 - Neo4j集成版本
     
     职责：
-    - 根据自然语言问题生成SQL查询
-    - 分析SQL复杂度和使用的操作
-    - 支持多种SQL方言
+    - 从Neo4j获取Question节点的分析数据
+    - 获取数据库schema和ER关系
+    - 基于完整上下文生成SQL查询
+    - 执行SQL并将结果存储到Neo4j
     
     设计原则：
-    - 单一职责：专注SQL生成
-    - 方法拆分：每个方法<30行
-    - 类型安全：使用Pydantic模型
-    - 简化异常：让异常自然传播
+    - Neo4j优先：直接从Question节点获取分析结果
+    - 完整上下文：利用table_analysis和column_analysis
+    - 简单执行：SQL执行后直接存储结果
+    - 依赖检查：验证Question和schema数据存在
     """
     
-    name: str = "sql_generation"
-    description: str = "根据自然语言问题生成SQL查询，自动从记忆中获取schema和分析结果"
+    name: str = "sql_generation_tool"
+    description: str = "从Neo4j获取Question分析数据并生成、执行SQL查询"
     args_schema: Type[BaseModel] = SQLGenerationInput
     
-    def __init__(self, llm=None, db_manager: Optional[DatabaseManager] = None, **kwargs):
+    def __init__(self, memory_manager: Optional[Neo4jMemoryManager] = None, 
+                 database_manager: Optional[DatabaseManager] = None, **kwargs):
         """初始化SQL生成工具
         
         Args:
-            llm: 语言模型 [DEPRECATED - 通过ComponentFactory创建]
-            db_manager: 数据库管理器 [DEPRECATED - 通过ComponentFactory创建]
+            memory_manager: Neo4j记忆管理器
+            database_manager: 数据库管理器
             **kwargs: 其他参数
         """
-        super().__init__(**kwargs)
+        super().__init__(memory_manager=memory_manager, **kwargs)
         
-        # 废弃警告
-        if llm is not None or db_manager is not None:
-            import warnings
-            warnings.warn(
-                "Direct dependency injection is deprecated. Use ComponentFactory to create all components.",
-                DeprecationWarning,
-                stacklevel=2
-            )
-        
-        object.__setattr__(self, 'llm', llm)
-        object.__setattr__(self, 'db_manager', db_manager)
+        # 初始化组件
+        settings = get_settings()
+        object.__setattr__(self, 'settings', settings)
+        object.__setattr__(self, 'memory_manager', memory_manager)
+        object.__setattr__(self, 'database_manager', database_manager)
+        object.__setattr__(self, 'llm', ComponentManager.create_llm(settings))
         object.__setattr__(self, 'prompt_manager', PromptManager())
 
     def _run(
         self,
-        question: str,
-        scenario: Optional[Dict[str, Any]] = None,
-        operations: Optional[List[str]] = None,
+        question_id: str,
+        database_name: str,
+        execute_sql: bool = True,
         dialect: str = "mysql",
         **kwargs
     ) -> str:
         """生成SQL查询 - 主流程"""
-        # 获取分析上下文
-        context = self._gather_analysis_context()
+        self.logger.info(f"🔧 {self.name}: 开始处理Question {question_id}")
         
-        # 生成SQL
-        sql = self._generate_sql(question, context, operations, dialect)
-        
-        # 分析SQL
-        analysis = self._analyze_generated_sql(sql, context["schema_info"])
-        
-        # 构建结果
-        result = self._build_generation_result(sql, dialect, analysis)
-        
-        # 保存并返回
-        self.save_to_memory("sql_generation", result)
-        return json.dumps(result, ensure_ascii=False)
+        try:
+            # 初始化组件
+            if not self.memory_manager:
+                self.memory_manager = ComponentManager.create_memory_manager(self.settings)
+            if not self.database_manager:
+                self.database_manager = ComponentManager.create_database_manager(self.settings)
+            
+            # 1. 检查依赖
+            self._check_dependencies()
+            
+            # 2. 从Neo4j获取Question分析数据
+            question_data = self._fetch_question_from_neo4j(question_id, database_name)
+            
+            # 3. 获取完整的分析上下文
+            context = self._gather_neo4j_context(database_name, question_data)
+            
+            # 4. 生成SQL
+            sql = self._generate_sql_with_context(question_data, context, dialect)
+            
+            # 5. 执行SQL（如果需要）
+            execution_result = None
+            if execute_sql and self.database_manager:
+                execution_result = self._execute_sql_safely(sql, database_name)
+            
+            # 6. 存储结果到Neo4j
+            self._store_sql_result_to_neo4j(question_id, sql, execution_result, dialect)
+            
+            # 7. 返回结果
+            result = {
+                "question_id": question_id,
+                "sql": sql,
+                "dialect": dialect,
+                "executed": execute_sql,
+                "execution_success": execution_result is not None if execute_sql else None,
+                "result_count": len(execution_result) if execution_result else None
+            }
+            
+            self.logger.info(f"✅ {self.name}: SQL生成完成 - {question_id}")
+            return json.dumps(result, ensure_ascii=False)
+            
+        except Exception as e:
+            error_msg = f"SQL生成失败: {str(e)}"
+            self.logger.error(f"❌ {self.name}: {error_msg}")
+            return f"❌ {error_msg}"
 
-    # ========== 上下文收集和处理 ==========
-    def _gather_analysis_context(self) -> Dict[str, Any]:
-        """收集分析上下文信息"""
-        context = {
-            "schema_info": self.get_from_memory("schema_extraction"),
-            "domain_analysis": self.get_from_memory("domain_analysis"), 
-            "field_classification": self.get_from_memory("field_classification"),
-            "column_meanings": self.get_from_memory("column_meanings"),
-            "table_meanings": self.get_from_memory("table_meanings"),
-            "er_relations": self.get_from_memory("er_analysis")
+    # ========== Neo4j数据获取方法 ==========
+    def _check_dependencies(self) -> None:
+        """检查Neo4j连接和基本依赖"""
+        if not self.memory_manager or not getattr(self.memory_manager, 'neo4j_graph', None):
+            raise_dependency_error(
+                self.name,
+                "Neo4j连接不可用，无法获取Question和schema信息"
+            )
+    
+    def _fetch_question_from_neo4j(self, question_id: str, database_name: str) -> Dict[str, Any]:
+        """从Neo4j获取Question节点的完整数据"""
+        cypher = """
+        MATCH (q:Question)
+        WHERE q.id = $question_id AND q.database_name = $database_name
+        RETURN q.question_text as question_text,
+               q.question_focus as question_focus,
+               q.expected_output as expected_output,
+               q.value_proposition as value_proposition,
+               q.business_rules as business_rules,
+               q.table_analysis as table_analysis,
+               q.column_analysis as column_analysis,
+               q.complexity as complexity,
+               q.complexity_level as complexity_level
+        """
+        
+        result = self.memory_manager.neo4j_graph.query(cypher, {
+            'question_id': question_id,
+            'database_name': database_name
+        })
+        
+        if not result:
+            raise_tool_error(self.name, f"未找到Question节点: {question_id}")
+        
+        question_raw = result[0]
+        
+        # 解析JSON字段
+        question_data = {
+            'question_text': question_raw.get('question_text', ''),
+            'question_focus': question_raw.get('question_focus', ''),
+            'expected_output': question_raw.get('expected_output', ''),
+            'value_proposition': question_raw.get('value_proposition', ''),
+            'complexity': question_raw.get('complexity', '简单'),
+            'complexity_level': question_raw.get('complexity_level', 1)
         }
         
-        if not context["schema_info"]:
-            raise ToolExecutionError(
-                tool_name=self.name,
-                reason="无法获取数据库结构信息，需要先运行schema_extraction工具"
-            )
+        # 解析JSON字符串
+        try:
+            question_data['business_rules'] = json.loads(question_raw.get('business_rules', '[]')) if question_raw.get('business_rules') else []
+            question_data['table_analysis'] = json.loads(question_raw.get('table_analysis', '{}')) if question_raw.get('table_analysis') else {}
+            question_data['column_analysis'] = json.loads(question_raw.get('column_analysis', '{}')) if question_raw.get('column_analysis') else {}
+        except json.JSONDecodeError as e:
+            self.logger.warning(f"JSON解析警告: {e}")
+            question_data['business_rules'] = []
+            question_data['table_analysis'] = {}
+            question_data['column_analysis'] = {}
+        
+        return question_data
+    
+    def _gather_neo4j_context(self, database_name: str, question_data: Dict[str, Any]) -> Dict[str, Any]:
+        """从Neo4j收集完整的分析上下文"""
+        context = {
+            'schema_info': self._fetch_schema_from_neo4j(database_name),
+            'er_relations': self._fetch_er_relations_from_neo4j(database_name),
+            'foreign_keys': self._fetch_foreign_keys_from_neo4j(database_name),
+            'column_meanings': self._fetch_column_meanings_from_neo4j(database_name),
+            'question_data': question_data
+        }
+        
+        # 验证schema信息
+        if not context['schema_info'] or not context['schema_info'].get('tables'):
+            raise_tool_error(self.name, f"无法获取数据库 {database_name} 的schema信息")
         
         return context
+    
+    def _fetch_schema_from_neo4j(self, database_name: str) -> Dict[str, Any]:
+        """获取数据库schema信息"""
+        cypher = """
+        MATCH (d:Database {name: $database_name})-[:CONTAINS]->(t:Table)-[:HAS_COLUMN]->(c:Column)
+        RETURN t.name as table_name,
+               t.comment as table_comment,
+               collect({
+                   name: c.name,
+                   type: c.data_type,
+                   comment: c.comment,
+                   is_primary: c.is_primary,
+                   is_foreign: c.is_foreign,
+                   is_nullable: c.is_nullable
+               }) as columns
+        ORDER BY t.name
+        """
+        
+        result = self.memory_manager.neo4j_graph.query(cypher, {'database_name': database_name})
+        
+        schema_info = {'tables': {}}
+        for row in result:
+            table_name = row['table_name']
+            schema_info['tables'][table_name] = {
+                'name': table_name,
+                'comment': row.get('table_comment', ''),
+                'columns': row['columns']
+            }
+        
+        return schema_info
+    
+    def _fetch_er_relations_from_neo4j(self, database_name: str) -> Dict[str, Any]:
+        """获取ER关系信息"""
+        cypher = """
+        MATCH (er:ERAnalysis {database_name: $database_name})
+        RETURN er.physical_relations as physical,
+               er.logical_relations as logical,
+               er.conceptual_relations as conceptual
+        ORDER BY er.created_at DESC
+        LIMIT 1
+        """
+        
+        result = self.memory_manager.neo4j_graph.query(cypher, {'database_name': database_name})
+        
+        er_data = {'physical': [], 'logical': [], 'conceptual': []}
+        if result and result[0]:
+            row = result[0]
+            try:
+                if row.get('physical'):
+                    er_data['physical'] = json.loads(row['physical']) if isinstance(row['physical'], str) else row['physical']
+                if row.get('logical'):
+                    er_data['logical'] = json.loads(row['logical']) if isinstance(row['logical'], str) else row['logical']
+                if row.get('conceptual'):
+                    er_data['conceptual'] = json.loads(row['conceptual']) if isinstance(row['conceptual'], str) else row['conceptual']
+            except json.JSONDecodeError:
+                self.logger.warning("ER关系JSON解析失败")
+        
+        return er_data
+    
+    def _fetch_foreign_keys_from_neo4j(self, database_name: str) -> List[Dict[str, Any]]:
+        """获取外键关系"""
+        cypher = """
+        MATCH (d:Database {name: $database_name})-[:CONTAINS]->(t1:Table)-[:HAS_COLUMN]->(c1:Column)-[:REFERENCES]->(c2:Column)<-[:HAS_COLUMN]-(t2:Table)
+        RETURN t1.name + '.' + c1.name as from_column,
+               t2.name + '.' + c2.name as to_column,
+               t1.name as from_table,
+               t2.name as to_table
+        """
+        
+        result = self.memory_manager.neo4j_graph.query(cypher, {'database_name': database_name})
+        
+        foreign_keys = []
+        for row in result:
+            foreign_keys.append({
+                'from': row['from_column'],
+                'to': row['to_column'],
+                'from_table': row['from_table'],
+                'to_table': row['to_table']
+            })
+        
+        return foreign_keys
+    
+    def _fetch_column_meanings_from_neo4j(self, database_name: str) -> Dict[str, Any]:
+        """获取列的业务含义"""
+        cypher = """
+        MATCH (d:Database {name: $database_name})-[:CONTAINS]->(t:Table)-[:HAS_COLUMN]->(c:Column)
+        WHERE c.business_meaning IS NOT NULL
+        RETURN t.name + '.' + c.name as column_name,
+               c.business_meaning as meaning,
+               c.category as category
+        """
+        
+        result = self.memory_manager.neo4j_graph.query(cypher, {'database_name': database_name})
+        
+        column_meanings = {}
+        for row in result:
+            column_meanings[row['column_name']] = {
+                'business_meaning': row.get('meaning', ''),
+                'category': row.get('category', '')
+            }
+        
+        return column_meanings
 
-    def _generate_sql(
+    # ========== SQL生成方法 ==========
+    def _generate_sql_with_context(
         self,
-        question: str,
+        question_data: Dict[str, Any],
         context: Dict[str, Any],
-        operations: Optional[List[str]],
         dialect: str
     ) -> str:
-        """生成SQL语句"""
-        llm = self._get_llm_instance()
+        """基于完整上下文生成SQL"""
+        # 构建增强的提示词
+        enhanced_context = self._build_enhanced_context(question_data, context)
         
-        if llm:
-            return self._generate_with_llm(question, context, operations, dialect, llm)
-        else:
-            return self._generate_with_rules(question, context["schema_info"], dialect)
-
-    def _get_llm_instance(self):
-        """获取LLM实例"""
-        if self.llm:
-            return self.llm
-        return self.get_from_memory("llm")
-
-    def _generate_with_llm(
-        self,
-        question: str,
-        context: Dict[str, Any],
-        operations: Optional[List[str]],
-        dialect: str,
-        llm
-    ) -> str:
-        """使用LLM生成SQL"""
-        prompt_context = self._build_llm_context(context, operations)
-        prompt = self.prompt_manager.get_tool_prompt(
-            "sql_generation",
-            context=prompt_context,
+        prompt = self.prompt_manager.render_template(
+            "tools/sql_generation.j2",
+            question=question_data['question_text'],
+            context=enhanced_context,
             dialect=dialect,
-            question=question
+            question_focus=question_data.get('question_focus', ''),
+            expected_output=question_data.get('expected_output', ''),
+            business_rules=question_data.get('business_rules', [])
         )
         
-        response = llm.invoke(prompt)
+        # 调用LLM
+        response = self.llm.invoke(prompt)
         sql = self._extract_sql_from_response(response.content)
+        
         return self._postprocess_sql(sql, dialect)
-
-    def _build_llm_context(self, context: Dict[str, Any], operations: Optional[List[str]]) -> str:
-        """构建LLM上下文字符串"""
+    
+    def _build_enhanced_context(self, question_data: Dict[str, Any], context: Dict[str, Any]) -> str:
+        """构建增强的上下文信息"""
         context_parts = []
         
-        # 添加领域信息
-        if context.get("domain_analysis", {}).get("primary_domain"):
-            domain = context["domain_analysis"]["primary_domain"]
-            context_parts.append(f"业务领域：{domain}")
+        # 1. Question的表分析
+        table_analysis = question_data.get('table_analysis', {})
+        if table_analysis and table_analysis.get('tables_used'):
+            context_parts.append("表使用分析：")
+            for table_info in table_analysis['tables_used']:
+                table_name = table_info.get('table_name', '')
+                selection_reason = table_info.get('selection_reason', '')
+                context_parts.append(f"  - {table_name}: {selection_reason}")
+                
+                # 添加操作详情
+                operations = table_info.get('operations', [])
+                for op in operations:
+                    op_type = op.get('operation_type', '')
+                    op_detail = op.get('operation_detail', '')
+                    purpose = op.get('purpose', '')
+                    context_parts.append(f"    * {op_type}: {op_detail} ({purpose})")
         
-        # 添加数据库结构
-        context_parts.extend(self._build_schema_context(context["schema_info"]))
+        # 2. Question的列分析
+        column_analysis = question_data.get('column_analysis', {})
+        if column_analysis and column_analysis.get('columns_used'):
+            context_parts.append("\n列使用分析：")
+            for column_info in column_analysis['columns_used']:
+                column_name = column_info.get('column_full_name', '')
+                selection_reason = column_info.get('selection_reason', '')
+                context_parts.append(f"  - {column_name}: {selection_reason}")
+                
+                # 添加操作详情
+                operations = column_info.get('operations', [])
+                for op in operations:
+                    op_type = op.get('operation_type', '')
+                    op_detail = op.get('operation_detail', '')
+                    purpose = op.get('purpose', '')
+                    context_parts.append(f"    * {op_type}: {op_detail} ({purpose})")
         
-        # 添加字段分类信息
-        if context.get("field_classification"):
-            context_parts.extend(self._build_field_context(context["field_classification"]))
+        # 3. 数据库Schema
+        schema_info = context.get('schema_info', {})
+        if schema_info.get('tables'):
+            context_parts.append("\n数据库结构：")
+            # 仅显示在Question中分析的表
+            relevant_tables = self._extract_relevant_tables(question_data)
+            for table_name in relevant_tables:
+                if table_name in schema_info['tables']:
+                    table_info = schema_info['tables'][table_name]
+                    context_parts.append(f"\n表: {table_name}")
+                    if table_info.get('comment'):
+                        context_parts.append(f"  说明: {table_info['comment']}")
+                    
+                    context_parts.append("  列:")
+                    for col in table_info.get('columns', [])[:15]:
+                        col_desc = f"    - {col.get('name')} ({col.get('type')})"
+                        if col.get('comment'):
+                            col_desc += f" -- {col['comment']}"
+                        context_parts.append(col_desc)
         
-        # 添加操作建议
-        if operations:
-            context_parts.append(f"建议使用的SQL操作：{', '.join(operations)}")
+        # 4. ER关系
+        er_relations = context.get('er_relations', {})
+        if er_relations.get('physical'):
+            context_parts.append("\n外键关系:")
+            for rel in er_relations['physical'][:10]:
+                if isinstance(rel, dict):
+                    from_table = rel.get('from', '')
+                    to_table = rel.get('to', '')
+                    context_parts.append(f"  - {from_table} → {to_table}")
+        
+        # 5. 列业务含义
+        column_meanings = context.get('column_meanings', {})
+        if column_meanings:
+            context_parts.append("\n列业务含义:")
+            for col_name, meaning_info in list(column_meanings.items())[:10]:
+                business_meaning = meaning_info.get('business_meaning', '')
+                if business_meaning:
+                    context_parts.append(f"  - {col_name}: {business_meaning}")
         
         return "\n".join(context_parts)
+    
+    def _extract_relevant_tables(self, question_data: Dict[str, Any]) -> List[str]:
+        """从Question分析中提取相关表名"""
+        tables = set()
+        
+        # 从表分析中获取
+        table_analysis = question_data.get('table_analysis', {})
+        if table_analysis.get('tables_used'):
+            for table_info in table_analysis['tables_used']:
+                table_name = table_info.get('table_name')
+                if table_name:
+                    tables.add(table_name)
+        
+        # 从列分析中获取
+        column_analysis = question_data.get('column_analysis', {})
+        if column_analysis.get('columns_used'):
+            for column_info in column_analysis['columns_used']:
+                column_full_name = column_info.get('column_full_name', '')
+                if '.' in column_full_name:
+                    table_name = column_full_name.split('.')[0]
+                    tables.add(table_name)
+        
+        return list(tables)
 
-    def _build_schema_context(self, schema_info: Dict[str, Any]) -> List[str]:
-        """构建数据库结构上下文"""
-        context_parts = ["数据库结构："]
-        tables = schema_info.get("tables", {})
+    # ========== SQL执行和存储方法 ==========
+    def _execute_sql_safely(self, sql: str, database_name: str) -> Optional[List[Dict[str, Any]]]:
+        """安全执行SQL查询"""
+        if not self.database_manager:
+            self.logger.warning("数据库管理器未配置，跳过SQL执行")
+            return None
         
-        for table_name, table_info in list(tables.items())[:10]:  # 限制表数量
-            context_parts.append(f"\n表：{table_name}")
+        try:
+            # 切换到指定数据库
+            self.database_manager.switch_database(database_name)
             
-            if table_info.get("comment"):
-                context_parts.append(f"  说明：{table_info['comment']}")
+            # 执行SQL（限制结果数量）
+            limited_sql = self._add_limit_to_sql(sql)
+            result = self.database_manager.execute_query(limited_sql)
             
-            # 添加列信息
-            columns = table_info.get("columns", [])
-            context_parts.append("  列：")
-            for col in columns[:15]:  # 限制列数量
-                col_desc = f"    - {col.get('name')} ({col.get('type')})"
-                if col.get("comment"):
-                    col_desc += f" -- {col['comment']}"
-                context_parts.append(col_desc)
+            self.logger.info(f"SQL执行成功，返回 {len(result)} 条记录")
+            return result
             
-            # 添加主键
-            if table_info.get("primary_keys"):
-                context_parts.append(f"  主键：{', '.join(table_info['primary_keys'])}")
+        except Exception as e:
+            self.logger.error(f"SQL执行失败: {e}")
+            return None
+    
+    def _add_limit_to_sql(self, sql: str) -> str:
+        """为SQL添加LIMIT子句（如果没有）"""
+        sql_lower = sql.lower().strip()
         
-        return context_parts
+        # 如果已经有LIMIT，直接返回
+        if 'limit' in sql_lower:
+            return sql
+        
+        # 移除末尾分号
+        sql = sql.rstrip(';')
+        
+        # 添加LIMIT
+        return f"{sql} LIMIT 100;"
+    
+    def _store_sql_result_to_neo4j(self, question_id: str, sql: str, execution_result: Optional[List[Dict]], dialect: str) -> None:
+        """将SQL和执行结果存储到Neo4j"""
+        try:
+            # 更新Question节点
+            update_question_cypher = """
+            MATCH (q:Question {id: $question_id})
+            SET q.has_sql = true,
+                q.sql_updated_at = datetime()
+            """
+            
+            self.memory_manager.neo4j_graph.query(update_question_cypher, {'question_id': question_id})
+            
+            # 创建SQLResult节点
+            create_result_cypher = """
+            MATCH (q:Question {id: $question_id})
+            CREATE (r:SQLResult {
+                id: randomUUID(),
+                sql: $sql,
+                dialect: $dialect,
+                executed: $executed,
+                execution_success: $execution_success,
+                result_count: $result_count,
+                result_preview: $result_preview,
+                created_at: datetime()
+            })
+            CREATE (q)-[:HAS_SQL_RESULT]->(r)
+            RETURN r.id as result_id
+            """
+            
+            # 准备参数
+            executed = execution_result is not None
+            execution_success = executed
+            result_count = len(execution_result) if execution_result else 0
+            result_preview = json.dumps(execution_result[:5], ensure_ascii=False) if execution_result else None
+            
+            params = {
+                'question_id': question_id,
+                'sql': sql,
+                'dialect': dialect,
+                'executed': executed,
+                'execution_success': execution_success,
+                'result_count': result_count,
+                'result_preview': result_preview
+            }
+            
+            result = self.memory_manager.neo4j_graph.query(create_result_cypher, params)
+            
+            if result:
+                self.logger.info(f"SQL结果已存储: {result[0]['result_id']}")
+            
+        except Exception as e:
+            self.logger.error(f"存储SQL结果失败: {e}")
 
-    def _build_field_context(self, field_classification: Dict[str, Any]) -> List[str]:
-        """构建字段分类上下文"""
-        context_parts = []
-        field_classifications = field_classification.get("field_classifications", {})
-        
-        if field_classifications:
-            context_parts.append("\n重要字段分类：")
-            for table, fields in field_classifications.items():
-                for field, info in list(fields.items())[:5]:  # 限制字段数量
-                    if info.get("business_meaning"):
-                        context_parts.append(f"  {table}.{field}: {info['business_meaning']}")
-        
-        return context_parts
-
+    # ========== 辅助方法 ==========
     def _extract_sql_from_response(self, response_content: str) -> str:
         """从LLM响应中提取SQL"""
         sql_match = re.search(r'```sql\s*(.*?)\s*```', response_content, re.DOTALL | re.IGNORECASE)
         if sql_match:
             return sql_match.group(1).strip()
         return response_content.strip()
-
+    
     def _postprocess_sql(self, sql: str, dialect: str) -> str:
         """后处理SQL语句"""
         # 移除多余空白
@@ -280,138 +564,40 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         
         return sql
 
-    def _generate_with_rules(self, question: str, schema_info: Dict[str, Any], dialect: str) -> str:
-        """基于规则生成SQL（备用方案）"""
-        tables = schema_info.get("tables", {})
-        if not tables:
-            return "SELECT 1;"
-        
-        # 选择主表
-        main_table = list(tables.keys())[0]
-        table_info = tables[main_table]
-        columns = [col.get("name") for col in table_info.get("columns", [])]
-        
-        question_lower = question.lower()
-        
-        if any(keyword in question_lower for keyword in ["count", "数量", "多少"]):
-            return f"SELECT COUNT(*) FROM {main_table};"
-        elif any(keyword in question_lower for keyword in ["all", "所有", "全部"]):
-            selected_cols = ", ".join(columns[:5]) if columns else "*"
-            return f"SELECT {selected_cols} FROM {main_table};"
-        else:
-            first_col = columns[0] if columns else "*"
-            return f"SELECT {first_col} FROM {main_table};"
-
-    # ========== SQL分析和结果构建 ==========
-    def _analyze_generated_sql(self, sql: str, schema_info: Dict[str, Any]) -> SQLAnalysisResult:
-        """分析生成的SQL"""
-        sql_lower = sql.lower()
-        
-        # 提取使用的表
-        tables_used = self._extract_tables_from_sql(sql, schema_info)
-        
-        # 识别SQL操作
-        operations_used = self._identify_sql_operations(sql_lower)
-        
-        # 检查聚合和连接
-        has_aggregation = self._has_aggregation(sql_lower)
-        has_join = self._has_join(sql_lower)
-        
-        # 估计复杂度
-        complexity = self._estimate_sql_complexity(len(operations_used), len(tables_used), has_aggregation, has_join)
-        
-        return SQLAnalysisResult(
-            tables=tables_used,
-            operations=operations_used,
-            has_aggregation=has_aggregation,
-            has_join=has_join,
-            complexity=complexity
-        )
-
-    def _extract_tables_from_sql(self, sql: str, schema_info: Dict[str, Any]) -> List[str]:
-        """从SQL中提取使用的表名"""
-        tables_used = []
-        all_tables = list(schema_info.get("tables", {}).keys())
-        
-        for table in all_tables:
-            table_pattern = rf'\b{re.escape(table)}\b'
-            if re.search(table_pattern, sql, re.IGNORECASE):
-                tables_used.append(table)
-        
-        return tables_used
-
-    def _identify_sql_operations(self, sql_lower: str) -> List[str]:
-        """识别SQL中使用的操作"""
-        operations = []
-        
-        if 'select' in sql_lower:
-            operations.append(SQLOperation.SELECT.value)
-        if 'join' in sql_lower:
-            operations.append(SQLOperation.JOIN.value)
-        if 'group by' in sql_lower:
-            operations.append(SQLOperation.GROUP.value)
-        if 'with ' in sql_lower and ' as ' in sql_lower:
-            operations.append(SQLOperation.CTE.value)
-        if 'over(' in sql_lower.replace(' ', ''):
-            operations.append(SQLOperation.WINDOW.value)
-        if 'union' in sql_lower:
-            operations.append(SQLOperation.UNION.value)
-        if sql_lower.count('select') > 1:
-            operations.append(SQLOperation.SUBQUERY.value)
-        
-        return operations
-
-    def _has_aggregation(self, sql_lower: str) -> bool:
-        """检查是否包含聚合函数"""
-        return any(agg in sql_lower for agg in ['count(', 'sum(', 'avg(', 'max(', 'min('])
-
-    def _has_join(self, sql_lower: str) -> bool:
-        """检查是否包含JOIN"""
-        return 'join' in sql_lower
-
-    def _estimate_sql_complexity(self, operation_count: int, table_count: int, has_aggregation: bool, has_join: bool) -> str:
-        """估计SQL复杂度"""
-        score = operation_count * 2
-        
-        if table_count > 3:
-            score += 3
-        elif table_count > 1:
-            score += 1
-        
-        if has_aggregation:
-            score += 1
-        if has_join:
-            score += 2
-        
-        if score <= 2:
-            return "简单"
-        elif score <= 5:
-            return "中等"
-        elif score <= 8:
-            return "复杂"
-        else:
-            return "高级"
-
-    def _build_generation_result(self, sql: str, dialect: str, analysis: SQLAnalysisResult) -> Dict[str, Any]:
-        """构建生成结果"""
-        return {
-            "sql": sql,
-            "dialect": dialect,
-            "tables_used": analysis.tables,
-            "operations_used": analysis.operations,
-            "has_aggregation": analysis.has_aggregation,
-            "has_join": analysis.has_join,
-            "complexity": analysis.complexity,
-            "generation_summary": f"生成了{analysis.complexity}级别的SQL，使用{len(analysis.tables)}个表"
-        }
-
     async def _arun(
         self,
-        question: str,
-        scenario: Optional[Dict[str, Any]] = None,
-        operations: Optional[List[str]] = None,
+        question_id: str,
+        database_name: str,
+        execute_sql: bool = True,
         dialect: str = "mysql",
         **kwargs
     ) -> str:
         """异步执行（当前实现为同步）"""
-        return self._run(question, scenario, operations, dialect, **kwargs)
+        return self._run(question_id, database_name, execute_sql, dialect, **kwargs)
+
+
+# ========== 工具工厂函数 ==========
+def create_sql_generation_tool(memory_manager: Optional[Neo4jMemoryManager] = None,
+                              database_manager: Optional[DatabaseManager] = None) -> SQLGenerationTool:
+    """创建SQL生成工具实例
+    
+    Args:
+        memory_manager: Neo4j记忆管理器
+        database_manager: 数据库管理器
+        
+    Returns:
+        配置好的SQL生成工具实例
+    """
+    settings = get_settings()
+    
+    # 创建组件（如果未提供）
+    if memory_manager is None:
+        memory_manager = ComponentManager.create_memory_manager(settings)
+    
+    if database_manager is None:
+        database_manager = ComponentManager.create_database_manager(settings)
+    
+    return SQLGenerationTool(
+        memory_manager=memory_manager,
+        database_manager=database_manager
+    )
