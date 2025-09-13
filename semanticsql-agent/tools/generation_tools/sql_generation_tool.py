@@ -278,15 +278,15 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         return context
     
     def _fetch_schema_from_neo4j(self, database_name: str) -> Dict[str, Any]:
-        """获取数据库schema信息"""
+        """获取数据库schema信息 - 修复版：使用实际存在的属性名"""
         cypher = """
         MATCH (d:Database {name: $database_name})-[:CONTAINS]->(t:Table)-[:HAS_COLUMN]->(c:Column)
         RETURN t.name as table_name,
-               t.comment as table_comment,
+               COALESCE(t.business_desc, t.ai_business_desc, '') as table_comment,
                collect({
                    name: c.name,
                    type: c.data_type,
-                   comment: c.comment,
+                   comment: COALESCE(c.business_desc, c.ai_business_desc, ''),
                    is_primary: c.is_primary,
                    is_foreign: c.is_foreign,
                    is_nullable: c.is_nullable
@@ -308,55 +308,78 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         return schema_info
     
     def _fetch_er_relations_from_neo4j(self, database_name: str) -> Dict[str, Any]:
-        """获取ER关系信息"""
+        """获取ER关系信息 - 修复版：使用实际的BusinessEntity关系"""
+        # ERAnalysis节点没有正确的关系数据，使用BusinessEntity之间的关系
         cypher = """
-        MATCH (er:ERAnalysis {database_name: $database_name})
-        RETURN er.physical_relations as physical,
-               er.logical_relations as logical,
-               er.conceptual_relations as conceptual
-        ORDER BY er.created_at DESC
-        LIMIT 1
+        MATCH (be1:BusinessEntity)-[r]->(be2:BusinessEntity)
+        WHERE type(r) IN ['ONE_TO_ONE', 'ONE_TO_MANY', 'MANY_TO_MANY']
+        RETURN be1.name as from_entity, 
+               type(r) as rel_type, 
+               be2.name as to_entity
         """
         
-        result = self.memory_manager.neo4j_graph.query(cypher, {'database_name': database_name})
+        result = self.memory_manager.neo4j_graph.query(cypher, {})
         
         er_data = {'physical': [], 'logical': [], 'conceptual': []}
-        if result and result[0]:
-            row = result[0]
-            try:
-                if row.get('physical'):
-                    er_data['physical'] = json.loads(row['physical']) if isinstance(row['physical'], str) else row['physical']
-                if row.get('logical'):
-                    er_data['logical'] = json.loads(row['logical']) if isinstance(row['logical'], str) else row['logical']
-                if row.get('conceptual'):
-                    er_data['conceptual'] = json.loads(row['conceptual']) if isinstance(row['conceptual'], str) else row['conceptual']
-            except json.JSONDecodeError:
-                self.logger.warning("ER关系JSON解析失败")
+        
+        # 将BusinessEntity关系转换为ER关系格式
+        for row in result:
+            relation = {
+                'from': row['from_entity'],
+                'to': row['to_entity'],
+                'relationship': row['rel_type']
+            }
+            
+            # 根据关系类型分类
+            if row['rel_type'] == 'ONE_TO_MANY':
+                er_data['logical'].append(relation)
+            elif row['rel_type'] == 'MANY_TO_MANY':
+                er_data['conceptual'].append(relation) 
+            else:
+                er_data['physical'].append(relation)
+        
+        # 如果没有BusinessEntity关系，返回空的结构
+        if not any([er_data['physical'], er_data['logical'], er_data['conceptual']]):
+            self.logger.info("没有找到ER关系数据，返回空结构")
         
         return er_data
     
     def _fetch_foreign_keys_from_neo4j(self, database_name: str) -> List[Dict[str, Any]]:
-        """获取外键关系"""
+        """获取外键关系 - 修复版：REFERENCES关系不存在，基于列名推断外键"""
+        # REFERENCES关系不存在，尝试基于列名模式推断外键关系
         cypher = """
-        MATCH (d:Database {name: $database_name})-[:CONTAINS]->(t1:Table)-[:HAS_COLUMN]->(c1:Column)-[:REFERENCES]->(c2:Column)<-[:HAS_COLUMN]-(t2:Table)
+        MATCH (d:Database {name: $database_name})-[:CONTAINS]->(t1:Table)-[:HAS_COLUMN]->(c1:Column)
+        MATCH (d)-[:CONTAINS]->(t2:Table)-[:HAS_COLUMN]->(c2:Column)
+        WHERE t1 <> t2 
+              AND c1.is_foreign = true
+              AND (c1.name CONTAINS 'id' OR c1.name CONTAINS 'ID')
+              AND (c2.name = c1.name OR c2.is_primary = true)
         RETURN t1.name + '.' + c1.name as from_column,
                t2.name + '.' + c2.name as to_column,
                t1.name as from_table,
                t2.name as to_table
+        LIMIT 10
         """
         
-        result = self.memory_manager.neo4j_graph.query(cypher, {'database_name': database_name})
-        
-        foreign_keys = []
-        for row in result:
-            foreign_keys.append({
-                'from': row['from_column'],
-                'to': row['to_column'],
-                'from_table': row['from_table'],
-                'to_table': row['to_table']
-            })
-        
-        return foreign_keys
+        try:
+            result = self.memory_manager.neo4j_graph.query(cypher, {'database_name': database_name})
+            
+            foreign_keys = []
+            for row in result:
+                foreign_keys.append({
+                    'from': row['from_column'],
+                    'to': row['to_column'],
+                    'from_table': row['from_table'],
+                    'to_table': row['to_table']
+                })
+            
+            if not foreign_keys:
+                self.logger.info("没有找到外键关系（REFERENCES关系不存在）")
+            
+            return foreign_keys
+        except Exception as e:
+            self.logger.warning(f"外键关系查询失败: {e}")
+            return []
     
     def _fetch_column_meanings_from_neo4j(self, database_name: str) -> Dict[str, Any]:
         """获取列的业务含义"""
@@ -380,54 +403,67 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         return column_meanings
 
     def _fetch_domain_analysis_from_neo4j(self, database_name: str) -> Dict[str, Any]:
-        """获取领域分析结果"""
+        """获取领域分析结果 - 修复版：DomainAnalysis不存在，使用BusinessDomain和Database信息"""
+        # DomainAnalysis节点不存在，尝试从BusinessDomain和Database获取信息
         cypher = """
-        MATCH (d:DomainAnalysis {database_name: $database_name})
-        RETURN d.domain_type as domain_type,
-               d.business_characteristics as business_characteristics,
-               d.key_entities as key_entities,
-               d.created_at as created_at
-        ORDER BY d.created_at DESC
+        MATCH (d:Database {name: $database_name})
+        OPTIONAL MATCH (bd:BusinessDomain)
+        RETURN d.business_desc as domain_desc,
+               bd.name as domain_name,
+               COLLECT(DISTINCT bd.name) as business_domains
         LIMIT 1
         """
         
-        result = self.memory_manager.neo4j_graph.query(cypher, {'database_name': database_name})
-        
-        domain_analysis = {}
-        if result and result[0]:
-            row = result[0]
-            domain_analysis = {
-                'domain_type': row.get('domain_type', ''),
-                'business_characteristics': row.get('business_characteristics', ''),
-                'key_entities': row.get('key_entities', '')
-            }
-        
-        return domain_analysis
+        try:
+            result = self.memory_manager.neo4j_graph.query(cypher, {'database_name': database_name})
+            
+            domain_analysis = {}
+            if result and result[0]:
+                row = result[0]
+                domain_analysis = {
+                    'domain_type': row.get('domain_name', ''),
+                    'business_characteristics': row.get('domain_desc', ''),
+                    'key_entities': ''
+                }
+            else:
+                domain_analysis = {}
+            
+            return domain_analysis
+        except Exception as e:
+            self.logger.error(f"领域分析查询失败: {e}")
+            raise Exception(f"无法获取领域分析数据: {e}")
     
     def _fetch_field_classifications_from_neo4j(self, database_name: str) -> Dict[str, Any]:
-        """获取字段分类结果"""
+        """获取字段分类结果 - 修复版：使用实际存在的属性"""
         cypher = """
         MATCH (d:Database {name: $database_name})-[:CONTAINS]->(t:Table)-[:HAS_COLUMN]->(c:Column)
-        WHERE c.field_type IS NOT NULL
+        WHERE c.category IS NOT NULL
         RETURN t.name + '.' + c.name as column_name,
-               c.field_type as field_type,
-               c.classification as classification,
+               COALESCE(c.category, '') as field_type,
+               COALESCE(c.category_desc, c.category, '') as classification,
                c.category as category
         """
         
-        result = self.memory_manager.neo4j_graph.query(cypher, {'database_name': database_name})
-        
-        field_classifications = {}
-        for row in result:
-            column_name = row.get('column_name', '')
-            if column_name:
-                field_classifications[column_name] = {
-                    'field_type': row.get('field_type', ''),
-                    'classification': row.get('classification', ''),
-                    'category': row.get('category', '')
-                }
-        
-        return field_classifications
+        try:
+            result = self.memory_manager.neo4j_graph.query(cypher, {'database_name': database_name})
+            
+            field_classifications = {}
+            for row in result:
+                column_name = row.get('column_name', '')
+                if column_name:
+                    field_classifications[column_name] = {
+                        'field_type': row.get('field_type', ''),
+                        'classification': row.get('classification', ''),
+                        'category': row.get('category', '')
+                    }
+            
+            if not field_classifications:
+                self.logger.info("没有找到字段分类数据（field_type属性不存在）")
+            
+            return field_classifications
+        except Exception as e:
+            self.logger.warning(f"字段分类查询失败: {e}")
+            return {}
     
     def _fetch_table_meanings_from_neo4j(self, database_name: str) -> Dict[str, Any]:
         """获取表业务含义"""
@@ -478,6 +514,9 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         
         return business_entities
 
+    
+    
+
     # ========== SQL生成方法 ==========
     def _generate_sql_with_context(
         self,
@@ -486,7 +525,7 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         dialect: str
     ) -> str:
         """基于完整上下文生成SQL"""
-        # 构建增强的提示词
+        # 构建增强的上下文信息
         enhanced_context = self._build_enhanced_context(question_data, context)
         
         prompt = self.prompt_manager.render_template(
