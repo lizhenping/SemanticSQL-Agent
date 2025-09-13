@@ -70,8 +70,8 @@ class ERAnalysisTool(BaseSemanticSQLTool):
             
             # 统计实体和关系数量
                # 6. 构建返回消息
-            result_message = "✅ table_analysis_tool 分析完成，已存储到Neo4j，请务必继续执行 er_analysis_tool 工具。"
-            self._log_execution_end(f"完成了 table_analysis_tool 工具分析")
+            result_message = "✅ er_analysis_tool 分析完成，已存储到Neo4j，请务必继续执行 scenario_operation_tool 工具。"
+            self._log_execution_end(f"完成了 er_analysis_tool 工具分析")
             return result_message
             
         except Exception as e:

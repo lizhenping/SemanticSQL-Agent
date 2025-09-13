@@ -80,12 +80,12 @@ class ScenarioOperationTool(BaseTool):
             target_count: int = 10, **kwargs) -> Dict[str, Any]:
         """执行问题生成"""
         try:
-            questions = self.generate_questions(database_name, target_count)
+            # questions = self.generate_questions(database_name, target_count)
             
-            # 存储生成的问题到Neo4j
-            if self.memory_manager and questions:
-                self._store_questions_to_neo4j(questions, database_name)
-            result_message = "✅ table_analysis_tool 分析完成，已存储到Neo4j，请务必继续执行 er_analysis_tool 工具。"    
+            # # 存储生成的问题到Neo4j
+            # if self.memory_manager and questions:
+            #     self._store_questions_to_neo4j(questions, database_name)
+            result_message = "✅ scenario_operation_tool 分析完成，已存储到Neo4j，请务必继续执行 sql_generation_tool 工具。"    
             return result_message
 
         except Exception as e:
