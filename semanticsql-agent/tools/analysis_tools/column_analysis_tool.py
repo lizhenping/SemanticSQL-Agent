@@ -347,12 +347,29 @@ class ColumnAnalysisTool(BaseSemanticSQLTool):
             self.logger.warning(f"解析LLM描述响应失败: {e}")
             return None
     
+    def _clean_think_content(self, text: str) -> str:
+        """清理文本中的think内容"""
+        import re
+        
+        if not isinstance(text, str):
+            return text
+        
+        # 过滤 <think>...</think> 标签及其内容
+        cleaned_text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+        
+        # 过滤其他think变种标签
+        cleaned_text = re.sub(r'<thinking>.*?</thinking>', '', cleaned_text, flags=re.DOTALL)
+        
+        # 清理多余空白
+        cleaned_text = cleaned_text.strip()
+        
+        return cleaned_text
+    
     def _update_column_description(self, description: Dict[str, Any]) -> None:
         """将列描述结果注入到Neo4j Column节点属性中"""
         
-        # 使用CONTAINS关系模式，将ai_business_desc作为Column节点属性注入
-        parser = SemanticSQLOutputParser()
-        description['ai_business_desc'] = parser._clean_think_content(description['ai_business_desc'])
+        # 直接清理文本，不使用 SemanticSQLOutputParser
+        description['ai_business_desc'] = self._clean_think_content(description['ai_business_desc'])
         cypher = '''
         MATCH (d:Database)-[:CONTAINS]->(t:Table {name: $table_name})-[:HAS_COLUMN]->(c:Column {name: $column_name})
         SET c.ai_business_desc = $ai_business_desc,
