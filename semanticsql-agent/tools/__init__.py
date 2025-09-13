@@ -15,7 +15,6 @@ from .analysis_tools import (
 # 生成工具
 from .generation_tools import (
     ScenarioOperationTool,
-    QuestionGenerationTool,
     SQLGenerationTool
 )
 
@@ -43,7 +42,6 @@ __all__ = [
     "ERAnalysisTool",
     # 生成工具
     "ScenarioOperationTool",
-    "QuestionGenerationTool",
     "SQLGenerationTool",
     # 验证工具
     # "SQLValidationTool",

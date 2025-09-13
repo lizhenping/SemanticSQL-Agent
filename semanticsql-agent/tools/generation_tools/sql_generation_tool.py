@@ -181,7 +181,8 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         try:
             cypher = """
             MATCH (q:Question)
-            WHERE q.database_name = $database_name AND q.has_sql = false
+            WHERE (q.database_name = $database_name OR q.database_name = '' OR q.database_name IS NULL) 
+                  AND (q.has_sql = false OR q.has_sql IS NULL)
             RETURN q.id as id, q.question_text as question_text
             ORDER BY q.created_at DESC
             LIMIT 5
@@ -198,7 +199,8 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         """从Neo4j获取Question节点的完整数据"""
         cypher = """
         MATCH (q:Question)
-        WHERE q.id = $question_id AND q.database_name = $database_name
+        WHERE q.id = $question_id 
+              AND (q.database_name = $database_name OR q.database_name = '' OR q.database_name IS NULL)
         RETURN q.question_text as question_text,
                q.question_focus as question_focus,
                q.expected_output as expected_output,
@@ -206,6 +208,11 @@ class SQLGenerationTool(BaseSemanticSQLTool):
                q.business_rules as business_rules,
                q.table_analysis as table_analysis,
                q.column_analysis as column_analysis,
+               q.tables_used as tables_used,
+               q.columns_used as columns_used,
+               q.main_scenario as main_scenario,
+               q.sub_scenario as sub_scenario,
+               q.use_case as use_case,
                q.complexity as complexity,
                q.complexity_level as complexity_level
         """
@@ -220,26 +227,33 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         
         question_raw = result[0]
         
-        # 解析JSON字段
+        # 解析基本字段
         question_data = {
             'question_text': question_raw.get('question_text', ''),
             'question_focus': question_raw.get('question_focus', ''),
             'expected_output': question_raw.get('expected_output', ''),
             'value_proposition': question_raw.get('value_proposition', ''),
+            'main_scenario': question_raw.get('main_scenario', ''),
+            'sub_scenario': question_raw.get('sub_scenario', ''),
+            'use_case': question_raw.get('use_case', ''),
             'complexity': question_raw.get('complexity', '简单'),
             'complexity_level': question_raw.get('complexity_level', 1)
         }
         
-        # 解析JSON字符串
+        # 解析JSON字符串字段
         try:
             question_data['business_rules'] = json.loads(question_raw.get('business_rules', '[]')) if question_raw.get('business_rules') else []
             question_data['table_analysis'] = json.loads(question_raw.get('table_analysis', '{}')) if question_raw.get('table_analysis') else {}
             question_data['column_analysis'] = json.loads(question_raw.get('column_analysis', '{}')) if question_raw.get('column_analysis') else {}
+            question_data['tables_used'] = json.loads(question_raw.get('tables_used', '[]')) if question_raw.get('tables_used') else []
+            question_data['columns_used'] = json.loads(question_raw.get('columns_used', '[]')) if question_raw.get('columns_used') else []
         except json.JSONDecodeError as e:
             self.logger.warning(f"JSON解析警告: {e}")
             question_data['business_rules'] = []
             question_data['table_analysis'] = {}
             question_data['column_analysis'] = {}
+            question_data['tables_used'] = []
+            question_data['columns_used'] = []
         
         return question_data
     
@@ -250,6 +264,10 @@ class SQLGenerationTool(BaseSemanticSQLTool):
             'er_relations': self._fetch_er_relations_from_neo4j(database_name),
             'foreign_keys': self._fetch_foreign_keys_from_neo4j(database_name),
             'column_meanings': self._fetch_column_meanings_from_neo4j(database_name),
+            'domain_analysis': self._fetch_domain_analysis_from_neo4j(database_name),
+            'field_classifications': self._fetch_field_classifications_from_neo4j(database_name),
+            'table_meanings': self._fetch_table_meanings_from_neo4j(database_name),
+            'business_entities': self._fetch_business_entities_from_neo4j(database_name),
             'question_data': question_data
         }
         
@@ -361,6 +379,105 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         
         return column_meanings
 
+    def _fetch_domain_analysis_from_neo4j(self, database_name: str) -> Dict[str, Any]:
+        """获取领域分析结果"""
+        cypher = """
+        MATCH (d:DomainAnalysis {database_name: $database_name})
+        RETURN d.domain_type as domain_type,
+               d.business_characteristics as business_characteristics,
+               d.key_entities as key_entities,
+               d.created_at as created_at
+        ORDER BY d.created_at DESC
+        LIMIT 1
+        """
+        
+        result = self.memory_manager.neo4j_graph.query(cypher, {'database_name': database_name})
+        
+        domain_analysis = {}
+        if result and result[0]:
+            row = result[0]
+            domain_analysis = {
+                'domain_type': row.get('domain_type', ''),
+                'business_characteristics': row.get('business_characteristics', ''),
+                'key_entities': row.get('key_entities', '')
+            }
+        
+        return domain_analysis
+    
+    def _fetch_field_classifications_from_neo4j(self, database_name: str) -> Dict[str, Any]:
+        """获取字段分类结果"""
+        cypher = """
+        MATCH (d:Database {name: $database_name})-[:CONTAINS]->(t:Table)-[:HAS_COLUMN]->(c:Column)
+        WHERE c.field_type IS NOT NULL
+        RETURN t.name + '.' + c.name as column_name,
+               c.field_type as field_type,
+               c.classification as classification,
+               c.category as category
+        """
+        
+        result = self.memory_manager.neo4j_graph.query(cypher, {'database_name': database_name})
+        
+        field_classifications = {}
+        for row in result:
+            column_name = row.get('column_name', '')
+            if column_name:
+                field_classifications[column_name] = {
+                    'field_type': row.get('field_type', ''),
+                    'classification': row.get('classification', ''),
+                    'category': row.get('category', '')
+                }
+        
+        return field_classifications
+    
+    def _fetch_table_meanings_from_neo4j(self, database_name: str) -> Dict[str, Any]:
+        """获取表业务含义"""
+        cypher = """
+        MATCH (d:Database {name: $database_name})-[:CONTAINS]->(t:Table)
+        WHERE t.business_meaning IS NOT NULL
+        RETURN t.name as table_name,
+               t.business_meaning as business_meaning,
+               t.usage_pattern as usage_pattern,
+               t.purpose as purpose
+        """
+        
+        result = self.memory_manager.neo4j_graph.query(cypher, {'database_name': database_name})
+        
+        table_meanings = {}
+        for row in result:
+            table_name = row.get('table_name', '')
+            if table_name:
+                table_meanings[table_name] = {
+                    'business_meaning': row.get('business_meaning', ''),
+                    'usage_pattern': row.get('usage_pattern', ''),
+                    'purpose': row.get('purpose', '')
+                }
+        
+        return table_meanings
+    
+    def _fetch_business_entities_from_neo4j(self, database_name: str) -> Dict[str, Any]:
+        """获取业务实体信息"""
+        cypher = """
+        MATCH (be:BusinessEntity)-[:MAPS_TO]->(t:Table)<-[:CONTAINS]-(d:Database {name: $database_name})
+        RETURN be.name as entity_name,
+               be.type as entity_type,
+               be.description as entity_description,
+               t.name as table_name
+        """
+        
+        result = self.memory_manager.neo4j_graph.query(cypher, {'database_name': database_name})
+        
+        business_entities = {}
+        for row in result:
+            entity_name = row.get('entity_name', '')
+            if entity_name:
+                business_entities[entity_name] = {
+                    'entity_type': row.get('entity_type', ''),
+                    'entity_description': row.get('entity_description', ''),
+                    'table_name': row.get('table_name', '')
+                }
+        
+        return business_entities
+
     # ========== SQL生成方法 ==========
     def _generate_sql_with_context(
         self,
@@ -464,6 +581,61 @@ class SQLGenerationTool(BaseSemanticSQLTool):
                 business_meaning = meaning_info.get('business_meaning', '')
                 if business_meaning:
                     context_parts.append(f"  - {col_name}: {business_meaning}")
+        
+        # 6. 领域分析
+        domain_analysis = context.get('domain_analysis', {})
+        if domain_analysis.get('domain_type'):
+            context_parts.append("\n领域分析:")
+            context_parts.append(f"  领域类型: {domain_analysis.get('domain_type', '')}")
+            if domain_analysis.get('business_characteristics'):
+                context_parts.append(f"  业务特征: {domain_analysis.get('business_characteristics', '')}")
+            if domain_analysis.get('key_entities'):
+                context_parts.append(f"  关键实体: {domain_analysis.get('key_entities', '')}")
+        
+        # 7. 字段分类
+        field_classifications = context.get('field_classifications', {})
+        if field_classifications:
+            context_parts.append("\n字段分类:")
+            for col_name, classification_info in list(field_classifications.items())[:10]:
+                field_type = classification_info.get('field_type', '')
+                classification = classification_info.get('classification', '')
+                if field_type:
+                    context_parts.append(f"  - {col_name}: {field_type} ({classification})")
+        
+        # 8. 表业务含义
+        table_meanings = context.get('table_meanings', {})
+        if table_meanings:
+            context_parts.append("\n表业务含义:")
+            for table_name, meaning_info in table_meanings.items():
+                business_meaning = meaning_info.get('business_meaning', '')
+                purpose = meaning_info.get('purpose', '')
+                if business_meaning:
+                    context_parts.append(f"  - {table_name}: {business_meaning}")
+                    if purpose:
+                        context_parts.append(f"    用途: {purpose}")
+        
+        # 9. 业务实体
+        business_entities = context.get('business_entities', {})
+        if business_entities:
+            context_parts.append("\n业务实体:")
+            for entity_name, entity_info in business_entities.items():
+                entity_type = entity_info.get('entity_type', '')
+                table_name = entity_info.get('table_name', '')
+                entity_description = entity_info.get('entity_description', '')
+                context_parts.append(f"  - {entity_name} ({entity_type}): 映射到表 {table_name}")
+                if entity_description:
+                    context_parts.append(f"    描述: {entity_description}")
+        
+        # 10. Question的直接字段信息（使用独立字段）
+        if question_data.get('tables_used'):
+            context_parts.append("\n问题涉及的表:")
+            for table in question_data['tables_used']:
+                context_parts.append(f"  - {table}")
+        
+        if question_data.get('columns_used'):
+            context_parts.append("\n问题涉及的列:")
+            for column in question_data['columns_used']:
+                context_parts.append(f"  - {column}")
         
         return "\n".join(context_parts)
     
