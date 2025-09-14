@@ -285,7 +285,7 @@ class ScenarioOperationTool(BaseTool):
             results = neo4j_graph.query(cypher, {'database_name': database_name})
             
             # 构建表-列的严格映射（用于验证）
-            self.table_column_mapping = {}
+            object.__setattr__(self, 'table_column_mapping', {})
             
             # 为每个表添加完整的列引用格式
             for table_info in results:
