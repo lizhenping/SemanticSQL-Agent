@@ -38,6 +38,7 @@ class SQLGenerationInput(BaseModel):
     database_name: str = Field(default="testdb", description="数据库名称")
     execute_sql: bool = Field(default=True, description="是否执行SQL")
     dialect: str = Field(default="mysql", description="SQL方言")
+    process_all: bool = Field(default=False, description="是否处理所有可用问题（批处理模式）")
     
     @model_validator(mode='before')
     @classmethod
@@ -77,7 +78,7 @@ class SQLGenerationTool(BaseSemanticSQLTool):
     """
     
     name: str = "sql_generation_tool" 
-    description: str = "基于Neo4j中的Question节点生成SQL查询。需要参数：question_id（Question节点的ID）和database_name（数据库名称）。在使用前必须先运行scenario_operation_tool生成Question数据。"
+    description: str = "基于Neo4j中的Question节点生成SQL查询。参数：question_id（Question节点ID，可选）、database_name（数据库名称）、process_all（是否批处理所有问题）。支持单问题处理和批处理模式。在使用前必须先运行scenario_operation_tool生成Question数据。"
     args_schema: Type[BaseModel] = SQLGenerationInput
     
     def __init__(self, memory_manager: Optional[Neo4jMemoryManager] = None, 
@@ -100,17 +101,33 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         object.__setattr__(self, 'prompt_manager', PromptManager())
 
     def _run(self, *args, **kwargs) -> str:
-        """生成SQL查询 - 主流程"""
+        """生成SQL查询 - 主流程（支持单问题和批处理模式）"""
         # 从kwargs中提取参数
         question_id = kwargs.get('question_id', '')
         database_name = kwargs.get('database_name', 'testdb')
         execute_sql = kwargs.get('execute_sql', True)
         dialect = kwargs.get('dialect', 'mysql')
+        process_all = kwargs.get('process_all', False)
         
-        self.logger.info(f"🔧 {self.name}: 开始处理Question {question_id}")
+        self.logger.info(f"🔧 {self.name}: 开始处理 {'批处理模式' if process_all else f'Question {question_id}'}")
         
         try:
-            # 验证输入参数
+            # 初始化组件
+            if not self.memory_manager:
+                self.memory_manager = ComponentManager.create_memory_manager(self.settings)
+            if not self.database_manager:
+                self.database_manager = ComponentManager.create_database_manager(self.settings)
+            
+            # 检查依赖
+            self._check_dependencies()
+            
+            # 批处理模式：处理所有可用问题
+            if process_all:
+                self.logger.info("🚀 启动批处理模式 - 处理所有可用问题")
+                batch_results = self._process_batch_questions(database_name, execute_sql, dialect)
+                return json.dumps(batch_results, ensure_ascii=False)
+            
+            # 单问题模式：处理指定问题或自动选择问题
             if not question_id or question_id.strip() == "":
                 # 尝试查找可用的Question
                 available_questions = self._find_available_questions(database_name)
@@ -120,41 +137,8 @@ class SQLGenerationTool(BaseSemanticSQLTool):
                 else:
                     return "❌ SQL生成失败: 需要提供有效的question_id，且Neo4j中没有找到可用的Question。请先运行scenario_operation_tool生成问题。"
             
-            # 初始化组件
-            if not self.memory_manager:
-                self.memory_manager = ComponentManager.create_memory_manager(self.settings)
-            if not self.database_manager:
-                self.database_manager = ComponentManager.create_database_manager(self.settings)
-            
-            # 1. 检查依赖
-            self._check_dependencies()
-            
-            # 2. 从Neo4j获取Question分析数据
-            question_data = self._fetch_question_from_neo4j(question_id, database_name)
-            
-            # 3. 获取完整的分析上下文
-            context = self._gather_neo4j_context(database_name, question_data)
-            
-            # 4. 生成SQL
-            sql = self._generate_sql_with_context(question_data, context, dialect)
-            
-            # 5. 执行SQL（如果需要）
-            execution_result = None
-            if execute_sql and self.database_manager:
-                execution_result = self._execute_sql_safely(sql, database_name)
-            
-            # 6. 存储结果到Neo4j
-            self._store_sql_result_to_neo4j(question_id, sql, execution_result, dialect)
-            
-            # 7. 返回结果
-            result = {
-                "question_id": question_id,
-                "sql": sql,
-                "dialect": dialect,
-                "executed": execute_sql,
-                "execution_success": execution_result is not None if execute_sql else None,
-                "result_count": len(execution_result) if execution_result else None
-            }
+            # 使用单问题处理方法
+            result = self._process_single_question(question_id, database_name, execute_sql, dialect)
             
             self.logger.info(f"✅ {self.name}: SQL生成完成 - {question_id}")
             return json.dumps(result, ensure_ascii=False)
@@ -173,8 +157,16 @@ class SQLGenerationTool(BaseSemanticSQLTool):
                 "Neo4j连接不可用，无法获取Question和schema信息"
             )
     
-    def _find_available_questions(self, database_name: str) -> List[Dict[str, Any]]:
-        """查找可用的Question节点"""
+    def _find_available_questions(self, database_name: str, limit: Optional[int] = 5) -> List[Dict[str, Any]]:
+        """查找可用的Question节点
+        
+        Args:
+            database_name: 数据库名称
+            limit: 限制返回数量，None表示不限制
+            
+        Returns:
+            Question节点列表
+        """
         if not self.memory_manager:
             return []
         
@@ -184,8 +176,11 @@ class SQLGenerationTool(BaseSemanticSQLTool):
             WHERE (q.database_name = $database_name OR q.database_name = '' OR q.database_name IS NULL)
             RETURN q.id as id, q.question_text as question_text, q.has_sql as has_sql
             ORDER BY q.created_at DESC
-            LIMIT 5
             """
+            
+            # 添加LIMIT子句（如果指定了limit）
+            if limit is not None:
+                cypher += f" LIMIT {limit}"
             
             result = self.memory_manager.neo4j_graph.query(cypher, {'database_name': database_name})
             return result if result else []
@@ -567,8 +562,120 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         
         return business_entities
 
+    def _process_batch_questions(self, database_name: str, execute_sql: bool, dialect: str) -> Dict[str, Any]:
+        """批处理所有可用问题
+        
+        Args:
+            database_name: 数据库名称
+            execute_sql: 是否执行SQL
+            dialect: SQL方言
+            
+        Returns:
+            批处理结果汇总
+        """
+        batch_results = {
+            'batch_mode': True,
+            'database_name': database_name,
+            'total_processed': 0,
+            'successful': 0,
+            'failed': 0,
+            'results': [],
+            'errors': []
+        }
+        
+        try:
+            # 获取所有可用问题（不限制数量）
+            available_questions = self._find_available_questions(database_name, limit=None)
+            
+            if not available_questions:
+                batch_results['errors'].append("没有找到可用的Question进行处理")
+                return batch_results
+            
+            self.logger.info(f"开始批处理 {len(available_questions)} 个问题")
+            
+            # 逐个处理每个问题
+            for i, question_info in enumerate(available_questions, 1):
+                question_id = question_info['id']
+                question_text = question_info.get('question_text', '')
+                
+                self.logger.info(f"处理问题 {i}/{len(available_questions)}: {question_id}")
+                self.logger.info(f"问题内容: {question_text[:100]}...")
+                
+                try:
+                    # 处理单个问题
+                    result = self._process_single_question(
+                        question_id=question_id,
+                        database_name=database_name,
+                        execute_sql=execute_sql,
+                        dialect=dialect
+                    )
+                    
+                    batch_results['results'].append(result)
+                    batch_results['successful'] += 1
+                    batch_results['total_processed'] += 1
+                    
+                    self.logger.info(f"✅ 问题 {question_id} 处理成功")
+                    
+                except Exception as e:
+                    error_msg = f"问题 {question_id} 处理失败: {str(e)}"
+                    self.logger.error(f"❌ {error_msg}")
+                    
+                    batch_results['errors'].append(error_msg)
+                    batch_results['failed'] += 1
+                    batch_results['total_processed'] += 1
+                    
+                    # 继续处理下一个问题，不中断批处理
+                    continue
+            
+            # 记录批处理总结
+            self.logger.info(f"🎉 批处理完成: {batch_results['successful']}/{batch_results['total_processed']} 成功")
+            
+        except Exception as e:
+            error_msg = f"批处理过程出错: {str(e)}"
+            self.logger.error(f"❌ {error_msg}")
+            batch_results['errors'].append(error_msg)
+        
+        return batch_results
     
-    
+    def _process_single_question(self, question_id: str, database_name: str, execute_sql: bool, dialect: str) -> Dict[str, Any]:
+        """处理单个问题的核心逻辑（从_run方法提取）
+        
+        Args:
+            question_id: 问题ID
+            database_name: 数据库名称
+            execute_sql: 是否执行SQL
+            dialect: SQL方言
+            
+        Returns:
+            单个问题的处理结果
+        """
+        # 1. 从Neo4j获取Question分析数据
+        question_data = self._fetch_question_from_neo4j(question_id, database_name)
+        
+        # 2. 获取完整的分析上下文
+        context = self._gather_neo4j_context(database_name, question_data)
+        
+        # 3. 生成SQL
+        sql = self._generate_sql_with_context(question_data, context, dialect)
+        
+        # 4. 执行SQL（如果需要）
+        execution_result = None
+        if execute_sql and self.database_manager:
+            execution_result = self._execute_sql_safely(sql, database_name)
+        
+        # 5. 存储结果到Neo4j
+        self._store_sql_result_to_neo4j(question_id, sql, execution_result, dialect)
+        
+        # 6. 构建结果
+        return {
+            "question_id": question_id,
+            "question_text": question_data.get('question_text', ''),
+            "sql": sql,
+            "dialect": dialect,
+            "executed": execute_sql,
+            "execution_success": execution_result is not None if execute_sql else None,
+            "result_count": len(execution_result) if execution_result else None
+        }
 
     # ========== SQL生成方法 ==========
     def _generate_sql_with_context(

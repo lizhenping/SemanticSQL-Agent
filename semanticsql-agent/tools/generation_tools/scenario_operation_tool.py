@@ -86,8 +86,8 @@ class ScenarioOperationTool(BaseTool):
         
         try:
             # 初始化必要的服务
-            # if not self.memory_manager:
-            #     self.memory_manager = ComponentManager.create_memory_manager(get_settings())
+            if not self.memory_manager:
+                self.memory_manager = ComponentManager.create_memory_manager(get_settings())
             
             # # 生成问题
             # questions = self.generate_questions(database_name, target_count)
