@@ -403,23 +403,51 @@ class DatabaseManager:
             raise ValueError(f"不支持的数据库类型: {self.db_type}")
     
     def _is_safe_sql(self, sql: str) -> bool:
-        """检查SQL是否安全"""
+        """检查SQL是否安全 - 只过滤真正危险的操作
+        
+        策略：
+        - 不限制查询的起始关键词（允许WITH、SELECT、子查询等）
+        - 只阻止会修改数据或影响系统的操作
+        - 使用精确匹配避免误判
+        """
         sql_upper = sql.upper().strip()
         
-        # 只允许SELECT语句
-        if not sql_upper.startswith('SELECT'):
-            return False
-        
-        # 检查危险关键词
-        dangerous_keywords = [
-            'DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 
-            'CREATE', 'TRUNCATE', 'REPLACE', 'MERGE', 'CALL',
-            'EXEC', 'EXECUTE', 'LOAD_FILE', 'OUTFILE', 'DUMPFILE'
+        # 危险操作列表 - 只包含真正会造成数据或系统变更的操作
+        dangerous_operations = [
+            # 数据修改操作（DML）
+            'INSERT ', 'UPDATE ', 'DELETE ', 'REPLACE ', 'MERGE ',
+            
+            # 结构修改操作（DDL）
+            'DROP ', 'ALTER ', 'CREATE ', 'TRUNCATE ', 'RENAME ',
+            
+            # 存储过程和函数调用
+            'CALL ', 'EXEC ', 'EXECUTE ',
+            
+            # 文件操作（可能泄露数据或写入文件系统）
+            'LOAD_FILE', 'INTO OUTFILE', 'INTO DUMPFILE',
+            'LOAD DATA', 'SELECT INTO',
+            
+            # 权限管理
+            'GRANT ', 'REVOKE ',
+            
+            # 数据库/表管理
+            'USE ', 'SET ', 'FLUSH ', 'RESET ',
+            
+            # 进程和系统控制
+            'KILL ', 'SHUTDOWN', 'SHOW PROCESSLIST'
         ]
         
-        for keyword in dangerous_keywords:
+        # 检查是否包含危险操作
+        for keyword in dangerous_operations:
             if keyword in sql_upper:
+                self.logger.warning(f"SQL安全检查失败: 检测到危险操作 '{keyword.strip()}'")
                 return False
+        
+        # 额外检查：某些特殊模式
+        # 检查分号（可能的多语句执行）
+        if ';' in sql and sql.strip().rstrip(';').count(';') > 0:
+            self.logger.warning("SQL安全检查失败: 检测到多语句执行尝试")
+            return False
         
         return True
     
