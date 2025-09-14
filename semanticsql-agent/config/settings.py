@@ -62,15 +62,15 @@ class Settings(BaseModel):
 
     # LLM configuration - 使用VLLM实际返回的模型名
     llm_model: str = Field(
-        default=os.getenv("SEMANTICSQL_LLM_MODEL", "Qwen3-14B"),
+        default=os.getenv("SEMANTICSQL_LLM_MODEL", "deepseek-r1-0528"),
         description="LLM model name",
     )
     llm_base_url: str = Field(
-        default=os.getenv("SEMANTICSQL_LLM_BASE_URL", "http://127.0.0.1:9991/v1"),
+        default=os.getenv("SEMANTICSQL_LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
         description="LLM API base URL - REQUIRED in production, avoid hardcoded localhost",
     )
     llm_api_key: str = Field(
-        default=os.getenv("SEMANTICSQL_LLM_API_KEY", "not-needed"),
+        default=os.getenv("SEMANTICSQL_LLM_API_KEY", "sk-14c3a1c38f9f4d948639a3e716fa8c8c"),
         description="LLM API key",
     )
     llm_temperature: float = Field(

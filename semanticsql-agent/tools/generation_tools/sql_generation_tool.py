@@ -368,20 +368,24 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         return er_data
     
     def _fetch_foreign_keys_from_neo4j(self, database_name: str) -> List[Dict[str, Any]]:
-        """获取外键关系 - 修复版：REFERENCES关系不存在，基于列名推断外键"""
-        # REFERENCES关系不存在，尝试基于列名模式推断外键关系
+        """获取外键关系 - 修复版：基于实际的is_foreign标记和共同列，不限制列名模式"""
+        # 基于外键标记和共同列名推断表关系
         cypher = """
         MATCH (d:Database {name: $database_name})-[:CONTAINS]->(t1:Table)-[:HAS_COLUMN]->(c1:Column)
         MATCH (d)-[:CONTAINS]->(t2:Table)-[:HAS_COLUMN]->(c2:Column)
-        WHERE t1 <> t2 
-              AND c1.is_foreign = true
-              AND (c1.name CONTAINS 'id' OR c1.name CONTAINS 'ID')
-              AND (c2.name = c1.name OR c2.is_primary = true)
-        RETURN t1.name + '.' + c1.name as from_column,
-               t2.name + '.' + c2.name as to_column,
-               t1.name as from_table,
-               t2.name as to_table
-        LIMIT 10
+        WHERE t1.name < t2.name 
+              AND c1.name = c2.name
+              AND (c1.is_foreign = true OR c1.is_primary = true 
+                   OR c2.is_foreign = true OR c2.is_primary = true)
+        RETURN DISTINCT t1.name as from_table,
+                        c1.name as column_name,
+                        t2.name as to_table,
+                        c1.is_foreign as c1_is_fk,
+                        c1.is_primary as c1_is_pk,
+                        c2.is_foreign as c2_is_fk,
+                        c2.is_primary as c2_is_pk
+        ORDER BY from_table, to_table, column_name
+        LIMIT 20
         """
         
         try:
@@ -389,20 +393,41 @@ class SQLGenerationTool(BaseSemanticSQLTool):
             
             foreign_keys = []
             for row in result:
+                # 构建JOIN关系信息
+                from_table = row['from_table']
+                to_table = row['to_table']
+                column = row['column_name']
+                
                 foreign_keys.append({
-                    'from': row['from_column'],
-                    'to': row['to_column'],
-                    'from_table': row['from_table'],
-                    'to_table': row['to_table']
+                    'from_table': from_table,
+                    'to_table': to_table,
+                    'column_name': column,
+                    'from': f"{from_table}.{column}",
+                    'to': f"{to_table}.{column}",
+                    'relationship_type': self._classify_relationship_type(row)
                 })
             
-            if not foreign_keys:
-                self.logger.info("没有找到外键关系（REFERENCES关系不存在）")
+            if foreign_keys:
+                self.logger.info(f"找到 {len(foreign_keys)} 个表关系")
+            else:
+                self.logger.warning("没有找到外键关系")
             
             return foreign_keys
         except Exception as e:
             self.logger.warning(f"外键关系查询失败: {e}")
             return []
+    
+    def _classify_relationship_type(self, row: Dict) -> str:
+        """分类关系类型"""
+        c1_fk, c1_pk = row['c1_is_fk'], row['c1_is_pk']
+        c2_fk, c2_pk = row['c2_is_fk'], row['c2_is_pk']
+        
+        if (c1_fk and c2_pk) or (c1_pk and c2_fk):
+            return "foreign_key"
+        elif c1_pk and c2_pk:
+            return "shared_primary"
+        else:
+            return "common_column"
     
     def _fetch_column_meanings_from_neo4j(self, database_name: str) -> Dict[str, Any]:
         """获取列的业务含义"""
@@ -489,14 +514,12 @@ class SQLGenerationTool(BaseSemanticSQLTool):
             return {}
     
     def _fetch_table_meanings_from_neo4j(self, database_name: str) -> Dict[str, Any]:
-        """获取表业务含义"""
+        """获取表业务含义 - 使用实际存在的属性名"""
         cypher = """
         MATCH (d:Database {name: $database_name})-[:CONTAINS]->(t:Table)
-        WHERE t.business_meaning IS NOT NULL
+        WHERE COALESCE(t.ai_business_desc, t.business_desc, '') <> ''
         RETURN t.name as table_name,
-               t.business_meaning as business_meaning,
-               t.usage_pattern as usage_pattern,
-               t.purpose as purpose
+               COALESCE(t.ai_business_desc, t.business_desc, '') as business_meaning
         """
         
         result = self.memory_manager.neo4j_graph.query(cypher, {'database_name': database_name})
@@ -506,9 +529,7 @@ class SQLGenerationTool(BaseSemanticSQLTool):
             table_name = row.get('table_name', '')
             if table_name:
                 table_meanings[table_name] = {
-                    'business_meaning': row.get('business_meaning', ''),
-                    'usage_pattern': row.get('usage_pattern', ''),
-                    'purpose': row.get('purpose', '')
+                    'business_meaning': row.get('business_meaning', '')
                 }
         
         return table_meanings
@@ -561,6 +582,14 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         # 构建增强的上下文信息
         enhanced_context = self._build_enhanced_context(question_data, context)
         
+        # 添加：根据问题类型添加SQL模式推荐
+        sql_patterns = self._get_recommended_sql_patterns(question_data)
+        if sql_patterns:
+            enhanced_context += f"\n\n{sql_patterns}"
+        
+        # 获取JOIN关系信息
+        join_relationships = context.get('foreign_keys', [])
+        
         prompt = self.prompt_manager.render_template(
             "tools/sql_generation.j2",
             question=question_data['question_text'],
@@ -568,13 +597,20 @@ class SQLGenerationTool(BaseSemanticSQLTool):
             dialect=dialect,
             question_focus=question_data.get('question_focus', ''),
             expected_output=question_data.get('expected_output', ''),
-            business_rules=question_data.get('business_rules', [])
+            business_rules=question_data.get('business_rules', []),
+            join_relationships=join_relationships
         )
         
         # 调用LLM
         response = self.llm.invoke(prompt)
         sql = self._extract_sql_from_response(response.content)
         
+        # 验证SQL基本结构
+        validated_sql, validation_errors = self._validate_sql_basics(sql, context['schema_info'], dialect)
+        if not validated_sql:
+            self.logger.warning(f"SQL验证失败: {validation_errors}")
+            # 记录验证失败，但仍尝试执行（允许一些边缘情况）
+            
         return self._postprocess_sql(sql, dialect)
     
     def _build_enhanced_context(self, question_data: Dict[str, Any], context: Dict[str, Any]) -> str:
@@ -711,6 +747,55 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         
         return "\n".join(context_parts)
     
+    def _validate_sql_basics(self, sql: str, schema: Dict[str, Any], dialect: str) -> tuple[bool, str]:
+        """轻量级SQL验证 - 只检查最常见的错误"""
+        errors = []
+        sql_upper = sql.upper()
+        
+        # 1. 检查禁用的PostgreSQL函数
+        pg_functions = ['DATE_TRUNC', 'ARRAY_AGG', 'STRING_AGG']
+        for func in pg_functions:
+            if func in sql_upper:
+                if func == 'DATE_TRUNC':
+                    errors.append(f"使用了PostgreSQL的{func}，请使用MySQL的QUARTER()或DATE_FORMAT()")
+                else:
+                    errors.append(f"使用了PostgreSQL的{func}，请使用MySQL对应函数")
+        
+        # 2. 检查Oracle函数
+        oracle_functions = ['ROWNUM', 'LISTAGG']
+        for func in oracle_functions:
+            if func in sql_upper:
+                errors.append(f"使用了Oracle的{func}，MySQL中不支持")
+        
+        # 3. 检查SQL Server函数
+        sqlserver_functions = ['DATEPART', 'STUFF']
+        for func in sqlserver_functions:
+            if func in sql_upper:
+                errors.append(f"使用了SQL Server的{func}，MySQL中不支持")
+        
+        # 4. 提取并验证JOIN中的列（使用正则表达式）
+        import re
+        # 匹配 ON table.column = table.column 模式
+        join_pattern = r'ON\s+(\w+)\.(\w+)\s*=\s*(\w+)\.(\w+)'
+        for match in re.finditer(join_pattern, sql, re.IGNORECASE):
+            t1, c1, t2, c2 = match.groups()
+            # 验证列是否存在
+            if schema and 'tables' in schema:
+                if t1 in schema['tables']:
+                    cols = [c['name'] for c in schema['tables'][t1]['columns']]
+                    if c1 not in cols:
+                        errors.append(f"列 {t1}.{c1} 不存在于表 {t1} 中")
+                if t2 in schema['tables']:
+                    cols = [c['name'] for c in schema['tables'][t2]['columns']]
+                    if c2 not in cols:
+                        errors.append(f"列 {t2}.{c2} 不存在于表 {t2} 中")
+        
+        # 5. 检查MySQL变量语法
+        if re.search(r'@\w+\s*:=', sql):
+            errors.append("使用了MySQL变量赋值语法，请使用窗口函数")
+        
+        return len(errors) == 0, '\n'.join(errors)
+    
     def _extract_relevant_tables(self, question_data: Dict[str, Any]) -> List[str]:
         """从Question分析中提取相关表名"""
         tables = set()
@@ -817,24 +902,105 @@ class SQLGenerationTool(BaseSemanticSQLTool):
 
     # ========== 辅助方法 ==========
     def _extract_sql_from_response(self, response_content: str) -> str:
-        """从LLM响应中提取SQL"""
+        """从LLM响应中提取SQL - 增强版：处理多种Markdown格式"""
+        # 1. 尝试匹配 ```sql ... ``` 格式
         sql_match = re.search(r'```sql\s*(.*?)\s*```', response_content, re.DOTALL | re.IGNORECASE)
         if sql_match:
             return sql_match.group(1).strip()
+        
+        # 2. 尝试匹配 ``` ... ``` 格式（无sql标识）
+        sql_match = re.search(r'```\s*(.*?)\s*```', response_content, re.DOTALL)
+        if sql_match:
+            content = sql_match.group(1).strip()
+            # 检查是否看起来像SQL
+            if any(keyword in content.upper() for keyword in ['SELECT', 'WITH', 'INSERT', 'UPDATE', 'DELETE']):
+                return content
+        
+        # 3. 如果没有代码块，直接使用内容
         return response_content.strip()
     
+    def _get_recommended_sql_patterns(self, question_data: Dict[str, Any]) -> str:
+        """根据问题类型获取推荐的SQL模式"""
+        patterns = []
+        
+        # 检查问题文本中的关键词
+        question_text = question_data.get('question_text', '').lower()
+        
+        # 检查是否需要排名
+        if any(keyword in question_text for keyword in ['排名', '前n', 'top', '第几', '最高', '最低', '第一', '第二']):
+            patterns.append("- 排名分析: 使用 ROW_NUMBER() OVER (ORDER BY ...) 进行排名，不要使用@变量")
+            patterns.append("  示例: ROW_NUMBER() OVER (ORDER BY amount DESC) AS rank")
+        
+        # 检查是否需要分组排名
+        if any(keyword in question_text for keyword in ['每个', '各', '按', '分组', '各类', '各种']):
+            patterns.append("- 分组排名: 使用 PARTITION BY 进行分组排名")
+            patterns.append("  示例: RANK() OVER (PARTITION BY category ORDER BY value DESC)")
+        
+        # 检查是否需要累计
+        if any(keyword in question_text for keyword in ['累计', '累积', '总和', '汇总']):
+            patterns.append("- 累积计算: 使用窗口函数进行累积计算")
+            patterns.append("  示例: SUM(amount) OVER (ORDER BY date ROWS UNBOUNDED PRECEDING)")
+        
+        # 检查是否需要比例
+        if any(keyword in question_text for keyword in ['占比', '比例', '百分比', '份额']):
+            patterns.append("- 比例计算: 使用窗口函数计算占比")
+            patterns.append("  示例: amount / SUM(amount) OVER (PARTITION BY category) * 100")
+        
+        # 检查是否需要移动平均
+        if any(keyword in question_text for keyword in ['移动', '滑动', '近n', '最近']):
+            patterns.append("- 移动聚合: 使用 ROWS BETWEEN 子句")
+            patterns.append("  示例: AVG(value) OVER (ORDER BY date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW)")
+        
+        if patterns:
+            return f"推荐的SQL模式:\n" + '\n'.join(patterns)
+        else:
+            return ""
+    
     def _postprocess_sql(self, sql: str, dialect: str) -> str:
-        """后处理SQL语句"""
-        # 移除多余空白
+        """后处理SQL语句 - 增强版：彻底清理Markdown标记"""
+        # 1. 移除各种Markdown代码块标记
+        sql = re.sub(r'```sql\s*', '', sql, flags=re.IGNORECASE)  # 开始标记
+        sql = re.sub(r'```\s*', '', sql)  # 结束标记
+        # 注意：不要简单删除所有反引号，因为字段名需要反引号
+        
+        # 2. 移除可能的其他标记
+        # 更精确地清理末尾：只清理明显的错误字符，保留必要的分号
+        sql = re.sub(r';\s*```\s*\]?\s*$', ';', sql)  # 清理 "; ```]" 这样的模式
+        sql = re.sub(r';\s*```\s*$', ';', sql)  # 清理 "; ```" 这样的模式
+        sql = re.sub(r'\s*\]$', '', sql)  # 清理末尾的方括号
+        
+        # 3. 移除多余空白
         sql = re.sub(r'\s+', ' ', sql).strip()
         
-        # 确保以分号结尾
+        # 4. 确保以分号结尾
         if not sql.endswith(';'):
             sql += ';'
         
-        # MySQL特定处理
+        # 5. MySQL特定处理
         if dialect == "mysql":
-            sql = sql.replace('"', '`')
+            # 保持字段名的反引号（MySQL标准）
+            # 不做额外的引号转换，LLM生成的应该已经是正确的格式
+            pass
+            
+            # 检测并警告MySQL变量使用
+            if '@' in sql and ':=' in sql:
+                self.logger.warning("⚠️ 检测到MySQL变量语法！建议使用窗口函数替代")
+                self.logger.warning(f"问题SQL: {sql[:100]}...")
+                
+                # 提供修改建议
+                if '@row_num' in sql.lower():
+                    self.logger.warning("💡 建议: 使用 ROW_NUMBER() OVER (ORDER BY ...) 替代 @row_num")
+        
+        return sql
+    
+    def _fix_mysql_quotes(self, sql: str) -> str:
+        """修复MySQL字段名的引号"""
+        # 简单的字段名引号修复：将双引号替换为反引号
+        # 但要避免替换字符串内的双引号
+        
+        # 这是一个简化版本，更复杂的情况需要SQL解析器
+        # 只替换明显是字段名的双引号
+        sql = re.sub(r'"([a-zA-Z_]\w*)"', r'`\1`', sql)
         
         return sql
 

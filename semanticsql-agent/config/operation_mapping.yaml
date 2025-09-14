@@ -158,6 +158,16 @@ use_case_operations:
       - "计算每个{group}内的{metric}排名"
       - "显示{metric}的Top 10和Bottom 10"
       - "计算{entity}在整体中的百分位排名"
+    sql_patterns:
+      recommended:
+        - "ROW_NUMBER() OVER (ORDER BY column DESC)"
+        - "RANK() OVER (PARTITION BY group ORDER BY value DESC)"
+        - "DENSE_RANK() OVER (ORDER BY score DESC)"
+        - "NTILE(4) OVER (ORDER BY metric DESC)"
+      deprecated:
+        - "@row_num := @row_num + 1"  # 不推荐：SQLAlchemy执行有问题，现代SQL不推荐
+        - "SET @row_num = 0"  # 不推荐：需要多语句支持，兼容性差
+        - "SELECT (@row_number:=@row_number+1) AS num"  # 不推荐：变量初始化复杂
 
   # 趋势分析类
   trend_analysis:

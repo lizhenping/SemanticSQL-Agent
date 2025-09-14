@@ -1,5 +1,7 @@
 ## 任务
 基于详细的问题分析和数据库结构信息，生成精确的SQL查询。
+针对合同金额的数值类型，
+总金额，单位万元(注意，一亿元=10000万元,1万元=10000元)
 
 ## 问题信息
 **问题**: {{ question }}
@@ -8,6 +10,19 @@
 
 ## 详细分析上下文
 {{ context }}
+
+{% if join_relationships and join_relationships|length > 0 %}
+## 可用的表连接关系（重要 - 只能使用这些关系）
+{% for rel in join_relationships %}
+- **{{ rel.from_table }} ⟷ {{ rel.to_table }}**: 使用 `{{ rel.from_table }}.{{ rel.column_name }} = {{ rel.to_table }}.{{ rel.column_name }}`
+{% endfor %}
+
+### JOIN规则
+- **严格限制**: 只能使用上述列出的连接关系
+- **禁止假设**: 不要假设任何未列出的列可以用于JOIN
+- **列必须存在**: 确保JOIN中使用的列在对应表中实际存在
+
+{% endif %}
 
 {% if business_rules and business_rules|length > 0 %}
 ## 业务规则说明
@@ -24,8 +39,36 @@
 ## 配置要求
 - **SQL方言**: {{ dialect }}
 - **数据库类型**: MySQL
+- **MySQL版本**: 8.0或更高版本（支持窗口函数）
 - **结果限制**: 自动添加合理的LIMIT子句
 - **性能考虑**: 优先使用索引字段进行连接和过滤
+
+## 禁止和推荐的SQL模式
+
+### ❌ 禁止使用（会导致执行错误）
+- **MySQL变量**: 不要使用 `@variable := value` 语法
+- **会话变量**: 不要使用 `@row_num` 等变量进行排名
+- **SET语句**: 不要在查询中使用SET初始化变量
+- **PostgreSQL函数**: 不要使用 `DATE_TRUNC`、`ARRAY_AGG`、`STRING_AGG`等
+- **Oracle函数**: 不要使用 `ROWNUM`、`CONNECT BY`、`LISTAGG`等
+- **SQL Server函数**: 不要使用 `DATEPART`、`STUFF`、`STRING_SPLIT`等
+
+### ✅ 推荐使用（现代SQL特性）
+- **窗口函数排名**: 使用 `ROW_NUMBER() OVER (ORDER BY column)`
+- **分组排名**: 使用 `RANK() OVER (PARTITION BY group ORDER BY value)`
+- **CTE**: 使用 `WITH cte_name AS (...)` 组织复杂查询
+- **标准聚合**: 使用标准GROUP BY而非变量累加
+- **MySQL日期函数**: 
+  - 按季度分组: `QUARTER(date_column)` 或 `CONCAT(YEAR(date), '-Q', QUARTER(date))`
+  - 按月分组: `DATE_FORMAT(date, '%Y-%m')`
+  - 按年分组: `YEAR(date_column)`
+
+### 示例对比
+❌ 错误: SELECT @row_num := @row_num + 1 AS rank, name FROM table
+✅ 正确: SELECT ROW_NUMBER() OVER (ORDER BY name) AS rank, name FROM table
+
+❌ 错误: SELECT DATE_TRUNC('quarter', date_column) AS quarter
+✅ 正确: SELECT CONCAT(YEAR(date_column), '-Q', QUARTER(date_column)) AS quarter
 
 ## SQL生成指导原则
 
@@ -53,6 +96,11 @@
 - **字符串**: 使用单引号包围字符串值
 - **日期函数**: 使用MySQL标准日期函数
 - **类型转换**: 使用CAST或CONVERT函数
+- **窗口函数**: 使用标准窗口函数语法（MySQL 8.0+）
+  - ROW_NUMBER() OVER (ORDER BY ...)
+  - RANK() OVER (PARTITION BY ... ORDER BY ...)
+  - DENSE_RANK() OVER (...)
+  - SUM() OVER (PARTITION BY ... ORDER BY ... ROWS BETWEEN ...)
 
 ## 输出要求
 1. **只返回SQL语句**: 不要添加任何解释文字

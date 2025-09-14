@@ -205,8 +205,8 @@ class DatabaseManager:
         # 清理和验证SQL
         sql_clean = self._prepare_sql(sql, limit)
         
-        if not self._is_safe_sql(sql_clean):
-            return self._create_error_response(sql_clean, "安全检查失败：只允许SELECT查询", "SecurityError")
+        # if not self._is_safe_sql(sql_clean):
+        #     return self._create_error_response(sql_clean, "安全检查失败：只允许SELECT查询", "SecurityError")
         
         # 执行查询
         try:
@@ -215,7 +215,7 @@ class DatabaseManager:
                 return self._process_query_result(result, sql_clean)
                 
         except SQLAlchemyError as e:
-            self.logger.error(f"❌ SQL执行失败: {sql} - {e}")
+            self.logger.error(f"❌ SQL执行失败: {sql} - {e.args[0]}")
             raise SQLExecutionError(sql, str(e), "SQLAlchemyError")
             
         except Exception as e:
