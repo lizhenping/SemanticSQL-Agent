@@ -27,15 +27,54 @@
 ## 数据库信息
 
 ### 1. 表结构（共{{ tables|length }}个表）
-{% for table in tables[:20] %}
+
+**🚨 严格Schema限制：只能使用以下确切的表-列组合！**
+
+⚠️ **重要规则**:
+- 每个列引用必须使用 `表名.列名` 完整格式
+- 只能使用下面明确列出的组合
+- 不能将一个表的列名用于另一个表
+
+{% for table in tables %}
 #### 表{{ loop.index }}: {{ table.name }}
-- **描述**: {{ table.description | default('无描述') }}
-- **记录数**: {{ table.row_count | default('未知') }}
-- **列信息**:
-{% for col in table.columns[:10] %}
-  - {{ col.name }} ({{ col.type }}): {{ (col.comment or col.description or '无注释') | truncate(40) }} [{{ col.classification.category if col.classification else '未分类' }}]
+**描述**: {{ table.description | default('无描述') }}
+
+**✅ 此表可用的列引用（严格按照这些使用）：**
+{% for col in table.columns %}
+- `{{ col.full_reference }}` ({{ col.type }}): {{ (col.description or col.comment or '无描述') | truncate(60) }}
 {% endfor %}
-{% if table.columns|length > 10 %}  - ...还有{{ table.columns|length - 10 }}列{% endif %}
+
+**❌ 禁止的错误用法**：
+{% for other_table in tables %}
+{% if other_table.name != table.name and table.columns and other_table.columns %}
+- 不能使用 `{{ other_table.name }}.{{ table.columns[0].name }}` (这是错误的表-列组合)
+{% endif %}
+{% endfor %}
+
+{% endfor %}
+
+### 🎯 Schema验证清单
+
+**在生成列分析前，请检查：**
+□ 每个 `column_full_name` 都在上述列表中存在
+□ 格式严格按照 `表名.列名`
+□ 没有将A表的列用于B表
+□ 没有使用不存在的列名
+
+**正确示例**（基于当前Schema）：
+{% for table in tables[:3] %}
+{% if table.columns %}
+- ✅ `{{ table.columns[0].full_reference }}` 
+{% endif %}
+{% endfor %}
+
+**错误示例**（基于当前Schema）：
+{% for table in tables[:2] %}
+{% for other_table in tables[:1] %}
+{% if other_table.name != table.name and table.columns and other_table.columns %}
+- ❌ `{{ other_table.name }}.{{ table.columns[0].name }}` (列不在该表中)
+{% endif %}
+{% endfor %}
 {% endfor %}
 {% if tables|length > 20 %}...还有{{ tables|length - 20 }}个表{% endif %}
 
@@ -266,6 +305,19 @@
      - 多指标综合评判时，说明权重或优先级
      - 时间对比分析需明确对比维度（同比/环比）
 {% endif %}
+
+## 🚨 最终检查要求
+
+**在生成分析结果前，请务必完成以下检查：**
+
+1. **列名验证**：确保每个 `column_full_name` 都是表结构中实际存在的列名
+2. **格式验证**：所有列引用必须使用 `表名.列名` 格式
+3. **避免臆造**：不得使用任何未在表结构中明确列出的列名
+4. **数据类型匹配**：确保列的操作与其数据类型相符（如：数值型列用于SUM，日期型列用于时间比较）
+
+**如果发现不存在的列名，请：**
+- 查找表结构中最相似的列名并使用
+- 或者修改问题以使用实际存在的列
 
 请基于以上信息，生成一个符合要求的查询问题，并详细说明表和列的使用方式。
 

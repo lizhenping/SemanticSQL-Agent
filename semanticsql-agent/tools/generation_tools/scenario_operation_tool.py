@@ -87,16 +87,16 @@ class ScenarioOperationTool(BaseTool):
         try:
             # 初始化必要的服务
             if not self.memory_manager:
-                self.memory_manager = ComponentManager.create_memory_manager(get_settings())
+                object.__setattr__(self, 'memory_manager', ComponentManager.create_memory_manager(get_settings()))
             
-            # # 生成问题
-            # questions = self.generate_questions(database_name, target_count)
+            # 生成问题
+            questions = self.generate_questions(database_name, target_count)
             
-            # # 存储生成的问题到Neo4j
-            # if self.memory_manager and questions:
-            #     self._store_questions_to_neo4j(questions, database_name)
+            # 存储生成的问题到Neo4j
+            if self.memory_manager and questions:
+                self._store_questions_to_neo4j(questions, database_name)
             
-            result_message = f"✅ scenario_operation_tool 分析完成，请务必继续执行 sql_generation_tool 工具。"    
+            result_message = f"✅ scenario_operation_tool 分析完成，生成了 {len(questions)} 个问题，请务必继续执行 sql_generation_tool 工具。"    
             return result_message
 
         except Exception as e:
@@ -252,7 +252,7 @@ class ScenarioOperationTool(BaseTool):
         return all_questions
     
     def _prepare_tables_data(self, database_name: str) -> List[Dict[str, Any]]:
-        """准备表数据 - 从Neo4j获取"""
+        """准备表数据 - 增强版：包含完整的表-列映射"""
         
         if not self.memory_manager:
             # 如果没有Neo4j，返回空列表
@@ -283,6 +283,22 @@ class ScenarioOperationTool(BaseTool):
             """
             
             results = neo4j_graph.query(cypher, {'database_name': database_name})
+            
+            # 构建表-列的严格映射（用于验证）
+            self.table_column_mapping = {}
+            
+            # 为每个表添加完整的列引用格式
+            for table_info in results:
+                table_name = table_info['name']
+                column_names = [col['name'] for col in table_info['columns']]
+                self.table_column_mapping[table_name] = set(column_names)
+                
+                # 为每个列添加完整引用格式（用于模板）
+                for col in table_info['columns']:
+                    col['full_reference'] = f"{table_name}.{col['name']}"
+            
+            self.logger.info(f"构建了 {len(self.table_column_mapping)} 个表的列映射")
+            
             return results
             
         except Exception as e:
@@ -409,6 +425,94 @@ class ScenarioOperationTool(BaseTool):
             self.logger.error(f"处理LLM响应失败: {e}")
             return None
     
+    def _validate_columns_strict(self, question: Dict[str, Any], database_name: str) -> Optional[Dict[str, Any]]:
+        """严格验证问题中的列名，只验证不修复
+        
+        Args:
+            question: 生成的问题数据
+            database_name: 数据库名称
+            
+        Returns:
+            验证通过返回原问题，验证失败返回None
+        """
+        if not self.memory_manager:
+            return question
+        
+        try:
+            # 确保已经构建了表-列映射
+            if not hasattr(self, 'table_column_mapping'):
+                self._prepare_tables_data(database_name)
+            
+            invalid_refs = []
+            
+            # 验证column_analysis中的列引用
+            column_analysis = question.get('column_analysis', {})
+            if column_analysis and 'columns_used' in column_analysis:
+                for col_info in column_analysis['columns_used']:
+                    col_ref = col_info.get('column_full_name', '')
+                    if col_ref and not self._validate_table_column_combination(col_ref):
+                        invalid_refs.append(col_ref)
+            
+            # 验证columns_used列表
+            columns_used = question.get('columns_used', [])
+            if isinstance(columns_used, list):
+                for column_ref in columns_used:
+                    if isinstance(column_ref, str) and not self._validate_table_column_combination(column_ref):
+                        invalid_refs.append(column_ref)
+            
+            if invalid_refs:
+                self.logger.error(f"问题验证失败，发现无效的表-列组合: {invalid_refs}")
+                
+                # 提供有用的调试信息
+                for invalid_ref in invalid_refs:
+                    if '.' in invalid_ref:
+                        table, column = invalid_ref.split('.', 1)
+                        # 查找包含此列的正确表
+                        correct_tables = []
+                        for table_name, columns in self.table_column_mapping.items():
+                            if column in columns:
+                                correct_tables.append(table_name)
+                        
+                        if correct_tables:
+                            self.logger.info(f"提示：列 '{column}' 存在于表: {correct_tables}")
+                        else:
+                            self.logger.info(f"提示：列 '{column}' 在任何表中都不存在")
+                
+                return None  # 验证失败，返回None
+            
+            self.logger.info("表-列组合验证通过")
+            return question
+            
+        except Exception as e:
+            self.logger.error(f"表-列组合验证异常: {e}")
+            return None
+    
+    def _validate_table_column_combination(self, column_ref: str) -> bool:
+        """验证表-列组合是否正确（只验证不修复）
+        
+        Args:
+            column_ref: 列引用，格式为 "表名.列名"
+            
+        Returns:
+            组合是否有效
+        """
+        if not hasattr(self, 'table_column_mapping') or not self.table_column_mapping:
+            self.logger.warning("表-列映射未初始化")
+            return False
+        
+        if '.' not in column_ref:
+            # 必须使用完整的 表名.列名 格式
+            return False
+        
+        table, column = column_ref.split('.', 1)
+        
+        # 检查表是否存在
+        if table not in self.table_column_mapping:
+            return False
+        
+        # 检查列是否存在于指定表中
+        return column in self.table_column_mapping[table]
+
     def _store_questions_to_neo4j(self, questions: List[Dict], database_name: str):
         """将生成的问题完整存储到Neo4j"""
         if not self.memory_manager:
@@ -420,6 +524,13 @@ class ScenarioOperationTool(BaseTool):
             stored_count = 0
             
             for question in questions:
+                # 严格验证列名（不修复）
+                validated_question = self._validate_columns_strict(question, database_name)
+                if validated_question is None:
+                    # 验证失败，跳过这个问题
+                    self.logger.warning("跳过验证失败的问题")
+                    continue
+                question = validated_question
                 # 提取所有数据
                 q_data = question.get('generated_question', {})
                 metadata = question.get('metadata', {})

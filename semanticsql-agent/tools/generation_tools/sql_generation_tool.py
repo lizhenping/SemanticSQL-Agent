@@ -114,9 +114,9 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         try:
             # 初始化组件
             if not self.memory_manager:
-                self.memory_manager = ComponentManager.create_memory_manager(self.settings)
+                object.__setattr__(self, 'memory_manager', ComponentManager.create_memory_manager(self.settings))
             if not self.database_manager:
-                self.database_manager = ComponentManager.create_database_manager(self.settings)
+                object.__setattr__(self, 'database_manager', ComponentManager.create_database_manager(self.settings))
             
             # 检查依赖
             self._check_dependencies()
@@ -678,6 +678,81 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         }
 
     # ========== SQL生成方法 ==========
+    def _validate_question_columns(self, question_data: Dict[str, Any], schema_info: Dict[str, Any]) -> None:
+        """严格验证问题中引用的列名（只验证不修复）
+        
+        Args:
+            question_data: 问题数据
+            schema_info: 数据库schema信息
+            
+        Raises:
+            ValueError: 如果发现无效的表-列组合
+        """
+        if not schema_info or not schema_info.get('tables'):
+            self.logger.warning("缺少schema信息，跳过列名验证")
+            return
+        
+        # 构建有效的表-列组合集合
+        valid_combinations = set()
+        table_columns = {}
+        for table_name, table_info in schema_info['tables'].items():
+            columns = [col['name'] for col in table_info.get('columns', [])]
+            table_columns[table_name] = set(columns)
+            # 构建所有有效的表.列组合
+            for col_name in columns:
+                valid_combinations.add(f"{table_name}.{col_name}")
+        
+        # 收集所有的列引用
+        all_column_refs = []
+        
+        # 从columns_used收集
+        columns_used = question_data.get('columns_used', [])
+        if isinstance(columns_used, list):
+            for col_ref in columns_used:
+                if isinstance(col_ref, str):
+                    all_column_refs.append(col_ref)
+        
+        # 从column_analysis收集
+        column_analysis = question_data.get('column_analysis', {})
+        if column_analysis and 'columns_used' in column_analysis:
+            for col_info in column_analysis['columns_used']:
+                col_ref = col_info.get('column_full_name', '')
+                if col_ref:
+                    all_column_refs.append(col_ref)
+        
+        # 验证所有列引用
+        invalid_refs = []
+        for col_ref in all_column_refs:
+            if col_ref not in valid_combinations:
+                invalid_refs.append(col_ref)
+        
+        if invalid_refs:
+            error_msg = f"发现无效的表-列组合: {invalid_refs}"
+            self.logger.error(error_msg)
+            
+            # 提供有用的调试信息
+            for invalid_ref in invalid_refs:
+                if '.' in invalid_ref:
+                    table, column = invalid_ref.split('.', 1)
+                    # 查找包含此列的正确表
+                    correct_tables = []
+                    for table_name, columns in table_columns.items():
+                        if column in columns:
+                            correct_tables.append(table_name)
+                    
+                    if correct_tables:
+                        valid_refs = [f"{t}.{column}" for t in correct_tables]
+                        self.logger.info(f"提示：列 '{column}' 的正确引用应该是: {valid_refs}")
+                    else:
+                        self.logger.info(f"提示：列 '{column}' 在任何表中都不存在")
+                else:
+                    self.logger.info(f"提示：'{invalid_ref}' 应该使用完整格式 '表名.列名'")
+            
+            # 抛出异常，不继续处理
+            raise ValueError(error_msg)
+        
+        self.logger.debug("问题列名验证通过")
+
     def _generate_sql_with_context(
         self,
         question_data: Dict[str, Any],
@@ -685,6 +760,9 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         dialect: str
     ) -> str:
         """基于完整上下文生成SQL"""
+        # 预验证问题中的列名
+        self._validate_question_columns(question_data, context.get('schema_info', {}))
+        
         # 构建增强的上下文信息
         enhanced_context = self._build_enhanced_context(question_data, context)
         
