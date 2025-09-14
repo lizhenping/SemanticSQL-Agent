@@ -181,9 +181,8 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         try:
             cypher = """
             MATCH (q:Question)
-            WHERE (q.database_name = $database_name OR q.database_name = '' OR q.database_name IS NULL) 
-                  AND (q.has_sql = false OR q.has_sql IS NULL)
-            RETURN q.id as id, q.question_text as question_text
+            WHERE (q.database_name = $database_name OR q.database_name = '' OR q.database_name IS NULL)
+            RETURN q.id as id, q.question_text as question_text, q.has_sql as has_sql
             ORDER BY q.created_at DESC
             LIMIT 5
             """
