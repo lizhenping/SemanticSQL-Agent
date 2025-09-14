@@ -98,41 +98,41 @@ class FieldAnalysisTool(BaseSemanticSQLTool):
             if not self.memory_manager:
                 self.memory_manager = ComponentManager.create_memory_manager(self.settings)
             
-            # # 1. 检查依赖：需要schema_extraction_tool的结果
-            # self._check_schema_extraction_dependency()
+            # 1. 检查依赖：需要schema_extraction_tool的结果
+            self._check_schema_extraction_dependency()
             
-            # # 2. 从Neo4j读取字段信息
-            # field_infos = self._read_field_info_from_neo4j()
-            # if not field_infos:
-            #     return "❌ 字段分析失败: 未找到字段信息"
+            # 2. 从Neo4j读取字段信息
+            field_infos = self._read_field_info_from_neo4j()
+            if not field_infos:
+                return "❌ 字段分析失败: 未找到字段信息"
             
-            # self.logger.info(f"📖 从Neo4j读取到 {len(field_infos)} 个字段")
+            self.logger.info(f"📖 从Neo4j读取到 {len(field_infos)} 个字段")
             
-            # # 3. 逐字段进行LLM分类
-            # classifications = []
-            # llm_success_count = 0
+            # 3. 逐字段进行LLM分类
+            classifications = []
+            llm_success_count = 0
             
-            # for field_info in field_infos:
-            #     classification = self._classify_field_with_llm(field_info)
-            #     if classification:
-            #         classifications.append(classification)
-            #         llm_success_count += 1
-            #         self.logger.debug(f"✅ 字段 {field_info['field_name']} 分类完成: {classification.get('category', 'unknown')}")
-            #     else:
-            #         raise_tool_error(
-            #             self.name,
-            #             f"字段 {field_info['field_name']} LLM分类失败"
-            #         )
+            for field_info in field_infos:
+                classification = self._classify_field_with_llm(field_info)
+                if classification:
+                    classifications.append(classification)
+                    llm_success_count += 1
+                    self.logger.debug(f"✅ 字段 {field_info['field_name']} 分类完成: {classification.get('category', 'unknown')}")
+                else:
+                    raise_tool_error(
+                        self.name,
+                        f"字段 {field_info['field_name']} LLM分类失败"
+                    )
             
-            # # 4. 将分类结果注入到Neo4j Column节点属性
-            # updated_count = 0
-            # for classification in classifications:
-            #     try:
-            #         self._update_column_classification(classification)
-            #         updated_count += 1
-            #     except Exception as e:
-            #         self.logger.error(f"注入字段分类失败 {classification['field_name']}: {e}")
-            #         raise_tool_error(self.name, f"字段分类注入失败: {str(e)}")
+            # 4. 将分类结果注入到Neo4j Column节点属性
+            updated_count = 0
+            for classification in classifications:
+                try:
+                    self._update_column_classification(classification)
+                    updated_count += 1
+                except Exception as e:
+                    self.logger.error(f"注入字段分类失败 {classification['field_name']}: {e}")
+                    raise_tool_error(self.name, f"字段分类注入失败: {str(e)}")
             
             # 5. 生成统计报告
 

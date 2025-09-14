@@ -55,18 +55,18 @@ class ERAnalysisTool(BaseSemanticSQLTool):
             if not self.memory_manager:
                 self.memory_manager = ComponentManager.create_memory_manager(self.settings)
             
-            # # 获取数据库元数据信息
-            # neo4j_graph = self.memory_manager.neo4j_graph
-            # database_context = self._gather_database_context_from_neo4j(neo4j_graph)
+            # 获取数据库元数据信息
+            neo4j_graph = self.memory_manager.neo4j_graph
+            database_context = self._gather_database_context_from_neo4j(neo4j_graph)
             
-            # # 执行概念ER关系分析
-            # er_analysis = self._perform_er_analysis(database_context)
+            # 执行概念ER关系分析
+            er_analysis = self._perform_er_analysis(database_context)
             
-            # # 存储到独立的ER图谱结构
-            # analysis_id = self._store_er_analysis_with_container(neo4j_graph, er_analysis, database_context)
+            # 存储到独立的ER图谱结构
+            analysis_id = self._store_er_analysis_with_container(neo4j_graph, er_analysis, database_context)
             
-            # # 构建执行结果
-            # result_message = self._build_result_message(er_analysis, analysis_id)
+            # 构建执行结果
+            result_message = self._build_result_message(er_analysis, analysis_id)
             
             # 统计实体和关系数量
                # 6. 构建返回消息
