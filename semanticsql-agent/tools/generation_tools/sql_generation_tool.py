@@ -101,15 +101,11 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         object.__setattr__(self, 'prompt_manager', PromptManager())
 
     def _run(self, *args, **kwargs) -> str:
-        """生成SQL查询 - 主流程（支持单问题和批处理模式）"""
-        # 从kwargs中提取参数
-        question_id = kwargs.get('question_id', '')
+        """简化版：获取所有问题，逐个生成SQL"""
         database_name = kwargs.get('database_name', 'testdb')
-        execute_sql = kwargs.get('execute_sql', True)
-        dialect = kwargs.get('dialect', 'mysql')
-        process_all = kwargs.get('process_all', False)
+        execute_sql = kwargs.get('execute_sql', False)
         
-        self.logger.info(f"🔧 {self.name}: 开始处理 {'批处理模式' if process_all else f'Question {question_id}'}")
+        self.logger.info(f"🔧 {self.name}: 开始处理所有Question节点")
         
         try:
             # 初始化组件
@@ -121,32 +117,80 @@ class SQLGenerationTool(BaseSemanticSQLTool):
             # 检查依赖
             self._check_dependencies()
             
-            # 批处理模式：处理所有可用问题
-            if process_all:
-                self.logger.info("🚀 启动批处理模式 - 处理所有可用问题")
-                batch_results = self._process_batch_questions(database_name, execute_sql, dialect)
-                return json.dumps(batch_results, ensure_ascii=False)
+            # 获取所有Question节点 - 简单直接
+            cypher = "MATCH (q:Question) RETURN q.id as id, q.question_text as text ORDER BY q.created_at DESC"
+            all_questions = self.memory_manager.neo4j_graph.query(cypher)
             
-            # 单问题模式：处理指定问题或自动选择问题
-            if not question_id or question_id.strip() == "":
-                # 尝试查找可用的Question
-                available_questions = self._find_available_questions(database_name)
-                if available_questions:
-                    question_id = available_questions[0]['id']
-                    self.logger.info(f"自动选择Question: {question_id}")
-                else:
-                    return "❌ SQL生成失败: 需要提供有效的question_id，且Neo4j中没有找到可用的Question。请先运行scenario_operation_tool生成问题。"
+            if not all_questions:
+                return "没有找到Question节点，请先运行scenario_operation_tool生成问题"
             
-            # 使用单问题处理方法
-            result = self._process_single_question(question_id, database_name, execute_sql, dialect)
+            self.logger.info(f"找到 {len(all_questions)} 个Question，开始逐个处理")
             
-            self.logger.info(f"✅ {self.name}: SQL生成完成 - {question_id}")
-            return json.dumps(result, ensure_ascii=False)
+            # 逐个处理 - 简单的for循环
+            results = []
+            for i, question in enumerate(all_questions, 1):
+                question_id = question['id']
+                question_text = question['text']
+                
+                self.logger.info(f"处理 {i}/{len(all_questions)}: {question_id}")
+                self.logger.info(f"问题: {question_text[:50]}...")
+                
+                try:
+                    # 生成SQL
+                    sql = self._generate_sql_for_question(question_id, database_name, execute_sql)
+                    results.append({
+                        'question_id': question_id,
+                        'question_text': question_text,
+                        'sql': sql,
+                        'executed': execute_sql
+                    })
+                    self.logger.info(f"✅ 问题 {question_id} 处理成功")
+                    
+                except Exception as e:
+                    self.logger.warning(f"❌ 问题 {question_id} 处理失败: {e}")
+                    continue
+            
+            return json.dumps({
+                'total': len(all_questions),
+                'processed': len(results),
+                'results': results
+            }, ensure_ascii=False)
             
         except Exception as e:
             error_msg = f"SQL生成失败: {str(e)}"
             self.logger.error(f"❌ {self.name}: {error_msg}")
             return f"❌ {error_msg}"
+
+    def _generate_sql_for_question(self, question_id: str, database_name: str, execute_sql: bool = False) -> str:
+        """为单个问题生成SQL - 极简版"""
+        try:
+            # 获取问题数据
+            question_data = self._fetch_question_from_neo4j(question_id, database_name)
+            
+            # 构建上下文（不包含复杂的business_entities）
+            context = {
+                'schema_info': self._fetch_schema_from_neo4j(database_name),
+                'foreign_keys': self._fetch_foreign_keys_from_neo4j(database_name),
+                'question_data': question_data
+            }
+            
+            # 验证schema信息
+            if not context['schema_info'] or not context['schema_info'].get('tables'):
+                raise ValueError(f"无法获取数据库 {database_name} 的schema信息")
+            
+            # 生成SQL
+            prompt = self.prompt_manager.render_prompt('sql_generation', context)
+            response = self.llm.invoke(prompt)
+            sql = self._extract_sql_from_response(response.content)
+            
+            # 存储结果
+            self._store_sql_result(question_id, sql, 'mysql', execute_sql, None, None)
+            
+            return sql
+            
+        except Exception as e:
+            self.logger.error(f"为问题 {question_id} 生成SQL失败: {e}")
+            raise
 
     # ========== Neo4j数据获取方法 ==========
     def _check_dependencies(self) -> None:
@@ -156,38 +200,6 @@ class SQLGenerationTool(BaseSemanticSQLTool):
                 self.name,
                 "Neo4j连接不可用，无法获取Question和schema信息"
             )
-    
-    def _find_available_questions(self, database_name: str, limit: Optional[int] = 5) -> List[Dict[str, Any]]:
-        """查找可用的Question节点
-        
-        Args:
-            database_name: 数据库名称
-            limit: 限制返回数量，None表示不限制
-            
-        Returns:
-            Question节点列表
-        """
-        if not self.memory_manager:
-            return []
-        
-        try:
-            cypher = """
-            MATCH (q:Question)
-            WHERE (q.database_name = $database_name OR q.database_name = '' OR q.database_name IS NULL)
-            RETURN q.id as id, q.question_text as question_text, q.has_sql as has_sql
-            ORDER BY q.created_at DESC
-            """
-            
-            # 添加LIMIT子句（如果指定了limit）
-            if limit is not None:
-                cypher += f" LIMIT {limit}"
-            
-            result = self.memory_manager.neo4j_graph.query(cypher, {'database_name': database_name})
-            return result if result else []
-            
-        except Exception as e:
-            self.logger.warning(f"查找可用Question失败: {e}")
-            return []
     
     def _fetch_question_from_neo4j(self, question_id: str, database_name: str) -> Dict[str, Any]:
         """从Neo4j获取Question节点的完整数据 - 修复版：添加Question节点存在性检查"""
@@ -267,7 +279,6 @@ class SQLGenerationTool(BaseSemanticSQLTool):
             'domain_analysis': self._fetch_domain_analysis_from_neo4j(database_name),
             'field_classifications': self._fetch_field_classifications_from_neo4j(database_name),
             'table_meanings': self._fetch_table_meanings_from_neo4j(database_name),
-            'business_entities': self._fetch_business_entities_from_neo4j(database_name),
             'question_data': question_data
         }
         
@@ -528,115 +539,7 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         
         return table_meanings
     
-    def _fetch_business_entities_from_neo4j(self, database_name: str) -> Dict[str, Any]:
-        """获取业务实体信息 - 修复版：使用实际的HAS_ATTRIBUTE关系推断表关联"""
-        try:
-            # 修正查询：BusinessEntity没有MAPS_TO关系，使用HAS_ATTRIBUTE间接推断
-            cypher = """
-            MATCH (be:BusinessEntity)-[:HAS_ATTRIBUTE]->(c:Column)<-[:HAS_COLUMN]-(t:Table)<-[:CONTAINS]-(d:Database {name: $database_name})
-            RETURN DISTINCT be.name as entity_name,
-                   be.entity_type as entity_type,
-                   be.description as entity_description,
-                   COLLECT(DISTINCT t.name) as related_tables
-            """
-            
-            result = self.memory_manager.neo4j_graph.query(cypher, {'database_name': database_name})
-            
-            business_entities = {}
-            for row in result:
-                entity_name = row.get('entity_name', '')
-                if entity_name:
-                    business_entities[entity_name] = {
-                        'entity_type': row.get('entity_type', ''),
-                        'entity_description': row.get('entity_description', ''),
-                        'related_tables': row.get('related_tables', [])
-                    }
-            
-            # Fail fast: 如果没有找到BusinessEntity关联，直接报错
-            if not business_entities:
-                raise_tool_error(self.name, f"未找到数据库{database_name}的BusinessEntity关联数据")
-        
-        except Exception as e:
-            self.logger.error(f"获取业务实体数据失败: {e}")
-            raise_tool_error(self.name, f"获取业务实体数据失败: {str(e)}")
-        
-        return business_entities
 
-    def _process_batch_questions(self, database_name: str, execute_sql: bool, dialect: str) -> Dict[str, Any]:
-        """批处理所有可用问题
-        
-        Args:
-            database_name: 数据库名称
-            execute_sql: 是否执行SQL
-            dialect: SQL方言
-            
-        Returns:
-            批处理结果汇总
-        """
-        batch_results = {
-            'batch_mode': True,
-            'database_name': database_name,
-            'total_processed': 0,
-            'successful': 0,
-            'failed': 0,
-            'results': [],
-            'errors': []
-        }
-        
-        try:
-            # 获取所有可用问题（不限制数量）
-            available_questions = self._find_available_questions(database_name, limit=None)
-            
-            if not available_questions:
-                batch_results['errors'].append("没有找到可用的Question进行处理")
-                return batch_results
-            
-            self.logger.info(f"开始批处理 {len(available_questions)} 个问题")
-            
-            # 逐个处理每个问题
-            for i, question_info in enumerate(available_questions, 1):
-                question_id = question_info['id']
-                question_text = question_info.get('question_text', '')
-                
-                self.logger.info(f"处理问题 {i}/{len(available_questions)}: {question_id}")
-                self.logger.info(f"问题内容: {question_text[:100]}...")
-                
-                try:
-                    # 处理单个问题
-                    result = self._process_single_question(
-                        question_id=question_id,
-                        database_name=database_name,
-                        execute_sql=execute_sql,
-                        dialect=dialect
-                    )
-                    
-                    batch_results['results'].append(result)
-                    batch_results['successful'] += 1
-                    batch_results['total_processed'] += 1
-                    
-                    self.logger.info(f"✅ 问题 {question_id} 处理成功")
-                    
-                except Exception as e:
-                    error_msg = f"问题 {question_id} 处理失败: {str(e)}"
-                    self.logger.error(f"❌ {error_msg}")
-                    
-                    batch_results['errors'].append(error_msg)
-                    batch_results['failed'] += 1
-                    batch_results['total_processed'] += 1
-                    
-                    # 继续处理下一个问题，不中断批处理
-                    continue
-            
-            # 记录批处理总结
-            self.logger.info(f"🎉 批处理完成: {batch_results['successful']}/{batch_results['total_processed']} 成功")
-            
-        except Exception as e:
-            error_msg = f"批处理过程出错: {str(e)}"
-            self.logger.error(f"❌ {error_msg}")
-            batch_results['errors'].append(error_msg)
-        
-        return batch_results
-    
     def _process_single_question(self, question_id: str, database_name: str, execute_sql: bool, dialect: str) -> Dict[str, Any]:
         """处理单个问题的核心逻辑（从_run方法提取）
         

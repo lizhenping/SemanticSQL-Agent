@@ -96,7 +96,7 @@ class ScenarioOperationTool(BaseTool):
             if self.memory_manager and questions:
                 self._store_questions_to_neo4j(questions, database_name)
             
-            result_message = f"✅ scenario_operation_tool 分析完成，生成了 {len(questions)} 个问题，请务必继续执行 sql_generation_tool 工具。"    
+            result_message = f"✅ scenario_operation_tool 分析完成，生成了 个问题，请务必继续执行 sql_generation_tool 工具。"    
             return result_message
 
         except Exception as e:
