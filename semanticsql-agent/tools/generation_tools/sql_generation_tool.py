@@ -104,7 +104,7 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         """简化版：获取所有问题，逐个生成SQL"""
         database_name = kwargs.get('database_name', 'testdb')
         execute_sql = kwargs.get('execute_sql', False)
-        
+        execute_sql = True
         self.logger.info(f"🔧 {self.name}: 开始处理所有Question节点")
         
         try:
@@ -136,14 +136,9 @@ class SQLGenerationTool(BaseSemanticSQLTool):
                 self.logger.info(f"问题: {question_text[:50]}...")
                 
                 try:
-                    # 生成SQL
-                    sql = self._generate_sql_for_question(question_id, database_name, execute_sql)
-                    results.append({
-                        'question_id': question_id,
-                        'question_text': question_text,
-                        'sql': sql,
-                        'executed': execute_sql
-                    })
+                    # 使用完整的处理逻辑（包含SQL执行）
+                    result = self._process_single_question(question_id, database_name, execute_sql, 'mysql')
+                    results.append(result)
                     self.logger.info(f"✅ 问题 {question_id} 处理成功")
                     
                 except Exception as e:
@@ -167,24 +162,42 @@ class SQLGenerationTool(BaseSemanticSQLTool):
             # 获取问题数据
             question_data = self._fetch_question_from_neo4j(question_id, database_name)
             
-            # 构建上下文（不包含复杂的business_entities）
-            context = {
-                'schema_info': self._fetch_schema_from_neo4j(database_name),
-                'foreign_keys': self._fetch_foreign_keys_from_neo4j(database_name),
-                'question_data': question_data
-            }
+            # 获取schema和外键信息
+            schema_info = self._fetch_schema_from_neo4j(database_name)
+            foreign_keys = self._fetch_foreign_keys_from_neo4j(database_name)
             
             # 验证schema信息
-            if not context['schema_info'] or not context['schema_info'].get('tables'):
+            if not schema_info or not schema_info.get('tables'):
                 raise ValueError(f"无法获取数据库 {database_name} 的schema信息")
             
-            # 生成SQL
-            prompt = self.prompt_manager.render_prompt('sql_generation', context)
+            # 构建context字典用于_build_enhanced_context
+            context_dict = {
+                'schema_info': schema_info,
+                'foreign_keys': foreign_keys,
+                'er_relations': {'physical': foreign_keys}  # 兼容性
+            }
+            
+            # 构建增强的context字符串
+            enhanced_context = self._build_enhanced_context(question_data, context_dict)
+            
+            # 正确传递模板变量
+            prompt = self.prompt_manager.render_template(
+                'tools/sql_generation.j2',
+                question=question_data.get('question_text', ''),
+                context=enhanced_context,
+                dialect='mysql',
+                question_focus=question_data.get('question_focus', ''),
+                expected_output=question_data.get('expected_output', ''),
+                business_rules=question_data.get('business_rules', []),
+                join_relationships=foreign_keys
+            )
+            
+            # 调用LLM生成SQL
             response = self.llm.invoke(prompt)
             sql = self._extract_sql_from_response(response.content)
             
             # 存储结果
-            self._store_sql_result(question_id, sql, 'mysql', execute_sql, None, None)
+            self._store_sql_result_to_neo4j(question_id, sql, None, 'mysql')
             
             return sql
             

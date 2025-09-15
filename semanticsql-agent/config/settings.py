@@ -62,7 +62,7 @@ class Settings(BaseModel):
 
     # LLM configuration - 使用VLLM实际返回的模型名
     llm_model: str = Field(
-        default=os.getenv("SEMANTICSQL_LLM_MODEL", "qwen3-coder-480b-a35b-instruct"),
+        default=os.getenv("SEMANTICSQL_LLM_MODEL", "qwen3-max-preview"),
         description="LLM model name",
     )
     llm_base_url: str = Field(
