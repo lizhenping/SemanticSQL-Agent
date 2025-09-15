@@ -974,18 +974,15 @@ class SQLGenerationTool(BaseSemanticSQLTool):
     
     
     def _store_sql_result_to_neo4j(self, question_id: str, sql: str, execution_result: Optional[List[Dict]], dialect: str) -> None:
-        """将SQL和执行结果存储到Neo4j"""
+        """将SQL和执行结果存储到Neo4j - 替换旧结果"""
         try:
-            # 更新Question节点
-            update_question_cypher = """
-            MATCH (q:Question {id: $question_id})
-            SET q.has_sql = true,
-                q.sql_updated_at = datetime()
+            # 1. 删除旧的SQLResult（如果存在）
+            delete_old_cypher = """
+            MATCH (q:Question {id: $question_id})-[r:HAS_SQL_RESULT]->(old:SQLResult)
+            DELETE r, old
             """
             
-            self.memory_manager.neo4j_graph.query(update_question_cypher, {'question_id': question_id})
-            
-            # 创建SQLResult节点
+            # 2. 创建新的SQLResult节点（包含完整execution_result）
             create_result_cypher = """
             MATCH (q:Question {id: $question_id})
             CREATE (r:SQLResult {
@@ -996,17 +993,20 @@ class SQLGenerationTool(BaseSemanticSQLTool):
                 execution_success: $execution_success,
                 result_count: $result_count,
                 result_preview: $result_preview,
+                execution_result: $execution_result,
                 created_at: datetime()
             })
             CREATE (q)-[:HAS_SQL_RESULT]->(r)
+            SET q.has_sql = true, q.sql_updated_at = datetime()
             RETURN r.id as result_id
             """
             
-            # 准备参数
+            # 3. 准备参数（包含完整execution_result）
             executed = execution_result is not None
             execution_success = executed
             result_count = len(execution_result) if execution_result else 0
             result_preview = json.dumps(execution_result[:5], ensure_ascii=False) if execution_result else None
+            execution_result_json = json.dumps(execution_result, ensure_ascii=False) if execution_result else None
             
             params = {
                 'question_id': question_id,
@@ -1015,13 +1015,16 @@ class SQLGenerationTool(BaseSemanticSQLTool):
                 'executed': executed,
                 'execution_success': execution_success,
                 'result_count': result_count,
-                'result_preview': result_preview
+                'result_preview': result_preview,
+                'execution_result': execution_result_json
             }
             
+            # 4. 执行删除和创建
+            self.memory_manager.neo4j_graph.query(delete_old_cypher, {'question_id': question_id})
             result = self.memory_manager.neo4j_graph.query(create_result_cypher, params)
             
             if result:
-                self.logger.info(f"SQL结果已存储: {result[0]['result_id']}")
+                self.logger.info(f"SQL结果已存储（替换模式）: {result[0]['result_id']}")
             
         except Exception as e:
             self.logger.error(f"存储SQL结果失败: {e}")
