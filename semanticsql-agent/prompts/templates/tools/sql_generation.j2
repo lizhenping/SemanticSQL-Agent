@@ -52,6 +52,10 @@
 - **PostgreSQL函数**: 不要使用 `DATE_TRUNC`、`ARRAY_AGG`、`STRING_AGG`等
 - **Oracle函数**: 不要使用 `ROWNUM`、`CONNECT BY`、`LISTAGG`等
 - **SQL Server函数**: 不要使用 `DATEPART`、`STUFF`、`STRING_SPLIT`等
+- **GROUP BY扩展**: 不要使用 `WITH CUBE`，MySQL仅支持 `WITH ROLLUP`
+- **ORDER BY扩展**: 不要使用 `NULLS FIRST`、`NULLS LAST`
+- **FULL OUTER JOIN**: MySQL不支持，使用LEFT JOIN + UNION + RIGHT JOIN组合
+- **集合操作**: 不要使用 `INTERSECT`、`EXCEPT`，使用JOIN或EXISTS替代
 
 ### ✅ 推荐使用（现代SQL特性）
 - **窗口函数排名**: 使用 `ROW_NUMBER() OVER (ORDER BY column)`
@@ -69,6 +73,52 @@
 
 ❌ 错误: SELECT DATE_TRUNC('quarter', date_column) AS quarter
 ✅ 正确: SELECT CONCAT(YEAR(date_column), '-Q', QUARTER(date_column)) AS quarter
+
+❌ 错误: GROUP BY column1, column2 WITH CUBE
+✅ 正确: GROUP BY column1, column2 WITH ROLLUP
+
+❌ 错误: ORDER BY column_name NULLS LAST
+✅ 正确: ORDER BY CASE WHEN column_name IS NULL THEN 1 ELSE 0 END, column_name
+
+❌ 错误: SELECT * FROM table1 FULL OUTER JOIN table2 ON table1.id = table2.id
+✅ 正确: SELECT * FROM table1 LEFT JOIN table2 ON table1.id = table2.id
+         UNION
+         SELECT * FROM table1 RIGHT JOIN table2 ON table1.id = table2.id WHERE table1.id IS NULL
+
+❌ 错误: SELECT col FROM table1 INTERSECT SELECT col FROM table2
+✅ 正确: SELECT DISTINCT t1.col FROM table1 t1 WHERE EXISTS (SELECT 1 FROM table2 t2 WHERE t1.col = t2.col)
+
+{% set question_lower = question.lower() %}
+
+{% if '排名' in question_lower or '前n' in question_lower or 'top' in question_lower or '第几' in question_lower or '最高' in question_lower or '最低' in question_lower or '第一' in question_lower or '第二' in question_lower %}
+## 🎯 排名分析建议
+- **窗口函数排名**: 使用 `ROW_NUMBER() OVER (ORDER BY column)` 进行排名，不要使用@变量
+- **示例**: `SELECT *, ROW_NUMBER() OVER (ORDER BY amount DESC) AS rank FROM table`
+{% endif %}
+
+{% if '每个' in question_lower or '各' in question_lower or '按' in question_lower or '分组' in question_lower or '各类' in question_lower or '各种' in question_lower %}
+## 🎯 分组排名建议  
+- **分组排名**: 使用 `PARTITION BY` 进行分组排名
+- **示例**: `RANK() OVER (PARTITION BY category ORDER BY value DESC)`
+{% endif %}
+
+{% if '累计' in question_lower or '累积' in question_lower or '总和' in question_lower or '汇总' in question_lower %}
+## 🎯 累积计算建议
+- **累积计算**: 使用窗口函数进行累积计算  
+- **示例**: `SUM(amount) OVER (ORDER BY date ROWS UNBOUNDED PRECEDING)`
+{% endif %}
+
+{% if '占比' in question_lower or '比例' in question_lower or '百分比' in question_lower or '份额' in question_lower %}
+## 🎯 比例计算建议
+- **比例计算**: 使用窗口函数计算占比
+- **示例**: `amount / SUM(amount) OVER (PARTITION BY category) * 100`
+{% endif %}
+
+{% if '移动' in question_lower or '滑动' in question_lower or '近n' in question_lower or '最近' in question_lower %}
+## 🎯 移动聚合建议
+- **移动聚合**: 使用 `ROWS BETWEEN` 子句
+- **示例**: `AVG(value) OVER (ORDER BY date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW)`
+{% endif %}
 
 ## SQL生成指导原则
 
@@ -101,6 +151,12 @@
   - RANK() OVER (PARTITION BY ... ORDER BY ...)
   - DENSE_RANK() OVER (...)
   - SUM() OVER (PARTITION BY ... ORDER BY ... ROWS BETWEEN ...)
+
+### 5. MySQL特定语法要求
+- **NULL值排序**: 使用 `CASE WHEN column IS NULL THEN 1 ELSE 0 END` 控制NULL值位置
+- **分组汇总**: 使用 `WITH ROLLUP` 而非 `WITH CUBE`
+- **多表连接**: 避免FULL OUTER JOIN，使用LEFT/RIGHT JOIN组合
+- **集合操作**: 使用JOIN、EXISTS、UNION替代INTERSECT/EXCEPT
 
 ## 输出要求
 1. **只返回SQL语句**: 不要添加任何解释文字

@@ -170,11 +170,17 @@ class SQLGenerationTool(BaseSemanticSQLTool):
             if not schema_info or not schema_info.get('tables'):
                 raise ValueError(f"无法获取数据库 {database_name} 的schema信息")
             
-            # 构建context字典用于_build_enhanced_context
+            # 预处理合并数据（与_gather_neo4j_context保持一致）
+            merged_tables = self._merge_table_data(question_data)
+            merged_columns = self._merge_column_data(question_data)
+            
+            # 构建完整的context字典
             context_dict = {
                 'schema_info': schema_info,
                 'foreign_keys': foreign_keys,
-                'er_relations': {'physical': foreign_keys}  # 兼容性
+                'er_relations': {'physical': foreign_keys},  # 兼容性
+                'merged_tables': merged_tables,
+                'merged_columns': merged_columns
             }
             
             # 构建增强的context字符串
@@ -283,7 +289,12 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         return question_data
     
     def _gather_neo4j_context(self, database_name: str, question_data: Dict[str, Any]) -> Dict[str, Any]:
-        """从Neo4j收集完整的分析上下文"""
+        """从Neo4j收集完整的分析上下文 - 重构版：预处理合并数据"""
+        
+        # 预先合并表和列数据（一次性处理，避免后续重复调用）
+        merged_tables = self._merge_table_data(question_data)
+        merged_columns = self._merge_column_data(question_data)
+        
         context = {
             'schema_info': self._fetch_schema_from_neo4j(database_name),
             'er_relations': self._fetch_er_relations_from_neo4j(database_name),
@@ -292,7 +303,10 @@ class SQLGenerationTool(BaseSemanticSQLTool):
             'domain_analysis': self._fetch_domain_analysis_from_neo4j(database_name),
             'field_classifications': self._fetch_field_classifications_from_neo4j(database_name),
             'table_meanings': self._fetch_table_meanings_from_neo4j(database_name),
-            'question_data': question_data
+            'question_data': question_data,
+            # 新增：预处理的合并数据，避免后续重复计算
+            'merged_tables': merged_tables,
+            'merged_columns': merged_columns
         }
         
         # 验证schema信息
@@ -594,12 +608,13 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         }
 
     # ========== SQL生成方法 ==========
-    def _validate_question_columns(self, question_data: Dict[str, Any], schema_info: Dict[str, Any]) -> None:
-        """严格验证问题中引用的列名（只验证不修复）
+    def _validate_question_columns(self, question_data: Dict[str, Any], schema_info: Dict[str, Any], merged_columns: List[Dict[str, Any]]) -> None:
+        """严格验证问题中引用的列名（只验证不修复） - 重构版：使用预处理数据
         
         Args:
             question_data: 问题数据
             schema_info: 数据库schema信息
+            merged_columns: 预处理的合并列数据
             
         Raises:
             ValueError: 如果发现无效的表-列组合
@@ -618,23 +633,12 @@ class SQLGenerationTool(BaseSemanticSQLTool):
             for col_name in columns:
                 valid_combinations.add(f"{table_name}.{col_name}")
         
-        # 收集所有的列引用
+        # 直接使用预处理的合并列数据（无需重复调用_merge_column_data）
         all_column_refs = []
-        
-        # 从columns_used收集
-        columns_used = question_data.get('columns_used', [])
-        if isinstance(columns_used, list):
-            for col_ref in columns_used:
-                if isinstance(col_ref, str):
-                    all_column_refs.append(col_ref)
-        
-        # 从column_analysis收集
-        column_analysis = question_data.get('column_analysis', {})
-        if column_analysis and 'columns_used' in column_analysis:
-            for col_info in column_analysis['columns_used']:
-                col_ref = col_info.get('column_full_name', '')
-                if col_ref:
-                    all_column_refs.append(col_ref)
+        for column_info in merged_columns:
+            col_ref = column_info.get('column_full_name', '')
+            if col_ref:
+                all_column_refs.append(col_ref)
         
         # 验证所有列引用
         invalid_refs = []
@@ -676,16 +680,14 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         dialect: str
     ) -> str:
         """基于完整上下文生成SQL"""
-        # 预验证问题中的列名
-        self._validate_question_columns(question_data, context.get('schema_info', {}))
+        # 获取预处理的合并列数据
+        merged_columns = context.get('merged_columns', [])
+        
+        # 预验证问题中的列名（使用预处理数据）
+        self._validate_question_columns(question_data, context.get('schema_info', {}), merged_columns)
         
         # 构建增强的上下文信息
         enhanced_context = self._build_enhanced_context(question_data, context)
-        
-        # 添加：根据问题类型添加SQL模式推荐
-        sql_patterns = self._get_recommended_sql_patterns(question_data)
-        if sql_patterns:
-            enhanced_context += f"\n\n{sql_patterns}"
         
         # 获取JOIN关系信息
         join_relationships = context.get('foreign_keys', [])
@@ -705,26 +707,92 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         response = self.llm.invoke(prompt)
         sql = self._extract_sql_from_response(response.content)
         
-        # 验证SQL基本结构
-        validated_sql, validation_errors = self._validate_sql_basics(sql, context['schema_info'], dialect)
-        if not validated_sql:
-            self.logger.warning(f"SQL验证失败: {validation_errors}")
-            # 记录验证失败，但仍尝试执行（允许一些边缘情况）
-            
         return self._postprocess_sql(sql, dialect)
     
-    def _build_enhanced_context(self, question_data: Dict[str, Any], context: Dict[str, Any]) -> str:
-        """构建增强的上下文信息"""
-        context_parts = []
+    def _merge_column_data(self, question_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """合并和去重列数据，统一处理顶级columns_used和column_analysis.columns_used"""
+        merged_columns = []
+        seen_columns = set()
         
-        # 1. Question的表分析
+        # 处理column_analysis.columns_used中的详细信息
+        column_analysis = question_data.get('column_analysis', {})
+        if column_analysis and column_analysis.get('columns_used'):
+            for column_info in column_analysis['columns_used']:
+                column_name = column_info.get('column_full_name', '')
+                if column_name and column_name not in seen_columns:
+                    merged_columns.append({
+                        'column_full_name': column_name,
+                        'selection_reason': column_info.get('selection_reason', ''),
+                        'operations': column_info.get('operations', []),
+                        'source': 'column_analysis'
+                    })
+                    seen_columns.add(column_name)
+        
+        # 处理顶级columns_used
+        columns_used = question_data.get('columns_used', [])
+        if isinstance(columns_used, list):
+            for col_ref in columns_used:
+                if isinstance(col_ref, str) and col_ref and col_ref not in seen_columns:
+                    merged_columns.append({
+                        'column_full_name': col_ref,
+                        'selection_reason': '直接引用',
+                        'operations': [],
+                        'source': 'columns_used'
+                    })
+                    seen_columns.add(col_ref)
+        
+        return merged_columns
+    
+    def _merge_table_data(self, question_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """合并和去重表数据，统一处理tables_used和table_analysis.tables_used"""
+        merged_tables = []
+        seen_tables = set()
+        
+        # 处理table_analysis.tables_used中的详细信息
         table_analysis = question_data.get('table_analysis', {})
         if table_analysis and table_analysis.get('tables_used'):
-            context_parts.append("表使用分析：")
             for table_info in table_analysis['tables_used']:
                 table_name = table_info.get('table_name', '')
+                if table_name and table_name not in seen_tables:
+                    merged_tables.append({
+                        'table_name': table_name,
+                        'selection_reason': table_info.get('selection_reason', ''),
+                        'operations': table_info.get('operations', []),
+                        'source': 'table_analysis'
+                    })
+                    seen_tables.add(table_name)
+        
+        # 处理顶级tables_used
+        tables_used = question_data.get('tables_used', [])
+        if isinstance(tables_used, list):
+            for table_ref in tables_used:
+                if isinstance(table_ref, str) and table_ref and table_ref not in seen_tables:
+                    merged_tables.append({
+                        'table_name': table_ref,
+                        'selection_reason': '直接引用',
+                        'operations': [],
+                        'source': 'tables_used'
+                    })
+                    seen_tables.add(table_ref)
+        
+        return merged_tables
+    
+    def _build_enhanced_context(self, question_data: Dict[str, Any], context: Dict[str, Any]) -> str:
+        """构建增强的上下文信息 - 重构版：直接使用预处理的合并数据"""
+        context_parts = []
+        
+        # 直接使用预处理的合并数据（无需重复调用合并方法）
+        merged_tables = context.get('merged_tables', [])
+        merged_columns = context.get('merged_columns', [])
+        
+        # 1. 使用预处理的表分析数据
+        if merged_tables:
+            context_parts.append("表使用分析：")
+            for table_info in merged_tables:
+                table_name = table_info.get('table_name', '')
                 selection_reason = table_info.get('selection_reason', '')
-                context_parts.append(f"  - {table_name}: {selection_reason}")
+                source = table_info.get('source', '')
+                context_parts.append(f"  - {table_name}: {selection_reason} (来源: {source})")
                 
                 # 添加操作详情
                 operations = table_info.get('operations', [])
@@ -734,14 +802,14 @@ class SQLGenerationTool(BaseSemanticSQLTool):
                     purpose = op.get('purpose', '')
                     context_parts.append(f"    * {op_type}: {op_detail} ({purpose})")
         
-        # 2. Question的列分析
-        column_analysis = question_data.get('column_analysis', {})
-        if column_analysis and column_analysis.get('columns_used'):
+        # 2. 使用预处理的列分析数据
+        if merged_columns:
             context_parts.append("\n列使用分析：")
-            for column_info in column_analysis['columns_used']:
+            for column_info in merged_columns:
                 column_name = column_info.get('column_full_name', '')
                 selection_reason = column_info.get('selection_reason', '')
-                context_parts.append(f"  - {column_name}: {selection_reason}")
+                source = column_info.get('source', '')
+                context_parts.append(f"  - {column_name}: {selection_reason} (来源: {source})")
                 
                 # 添加操作详情
                 operations = column_info.get('operations', [])
@@ -751,12 +819,22 @@ class SQLGenerationTool(BaseSemanticSQLTool):
                     purpose = op.get('purpose', '')
                     context_parts.append(f"    * {op_type}: {op_detail} ({purpose})")
         
-        # 3. 数据库Schema
+        # 3. 数据库Schema - 直接从预处理数据提取相关表名
         schema_info = context.get('schema_info', {})
         if schema_info.get('tables'):
             context_parts.append("\n数据库结构：")
-            # 仅显示在Question中分析的表
-            relevant_tables = self._extract_relevant_tables(question_data)
+            # 直接从预处理数据提取相关表名（避免调用_extract_relevant_tables）
+            relevant_tables = set()
+            for table_info in merged_tables:
+                table_name = table_info.get('table_name')
+                if table_name:
+                    relevant_tables.add(table_name)
+            for column_info in merged_columns:
+                column_full_name = column_info.get('column_full_name', '')
+                if '.' in column_full_name:
+                    table_name = column_full_name.split('.')[0]
+                    relevant_tables.add(table_name)
+            
             for table_name in relevant_tables:
                 if table_name in schema_info['tables']:
                     table_info = schema_info['tables'][table_name]
@@ -822,100 +900,24 @@ class SQLGenerationTool(BaseSemanticSQLTool):
                     if purpose:
                         context_parts.append(f"    用途: {purpose}")
         
-        # 9. 业务实体
-        business_entities = context.get('business_entities', {})
-        if business_entities:
-            context_parts.append("\n业务实体:")
-            for entity_name, entity_info in business_entities.items():
-                entity_type = entity_info.get('entity_type', '')
-                table_name = entity_info.get('table_name', '')
-                entity_description = entity_info.get('entity_description', '')
-                context_parts.append(f"  - {entity_name} ({entity_type}): 映射到表 {table_name}")
-                if entity_description:
-                    context_parts.append(f"    描述: {entity_description}")
-        
-        # 10. Question的直接字段信息（使用独立字段）
-        if question_data.get('tables_used'):
-            context_parts.append("\n问题涉及的表:")
-            for table in question_data['tables_used']:
-                context_parts.append(f"  - {table}")
-        
-        if question_data.get('columns_used'):
-            context_parts.append("\n问题涉及的列:")
-            for column in question_data['columns_used']:
-                context_parts.append(f"  - {column}")
-        
         return "\n".join(context_parts)
     
-    def _validate_sql_basics(self, sql: str, schema: Dict[str, Any], dialect: str) -> tuple[bool, str]:
-        """轻量级SQL验证 - 只检查最常见的错误"""
-        errors = []
-        sql_upper = sql.upper()
-        
-        # 1. 检查禁用的PostgreSQL函数
-        pg_functions = ['DATE_TRUNC', 'ARRAY_AGG', 'STRING_AGG']
-        for func in pg_functions:
-            if func in sql_upper:
-                if func == 'DATE_TRUNC':
-                    errors.append(f"使用了PostgreSQL的{func}，请使用MySQL的QUARTER()或DATE_FORMAT()")
-                else:
-                    errors.append(f"使用了PostgreSQL的{func}，请使用MySQL对应函数")
-        
-        # 2. 检查Oracle函数
-        oracle_functions = ['ROWNUM', 'LISTAGG']
-        for func in oracle_functions:
-            if func in sql_upper:
-                errors.append(f"使用了Oracle的{func}，MySQL中不支持")
-        
-        # 3. 检查SQL Server函数
-        sqlserver_functions = ['DATEPART', 'STUFF']
-        for func in sqlserver_functions:
-            if func in sql_upper:
-                errors.append(f"使用了SQL Server的{func}，MySQL中不支持")
-        
-        # 4. 提取并验证JOIN中的列（使用正则表达式）
-        import re
-        # 匹配 ON table.column = table.column 模式
-        join_pattern = r'ON\s+(\w+)\.(\w+)\s*=\s*(\w+)\.(\w+)'
-        for match in re.finditer(join_pattern, sql, re.IGNORECASE):
-            t1, c1, t2, c2 = match.groups()
-            # 验证列是否存在
-            if schema and 'tables' in schema:
-                if t1 in schema['tables']:
-                    cols = [c['name'] for c in schema['tables'][t1]['columns']]
-                    if c1 not in cols:
-                        errors.append(f"列 {t1}.{c1} 不存在于表 {t1} 中")
-                if t2 in schema['tables']:
-                    cols = [c['name'] for c in schema['tables'][t2]['columns']]
-                    if c2 not in cols:
-                        errors.append(f"列 {t2}.{c2} 不存在于表 {t2} 中")
-        
-        # 5. 检查MySQL变量语法
-        if re.search(r'@\w+\s*:=', sql):
-            errors.append("使用了MySQL变量赋值语法，请使用窗口函数")
-        
-        return len(errors) == 0, '\n'.join(errors)
-    
-    def _extract_relevant_tables(self, question_data: Dict[str, Any]) -> List[str]:
-        """从Question分析中提取相关表名"""
+    def _extract_relevant_tables(self, merged_tables: List[Dict[str, Any]], merged_columns: List[Dict[str, Any]]) -> List[str]:
+        """从预处理的合并数据中提取相关表名 - 重构版：直接使用预处理数据"""
         tables = set()
         
-        # 从表分析中获取
-        table_analysis = question_data.get('table_analysis', {})
-        if table_analysis.get('tables_used'):
-            for table_info in table_analysis['tables_used']:
-                table_name = table_info.get('table_name')
-                if table_name:
-                    tables.add(table_name)
+        # 从预处理的表数据中提取
+        for table_info in merged_tables:
+            table_name = table_info.get('table_name')
+            if table_name:
+                tables.add(table_name)
         
-        # 从列分析中获取
-        column_analysis = question_data.get('column_analysis', {})
-        if column_analysis.get('columns_used'):
-            for column_info in column_analysis['columns_used']:
-                column_full_name = column_info.get('column_full_name', '')
-                if '.' in column_full_name:
-                    table_name = column_full_name.split('.')[0]
-                    tables.add(table_name)
+        # 从预处理的列数据中提取表名
+        for column_info in merged_columns:
+            column_full_name = column_info.get('column_full_name', '')
+            if '.' in column_full_name:
+                table_name = column_full_name.split('.')[0]
+                tables.add(table_name)
         
         return list(tables)
 
@@ -1018,43 +1020,6 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         
         # 3. 如果没有代码块，直接使用内容
         return response_content.strip()
-    
-    def _get_recommended_sql_patterns(self, question_data: Dict[str, Any]) -> str:
-        """根据问题类型获取推荐的SQL模式"""
-        patterns = []
-        
-        # 检查问题文本中的关键词
-        question_text = question_data.get('question_text', '').lower()
-        
-        # 检查是否需要排名
-        if any(keyword in question_text for keyword in ['排名', '前n', 'top', '第几', '最高', '最低', '第一', '第二']):
-            patterns.append("- 排名分析: 使用 ROW_NUMBER() OVER (ORDER BY ...) 进行排名，不要使用@变量")
-            patterns.append("  示例: ROW_NUMBER() OVER (ORDER BY amount DESC) AS rank")
-        
-        # 检查是否需要分组排名
-        if any(keyword in question_text for keyword in ['每个', '各', '按', '分组', '各类', '各种']):
-            patterns.append("- 分组排名: 使用 PARTITION BY 进行分组排名")
-            patterns.append("  示例: RANK() OVER (PARTITION BY category ORDER BY value DESC)")
-        
-        # 检查是否需要累计
-        if any(keyword in question_text for keyword in ['累计', '累积', '总和', '汇总']):
-            patterns.append("- 累积计算: 使用窗口函数进行累积计算")
-            patterns.append("  示例: SUM(amount) OVER (ORDER BY date ROWS UNBOUNDED PRECEDING)")
-        
-        # 检查是否需要比例
-        if any(keyword in question_text for keyword in ['占比', '比例', '百分比', '份额']):
-            patterns.append("- 比例计算: 使用窗口函数计算占比")
-            patterns.append("  示例: amount / SUM(amount) OVER (PARTITION BY category) * 100")
-        
-        # 检查是否需要移动平均
-        if any(keyword in question_text for keyword in ['移动', '滑动', '近n', '最近']):
-            patterns.append("- 移动聚合: 使用 ROWS BETWEEN 子句")
-            patterns.append("  示例: AVG(value) OVER (ORDER BY date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW)")
-        
-        if patterns:
-            return f"推荐的SQL模式:\n" + '\n'.join(patterns)
-        else:
-            return ""
     
     def _postprocess_sql(self, sql: str, dialect: str) -> str:
         """后处理SQL语句 - 增强版：彻底清理Markdown标记"""
