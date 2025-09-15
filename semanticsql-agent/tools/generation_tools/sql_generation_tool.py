@@ -14,6 +14,7 @@ from models.exceptions import ToolExecutionError, LLMException, raise_tool_error
 from prompts.manager import PromptManager
 from utils.database import DatabaseManager
 from utils.memory import Neo4jMemoryManager
+from utils.sql_logger import log_sql_activity
 from config.settings import get_settings
 from config.factories import ComponentManager
 from ..base_tool import BaseSemanticSQLTool
@@ -590,13 +591,36 @@ class SQLGenerationTool(BaseSemanticSQLTool):
         
         # 4. 执行SQL（如果需要）
         execution_result = None
+        execution_error = None
         if execute_sql and self.database_manager:
-            execution_result = self._execute_sql_safely(sql, database_name)
+            try:
+                execution_result = self._execute_sql_safely(sql, database_name)
+                if execution_result is None:
+                    execution_error = "SQL execution failed - see database logs for details"
+            except Exception as e:
+                execution_error = str(e)
+                self.logger.error(f"SQL执行异常: {e}")
         
-        # 5. 存储结果到Neo4j
+        # 5. 记录SQL生成活动到本地日志
+        try:
+            log_sql_activity(
+                question_id=question_id,
+                question_text=question_data.get('question_text', ''),
+                database_name=database_name,
+                generated_sql=sql,
+                execution_result=execution_result,
+                execution_error=execution_error,
+                dialect=dialect,
+                context_tables=len(context.get('tables', [])),
+                context_columns=len(context.get('columns', []))
+            )
+        except Exception as e:
+            self.logger.warning(f"SQL活动日志记录失败: {e}")
+        
+        # 6. 存储结果到Neo4j
         self._store_sql_result_to_neo4j(question_id, sql, execution_result, dialect)
         
-        # 6. 构建结果
+        # 7. 构建结果
         return {
             "question_id": question_id,
             "question_text": question_data.get('question_text', ''),
