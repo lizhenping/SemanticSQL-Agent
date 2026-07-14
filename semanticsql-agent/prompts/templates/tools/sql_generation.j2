@@ -1,0 +1,199 @@
+## 任务
+基于详细的问题分析和数据库结构信息，生成精确的SQL查询。
+针对合同金额的数值类型，
+总金额，单位万元(注意，一亿元=10000万元,1万元=10000元)
+
+## 问题信息
+**问题**: {{ question }}
+{% if question_focus %}**关注点**: {{ question_focus }}{% endif %}
+{% if expected_output %}**期望输出**: {{ expected_output }}{% endif %}
+
+## 详细分析上下文
+{{ context }}
+
+{% if join_relationships and join_relationships|length > 0 %}
+## 可用的表连接关系（重要 - 只能使用这些关系）
+{% for rel in join_relationships %}
+- **{{ rel.from_table }} ⟷ {{ rel.to_table }}**: 使用 `{{ rel.from_table }}.{{ rel.column_name }} = {{ rel.to_table }}.{{ rel.column_name }}`
+{% endfor %}
+
+### JOIN规则
+- **严格限制**: 只能使用上述列出的连接关系
+- **禁止假设**: 不要假设任何未列出的列可以用于JOIN
+- **列必须存在**: 确保JOIN中使用的列在对应表中实际存在
+
+{% endif %}
+
+{% if business_rules and business_rules|length > 0 %}
+## 业务规则说明
+{% for rule in business_rules %}
+**{{ rule.get("concept", "") }}** ({{ rule.get("type", "") }}):
+- 定义: {{ rule.get("definition", "") }}
+{% set sm = rule.get("sql_mapping", {}) %}
+{% if sm %}
+- SQL映射: {{ sm.get("condition", "") }}
+- 涉及表: {{ sm.get("tables", []) | join(', ') }}
+- 涉及列: {{ sm.get("columns", []) | join(', ') }}
+{% endif %}
+
+{% endfor %}
+{% endif %}
+
+## 配置要求
+- **SQL方言**: {{ dialect }}
+- **数据库类型**: MySQL
+- **MySQL版本**: 8.0或更高版本（支持窗口函数）
+- **结果限制**: 自动添加合理的LIMIT子句
+- **性能考虑**: 优先使用索引字段进行连接和过滤
+
+## 禁止和推荐的SQL模式
+
+### ❌ 禁止使用（会导致执行错误）
+- **MySQL变量**: 不要使用 `@variable := value` 语法
+- **会话变量**: 不要使用 `@row_num` 等变量进行排名
+- **SET语句**: 不要在查询中使用SET初始化变量
+- **PostgreSQL函数**: 不要使用 `DATE_TRUNC`、`ARRAY_AGG`、`STRING_AGG`等
+- **Oracle函数**: 不要使用 `ROWNUM`、`CONNECT BY`、`LISTAGG`等
+- **SQL Server函数**: 不要使用 `DATEPART`、`STUFF`、`STRING_SPLIT`等
+- **GROUP BY扩展**: 不要使用 `WITH CUBE`，MySQL仅支持 `WITH ROLLUP`
+- **ORDER BY扩展**: 不要使用 `NULLS FIRST`、`NULLS LAST`
+- **FULL OUTER JOIN**: MySQL不支持，使用LEFT JOIN + UNION + RIGHT JOIN组合
+- **集合操作**: 不要使用 `INTERSECT`、`EXCEPT`，使用JOIN或EXISTS替代
+
+### ✅ 推荐使用（现代SQL特性）
+- **窗口函数排名**: 使用 `ROW_NUMBER() OVER (ORDER BY column)`
+- **分组排名**: 使用 `RANK() OVER (PARTITION BY group ORDER BY value)`
+- **CTE**: 使用 `WITH cte_name AS (...)` 组织复杂查询
+- **标准聚合**: 使用标准GROUP BY而非变量累加
+- **MySQL日期函数**: 
+  - 按季度分组: `QUARTER(date_column)` 或 `CONCAT(YEAR(date), '-Q', QUARTER(date))`
+  - 按月分组: `DATE_FORMAT(date, '%Y-%m')`
+  - 按年分组: `YEAR(date_column)`
+
+### 示例对比
+❌ 错误: SELECT @row_num := @row_num + 1 AS rank, name FROM table
+✅ 正确: SELECT ROW_NUMBER() OVER (ORDER BY name) AS rank, name FROM table
+
+❌ 错误: SELECT DATE_TRUNC('quarter', date_column) AS quarter
+✅ 正确: SELECT CONCAT(YEAR(date_column), '-Q', QUARTER(date_column)) AS quarter
+
+❌ 错误: GROUP BY column1, column2 WITH CUBE
+✅ 正确: GROUP BY column1, column2 WITH ROLLUP
+
+❌ 错误: ORDER BY column_name NULLS LAST
+✅ 正确: ORDER BY CASE WHEN column_name IS NULL THEN 1 ELSE 0 END, column_name
+
+❌ 错误: SELECT * FROM table1 FULL OUTER JOIN table2 ON table1.id = table2.id
+✅ 正确: SELECT * FROM table1 LEFT JOIN table2 ON table1.id = table2.id
+         UNION
+         SELECT * FROM table1 RIGHT JOIN table2 ON table1.id = table2.id WHERE table1.id IS NULL
+
+❌ 错误: SELECT col FROM table1 INTERSECT SELECT col FROM table2
+✅ 正确: SELECT DISTINCT t1.col FROM table1 t1 WHERE EXISTS (SELECT 1 FROM table2 t2 WHERE t1.col = t2.col)
+
+{% set question_lower = question.lower() %}
+
+{% if '排名' in question_lower or '前n' in question_lower or 'top' in question_lower or '第几' in question_lower or '最高' in question_lower or '最低' in question_lower or '第一' in question_lower or '第二' in question_lower %}
+## 🎯 排名分析建议
+- **窗口函数排名**: 使用 `ROW_NUMBER() OVER (ORDER BY column)` 进行排名，不要使用@变量
+- **示例**: `SELECT *, ROW_NUMBER() OVER (ORDER BY amount DESC) AS rank FROM table`
+{% endif %}
+
+{% if '每个' in question_lower or '各' in question_lower or '按' in question_lower or '分组' in question_lower or '各类' in question_lower or '各种' in question_lower %}
+## 🎯 分组排名建议  
+- **分组排名**: 使用 `PARTITION BY` 进行分组排名
+- **示例**: `RANK() OVER (PARTITION BY category ORDER BY value DESC)`
+{% endif %}
+
+{% if '累计' in question_lower or '累积' in question_lower or '总和' in question_lower or '汇总' in question_lower %}
+## 🎯 累积计算建议
+- **累积计算**: 使用窗口函数进行累积计算  
+- **示例**: `SUM(amount) OVER (ORDER BY date ROWS UNBOUNDED PRECEDING)`
+{% endif %}
+
+{% if '占比' in question_lower or '比例' in question_lower or '百分比' in question_lower or '份额' in question_lower %}
+## 🎯 比例计算建议
+- **比例计算**: 使用窗口函数计算占比
+- **示例**: `amount / SUM(amount) OVER (PARTITION BY category) * 100`
+{% endif %}
+
+{% if '移动' in question_lower or '滑动' in question_lower or '近n' in question_lower or '最近' in question_lower %}
+## 🎯 移动聚合建议
+- **移动聚合**: 使用 `ROWS BETWEEN` 子句
+- **示例**: `AVG(value) OVER (ORDER BY date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW)`
+{% endif %}
+
+## SQL生成指导原则
+
+### 1. 表和列选择
+- **严格按照分析结果**: 只使用分析中明确指定的表和列
+- **遵循操作目的**: 每个表和列的使用都要符合分析中说明的操作目的
+- **维护数据完整性**: 确保JOIN条件正确，避免数据重复或丢失
+
+### 2. SQL结构设计
+- **FROM子句**: 以分析中指定的主表开始
+- **JOIN策略**: 根据分析中的连接目的选择适当的JOIN类型
+- **WHERE条件**: 严格按照业务规则中的条件逻辑
+- **GROUP BY**: 当分析中指定分组操作时使用
+- **ORDER BY**: 按照分析中的排序要求
+- **聚合函数**: 根据分析中的聚合操作需求
+
+### 3. 性能优化
+- **索引利用**: 优先在主键和外键上进行连接
+- **条件顺序**: 将选择性高的条件放在前面
+- **子查询优化**: 合理使用EXISTS而非IN (当适用时)
+- **LIMIT控制**: 添加合理的LIMIT以避免过大结果集
+
+### 4. 方言特定要求 ({{ dialect }})
+- **字段引用**: 使用反引号包围字段名 `field_name`
+- **字符串**: 使用单引号包围字符串值
+- **日期函数**: 使用MySQL标准日期函数
+- **类型转换**: 使用CAST或CONVERT函数
+- **窗口函数**: 使用标准窗口函数语法（MySQL 8.0+）
+  - ROW_NUMBER() OVER (ORDER BY ...)
+  - RANK() OVER (PARTITION BY ... ORDER BY ...)
+  - DENSE_RANK() OVER (...)
+  - SUM() OVER (PARTITION BY ... ORDER BY ... ROWS BETWEEN ...)
+
+### 5. MySQL特定语法要求
+- **NULL值排序**: 使用 `CASE WHEN column IS NULL THEN 1 ELSE 0 END` 控制NULL值位置
+- **分组汇总**: 使用 `WITH ROLLUP` 而非 `WITH CUBE`
+- **多表连接**: 避免FULL OUTER JOIN，使用LEFT/RIGHT JOIN组合
+- **集合操作**: 使用JOIN、EXISTS、UNION替代INTERSECT/EXCEPT
+
+## 输出要求
+请严格按照以下 JSON 格式返回结果（包含 SQL 查询和结构化推理理由）：
+
+```json
+{
+  "sql": "完整的 SQL 语句（以分号结尾）",
+  "rationale": {
+    "focus": "本查询的核心关注点（一句话）",
+    "table_selection": {
+      "tables_used": ["实际用到的表名"],
+      "reasoning": "为什么选择这些表（一句话）"
+    },
+    "column_selection": {
+      "columns_used": [
+        {
+          "name": "列名（不含表名前缀）",
+          "type": "数据类型",
+          "operation": "该列的 SQL 操作（SELECT / WHERE / GROUP BY / ORDER BY / AGG 等）",
+          "purpose": "为什么用这列（一句话）"
+        }
+      ]
+    },
+    "sql_strategy": {
+      "operations": ["SELECT", "ORDER BY DESC", "LIMIT"],
+      "approach": "整体查询策略描述（一句话）",
+      "no_need": ["不需要的操作，如 JOIN / GROUP BY / MAX()"]
+    },
+    "expected_output": "期望返回什么样的结果（一句话）"
+  }
+}
+```
+
+注意：
+- `sql` 必须是语法正确、可直接执行的 SQL
+- `rationale` 必须如实反映 SQL 的设计思路，不能编造
+- 只返回上述 JSON，不要输出其他内容

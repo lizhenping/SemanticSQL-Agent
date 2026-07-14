@@ -1,0 +1,21 @@
+# 不要把数据集（35GB）和输出打进构建上下文
+数据集/
+output/
+history/
+
+# Python 缓存
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+
+# 环境与 IDE
+.env
+.git/
+.vscode/
+.idea/
+
+# 文档与论文（镜像里不需要）
+paper/
+*.pdf
+*.md
+!semanticsql-agent/README.md

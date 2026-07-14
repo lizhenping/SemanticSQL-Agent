@@ -1,0 +1,460 @@
+"""SemanticSQL Agent CLI（cli.py）
+
+命令行接口，固定三阶段流水线（论文 §III）的薄入口。
+不再走 ReAct agent 自由决策，直接编排 core.PipelineExecutor。
+
+命令 ↔ 论文阶段：
+  analyze        ↔  Phase 1 Analysis  (DA, K1..K6)        ✅
+  generate       ↔  Phase 2 Generation (DS, q/s/r 三元组)  ✅
+  diagnose       ↔  Phase 3 Diagnosis (DT, Eq.4 循环)     ✅
+  run            ↔  单库三阶段串联                        ✅
+  run-benchmark  ↔  一键跑整个 benchmark（自动跳过 test）  ✅
+  list-dbs       ↔  查看某 benchmark 可用 train 库         ✅
+
+数据库定位（与 datasets/README.md 一致）：
+  {DB_ROOT}/{benchmark}/databases/{database}/{database}.sqlite
+DB_ROOT 默认 datasets/（容器内由 docker-compose 设为 /data），可用 --db-root 覆盖。
+"""
+
+import json
+import logging
+import os
+import sys
+from pathlib import Path
+from typing import Optional
+
+import click
+
+from core.pipeline import PipelineExecutor
+
+
+# ----------------------------------------------------------------
+# 日志
+# ----------------------------------------------------------------
+def _setup_logging(debug: bool) -> None:
+    level = logging.DEBUG if debug else logging.INFO
+    handlers = [logging.StreamHandler()]
+    log_file = os.getenv("LOG_FILE")
+    if log_file:
+        from logging.handlers import RotatingFileHandler
+        handlers.append(RotatingFileHandler(
+            log_file, maxBytes=10 * 1024 * 1024,
+            backupCount=5, encoding="utf-8",
+        ))
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=handlers,
+    )
+
+
+# ----------------------------------------------------------------
+# 数据库路径解析
+# ----------------------------------------------------------------
+def _resolve_sqlite_path(
+    benchmark: Optional[str],
+    database: Optional[str],
+    sqlite: Optional[str],
+    db_root: str,
+    allow_eval: bool = False,
+) -> str:
+    """把 (benchmark, database) 或 --sqlite 解析成 sqlite 文件路径。
+
+    规则（见 数据集/README.md）：
+        {db_root}/{benchmark}/databases/{database}/{database}.sqlite
+
+    数据泄露防护：默认拒绝评估（dev/test）库。若 benchmark+database 命中
+    评估库黑名单，直接报错；传 allow_eval=True 可绕过（仅限调试，禁用于合成）。
+    """
+    if sqlite:
+        if not Path(sqlite).exists():
+            raise click.ClickException(f"sqlite 文件不存在: {sqlite}")
+        return sqlite
+
+    if not (benchmark and database):
+        raise click.ClickException(
+            "需要 --benchmark + --database，或直接 --sqlite 指定数据库文件"
+        )
+
+    # ⭐ 数据隔离：拒绝评估库用于合成（防 leakage）
+    if not allow_eval:
+        from infra.dataset_split import assert_train_only, DatasetSplitError
+        try:
+            assert_train_only(benchmark, database)
+        except DatasetSplitError as e:
+            raise click.ClickException(str(e))
+
+    path = Path(db_root) / benchmark / "databases" / database / f"{database}.sqlite"
+    if not path.exists():
+        raise click.ClickException(
+            f"数据库文件不存在: {path}\n"
+            f"检查 --db-root（当前: {db_root}）/ --benchmark / --database 是否正确"
+        )
+    return str(path)
+
+
+# ----------------------------------------------------------------
+# CLI 主组
+# ----------------------------------------------------------------
+@click.group()
+@click.version_option(version="0.4.0")
+def cli():
+    """SemanticSQL Agent — 知识引导的 Text-to-SQL 合成框架
+
+    固定三阶段流水线（论文 §III）：
+      Phase 1 Analysis → Phase 2 Generation → Phase 3 Diagnosis
+    """
+    pass
+
+
+@cli.command("list-dbs")
+@click.option("--benchmark", "-b", required=True, help="benchmark 名")
+@click.option("--db-root", default=os.getenv("SEMANTICSQL_DB_ROOT", "datasets"),
+              help="数据库根目录")
+def list_dbs(benchmark, db_root):
+    """列出某 benchmark 可用于合成的 train 库（排除 dev/test，防数据泄露）
+
+    \b
+    示例：
+      python cli.py list-dbs -b spider
+      python cli.py list-dbs -b bird
+    """
+    from infra.dataset_split import list_train_databases, EVAL_DBS
+    train_dbs = list_train_databases(benchmark, db_root)
+    eval_dbs = sorted(EVAL_DBS.get(benchmark, set()))
+    click.echo(f"📊 {benchmark} 可合成库（train，{len(train_dbs)} 个）：")
+    for db in train_dbs:
+        click.echo(f"  ✅ {db}")
+    if eval_dbs:
+        click.echo(f"\n🚫 评估库（dev/test，禁止合成，{len(eval_dbs)} 个）：")
+        for db in eval_dbs:
+            click.echo(f"  ⛔ {db}")
+
+
+# ----------------------------------------------------------------
+# Phase 1: analyze
+# ----------------------------------------------------------------
+@cli.command()
+@click.option("--benchmark", "-b", help="benchmark 名（spider/bird/spider2/ehrsql/science_benchmark）")
+@click.option("--database", "-d", help="数据库名（sqlite 文件的 stem）")
+@click.option("--sqlite", help="直接指定 .sqlite 文件路径（覆盖 benchmark+database）")
+@click.option("--db-root", default=os.getenv("SEMANTICSQL_DB_ROOT", "数据集"),
+              help="数据库根目录（默认: 数据集 或 $SEMANTICSQL_DB_ROOT）")
+@click.option("--history-dir", help="K 的 JSONL 落盘目录（默认: history/<database>）")
+@click.option("--summary", "-s", is_flag=True, help="额外打印 K1..K6 摘要")
+@click.option("--debug", is_flag=True, help="启用 DEBUG 日志")
+def analyze(benchmark, database, sqlite, db_root, history_dir, summary, debug):
+    """Phase 1 Analysis：抽取 K1..K6 知识库（论文 §III.C）
+
+    \b
+    示例：
+      python cli.py analyze -b spider -d concert_singer
+      python cli.py analyze --sqlite 数据集/bird/databases/financial/financial.sqlite
+    """
+    _setup_logging(debug)
+
+    sqlite_path = _resolve_sqlite_path(benchmark, database, sqlite, db_root)
+    db_name = Path(sqlite_path).stem
+    click.echo(f"📊 Phase 1 Analysis: {sqlite_path}")
+
+    pipeline = PipelineExecutor.for_sqlite(
+        sqlite_path=sqlite_path,
+        database_name=db_name,
+        benchmark=benchmark,
+        history_dir=history_dir,
+    )
+    kbase = pipeline.run_analysis()
+
+    _layer = f"{benchmark}/{db_name}" if benchmark else db_name
+    click.echo(f"✅ Phase 1 完成，知识库 K1..K6 已写入: history/{_layer}")
+    if summary:
+        for k, v in kbase.summary().items():
+            click.echo(f"   {k}: {v}")
+
+
+# ----------------------------------------------------------------
+# Phase 2: generate
+# ----------------------------------------------------------------
+@cli.command()
+@click.option("--benchmark", "-b", help="benchmark 名")
+@click.option("--database", "-d", help="数据库名")
+@click.option("--sqlite", help="直接指定 .sqlite 文件路径")
+@click.option("--db-root", default=os.getenv("SEMANTICSQL_DB_ROOT", "datasets"),
+              help="数据库根目录")
+@click.option("--count", "-n", default=10, type=int, help="合成样本数")
+@click.option("--output", "-o", help="输出 JSONL 路径（默认: history/<db>/training_data.jsonl）")
+@click.option("--reuse-knowledge", is_flag=True,
+              help="复用已有 K1..K6（跳过 Phase 1，要求 history 目录已有知识库）")
+@click.option("--debug", is_flag=True, help="启用 DEBUG 日志")
+def generate(benchmark, database, sqlite, db_root, count, output, reuse_knowledge, debug):
+    """Phase 2 Generation：合成 (q, s, r) 训练三元组（论文 §III.D）
+
+    \b
+    示例：
+      python cli.py generate -b spider -d concert_singer -n 50
+      python cli.py generate --reuse-knowledge -d concert_singer -n 50  # 跳过 Phase 1
+    """
+    _setup_logging(debug)
+
+    sqlite_path = _resolve_sqlite_path(benchmark, database, sqlite, db_root)
+    db_name = Path(sqlite_path).stem
+
+    pipeline = PipelineExecutor.for_sqlite(
+        sqlite_path=sqlite_path, database_name=db_name, benchmark=benchmark,
+    )
+
+    # Phase 1：抽取知识库（除非 --reuse-knowledge 且已有）
+    if reuse_knowledge:
+        click.echo(f"♻️  复用已有 K1..K6（跳过 Phase 1）")
+    else:
+        click.echo("▶ Phase 1 Analysis ...")
+        pipeline.run_analysis()
+
+    # Phase 2：合成三元组
+    click.echo(f"▶ Phase 2 Generation（n={count}）...")
+    triples = pipeline.run_generation(count=count)
+
+    # 导出训练数据 JSONL（论文 Fig.training_data_format）
+    _layer = f"{benchmark}/{db_name}" if benchmark else db_name
+    out_path = output or f"history/{_layer}/training_data.jsonl"
+    _save_triples(triples, out_path)
+
+    ok = sum(1 for t in triples if t.sql_result.execution_success)
+    click.echo(
+        f"✅ 完成：{len(triples)} 条三元组（{ok} 条 SQL 执行通过）→ {out_path}"
+    )
+
+
+# ----------------------------------------------------------------
+# Phase 3: diagnose
+# ----------------------------------------------------------------
+@cli.command()
+@click.option("--input", "-i", required=True, help="待诊断的训练数据 JSONL（Phase 2 产物）")
+@click.option("--benchmark", "-b", help="benchmark 名")
+@click.option("--database", "-d", help="数据库名")
+@click.option("--sqlite", help="直接指定 .sqlite 文件路径")
+@click.option("--db-root", default=os.getenv("SEMANTICSQL_DB_ROOT", "datasets"),
+              help="数据库根目录")
+@click.option("--output", "-o", help="修正后输出路径（默认: <input>.corrected.jsonl）")
+@click.option("--max-iters", default=3, type=int, help="Eq.4 修正循环最大迭代")
+@click.option("--debug", is_flag=True, help="启用 DEBUG 日志")
+def diagnose(input, benchmark, database, sqlite, db_root, output, max_iters, debug):
+    """Phase 3 Diagnosis：Diagnose→Retrieve→Correct 循环（论文 §III.E, Eq.4）
+
+    复用已有 K1..K6 知识库 + 已有 Phase 2 三元组，只跑 Phase 3 修正。
+
+    \b
+    示例：
+      # 先跑过 generate 产出 training_data.jsonl，再诊断
+      python cli.py diagnose -d concert_singer -i history/concert_singer/training_data.jsonl
+    """
+    _setup_logging(debug)
+
+    sqlite_path = _resolve_sqlite_path(benchmark, database, sqlite, db_root)
+    db_name = Path(sqlite_path).stem
+
+    pipeline = PipelineExecutor.for_sqlite(
+        sqlite_path=sqlite_path, database_name=db_name, benchmark=benchmark,
+    )
+
+    # 加载 Phase 2 产出的 triples
+    from models.synthesis import Triple, Question, SQLResult, Rationale
+    triples = _load_triples(input)
+    if not triples:
+        click.echo(f"❌ 未从 {input} 加载到任何样本，请先运行 generate")
+        sys.exit(1)
+    click.echo(f"📖 加载 {len(triples)} 条待诊断样本")
+
+    # Phase 3：Eq.4 循环
+    click.echo(f"▶ Phase 3 Diagnosis（max_iters={max_iters}）...")
+    refined = pipeline.run_diagnosis(triples, max_iters=max_iters)
+
+    out_path = output or (str(Path(input).with_suffix("")) + ".corrected.jsonl")
+    _save_triples(refined, out_path)
+
+    ok = sum(1 for t in refined if t.sql_result.execution_success)
+    corrected = sum(1 for t in refined if t.rationale.correction_history)
+    click.echo(
+        f"✅ 完成：{ok}/{len(refined)} 条 SQL 执行通过，"
+        f"{corrected} 条经修正 → {out_path}"
+    )
+
+
+# ----------------------------------------------------------------
+# 全流程: run
+# ----------------------------------------------------------------
+@cli.command()
+@click.option("--benchmark", "-b", help="benchmark 名")
+@click.option("--database", "-d", help="数据库名")
+@click.option("--sqlite", help="直接指定 .sqlite 文件路径")
+@click.option("--db-root", default=os.getenv("SEMANTICSQL_DB_ROOT", "datasets"),
+              help="数据库根目录")
+@click.option("--count", "-n", default=10, type=int, help="合成样本数")
+@click.option("--max-iters", default=3, type=int, help="Phase 3 Eq.4 修正循环最大迭代")
+@click.option("--output", "-o", help="最终训练数据 JSONL 路径")
+@click.option("--debug", is_flag=True, help="启用 DEBUG 日志")
+def run(benchmark, database, sqlite, db_root, count, max_iters, output, debug):
+    """三阶段全流程：Analysis → Generation → Diagnosis
+
+    \b
+    示例：
+      python cli.py run -b spider -d concert_singer -n 100
+    """
+    _setup_logging(debug)
+
+    sqlite_path = _resolve_sqlite_path(benchmark, database, sqlite, db_root)
+    db_name = Path(sqlite_path).stem
+    click.echo(f"▶ run: {sqlite_path}")
+
+    pipeline = PipelineExecutor.for_sqlite(
+        sqlite_path=sqlite_path, database_name=db_name, benchmark=benchmark,
+    )
+
+    click.echo("▶ Phase 1 Analysis ...")
+    pipeline.run_analysis()
+    click.echo("✅ Phase 1 完成")
+
+    click.echo(f"▶ Phase 2 Generation（n={count}）...")
+    triples = pipeline.run_generation(count=count)
+    click.echo(f"✅ Phase 2 完成（{len(triples)} 条）")
+
+    click.echo(f"▶ Phase 3 Diagnosis（max_iters={max_iters}）...")
+    triples = pipeline.run_diagnosis(triples, max_iters=max_iters)
+
+    _layer = f"{benchmark}/{db_name}" if benchmark else db_name
+    out_path = output or f"history/{_layer}/training_data.jsonl"
+    _save_triples(triples, out_path)
+    ok = sum(1 for t in triples if t.sql_result.execution_success)
+    click.echo(f"✅ 完成：{len(triples)} 条（{ok} 条执行通过）→ {out_path}")
+
+
+# ----------------------------------------------------------------
+# 批量：run-benchmark（一键跑整个 benchmark 的所有 train 库）
+# ----------------------------------------------------------------
+@cli.command("run-benchmark")
+@click.option("--benchmark", "-b", required=True, help="benchmark 名（spider/bird/spider2/ehrsql/science_benchmark）")
+@click.option("--count", "-n", default=10, type=int, help="每个库合成样本数")
+@click.option("--max-iters", default=3, type=int, help="Phase 3 Eq.4 修正循环最大迭代")
+@click.option("--db-root", default=os.getenv("SEMANTICSQL_DB_ROOT", "datasets"),
+              help="数据库根目录")
+@click.option("--limit", type=int, help="只跑前 N 个库（调试用，不传则跑全部）")
+@click.option("--debug", is_flag=True, help="启用 DEBUG 日志")
+def run_benchmark(benchmark, count, max_iters, db_root, limit, debug):
+    """一键跑整个 benchmark：自动遍历所有 train 库，跳过 dev/test（防泄露）
+
+    自动完成：扫描 {db_root}/{benchmark}/databases/ → 排除评估库 →
+    逐库执行三阶段（Analysis→Generation→Diagnosis）→ 产物存到
+    data-assets/{benchmark}/{database}/。
+
+    \b
+    示例：
+      # 跑 bird 全部 train 库，每库 50 条
+      python cli.py run-benchmark -b bird -n 50
+
+      # 调试：只跑前 2 个库
+      python cli.py run-benchmark -b spider -n 5 --limit 2
+    """
+    _setup_logging(debug)
+    from infra.dataset_split import list_train_databases
+
+    train_dbs = list_train_databases(benchmark, db_root)
+    if not train_dbs:
+        click.echo(f"❌ {benchmark} 没有可用的 train 库（检查 datasets/{benchmark}/databases/ 是否存在）")
+        sys.exit(1)
+
+    if limit:
+        train_dbs = train_dbs[:limit]
+
+    click.echo(f"🚀 run-benchmark: {benchmark}，{len(train_dbs)} 个 train 库，每库 {count} 条")
+    click.echo(f"📁 产物存到 data-assets/{benchmark}/<database>/")
+    click.echo(f"🛡️  已自动排除 dev/test 评估库（防数据泄露）")
+    click.echo(f"🔄 断点续跑：已有产物的库自动跳过，中断后重跑会从未完成的库继续")
+    click.echo("")
+
+    total_triples = 0
+    total_ok = 0
+    failed_dbs = []
+    skipped_dbs = []
+    for i, db_name in enumerate(train_dbs, 1):
+        # 断点续跑：检查产物是否已存在且非空
+        out_path = f"history/{benchmark}/{db_name}/training_data.jsonl"
+        if Path(out_path).exists() and Path(out_path).stat().st_size > 0:
+            click.echo(f"[{i}/{len(train_dbs)}] {benchmark}/{db_name} ... ⏭️  跳过（已有产物）")
+            skipped_dbs.append(db_name)
+            continue
+
+        sqlite_path = str(Path(db_root) / benchmark / "databases" / db_name / f"{db_name}.sqlite")
+        click.echo(f"[{i}/{len(train_dbs)}] {benchmark}/{db_name} ...")
+
+        try:
+            pipeline = PipelineExecutor.for_sqlite(
+                sqlite_path=sqlite_path,
+                database_name=db_name,
+                benchmark=benchmark,
+            )
+            pipeline.run_analysis()
+            triples = pipeline.run_generation(count=count)
+            triples = pipeline.run_diagnosis(triples, max_iters=max_iters)
+
+            # 导出该库的 training_data.jsonl
+            out_path = f"history/{benchmark}/{db_name}/training_data.jsonl"
+            _save_triples(triples, out_path)
+
+            ok = sum(1 for t in triples if t.sql_result.execution_success)
+            total_triples += len(triples)
+            total_ok += ok
+            click.echo(f"  ✅ {len(triples)} 条（{ok} 执行通过）")
+        except Exception as e:
+            click.echo(f"  ❌ 失败: {e}")
+            failed_dbs.append(db_name)
+
+    click.echo("")
+    click.echo(f"📊 汇总：{len(train_dbs)} 库"
+               f"（新跑 {len(train_dbs) - len(skipped_dbs) - len(failed_dbs)},"
+               f" 跳过 {len(skipped_dbs)}, 失败 {len(failed_dbs)}）"
+               f"，共 {total_triples} 条（{total_ok} 执行通过）")
+    if failed_dbs:
+        click.echo(f"⚠️  失败的库: {', '.join(failed_dbs)}")
+
+
+# ----------------------------------------------------------------
+# 工具：加载/保存训练数据
+# ----------------------------------------------------------------
+def _load_triples(input_path: str) -> list:
+    """从 Phase 2 产出的 JSONL 重建 list[Triple]（供 diagnose 命令用）"""
+    from models.synthesis import Triple, Question, SQLResult, Rationale
+    path = Path(input_path)
+    if not path.exists():
+        return []
+    triples = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            q = Question(
+                question_id=rec.get("question_id", ""),
+                text=rec.get("question", ""),
+            )
+            s = SQLResult(sql=rec.get("answer", rec.get("sql", "")))
+            triples.append(Triple(question=q, sql_result=s))
+    return triples
+def _save_triples(triples: list, output: str) -> None:
+    """把 list[Triple] 写成 JSONL（论文 Fig.training_data_format）"""
+    Path(output).parent.mkdir(parents=True, exist_ok=True)
+    # 延迟导入，避免 Phase 2 未迁移时 cli import 失败
+    from models.synthesis import Triple
+    with open(output, "w", encoding="utf-8") as f:
+        for t in triples:
+            if isinstance(t, Triple):
+                f.write(json.dumps(t.to_training_record(), ensure_ascii=False) + "\n")
+            else:
+                f.write(json.dumps(t, ensure_ascii=False) + "\n")
+
+
+if __name__ == "__main__":
+    cli()

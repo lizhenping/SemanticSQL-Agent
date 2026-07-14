@@ -1,0 +1,24 @@
+services:
+  semanticsql:
+    # 优先用阿里云 ACR 镜像（docker compose pull 自动拉取）
+    # 本地开发可注释 image 行、保留 build 行从源码构建
+    image: crpi-h14b49yx0jj9g6su.cn-beijing.personal.cr.aliyuncs.com/lizhenping/paper:latest
+    build: .
+    container_name: semanticsql-agent
+    volumes:
+      # 数据集只读挂载（相对 docker-compose.yml 所在目录，可移植）
+      - ./datasets:/data:ro
+      # 生成产物持久化（data-assets/ 与 docker-compose.yml 同级，被 gitignore）
+      - ./data-assets:/app/history
+    environment:
+      # DeepSeek 配置
+      SEMANTICSQL_LLM_MODEL: deepseek-v4-flash
+      SEMANTICSQL_LLM_BASE_URL: https://api.deepseek.com
+      SEMANTICSQL_LLM_API_KEY: ${DEEPSEEK_API_KEY}
+      SEMANTICSQL_LLM_TEMPERATURE: "0.1"
+      SEMANTICSQL_LLM_MAX_TOKENS: "8000"
+      # 数据库根目录指向挂载的数据集
+      SEMANTICSQL_DB_TYPE: sqlite
+      SEMANTICSQL_DB_ROOT: /data
+    # 默认跑 help；实际命令用 docker compose run 传参
+    command: ["--help"]
