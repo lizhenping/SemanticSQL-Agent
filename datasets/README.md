@@ -10,8 +10,11 @@ Section §IV.A of the paper uses **8 benchmarks** in total. This directory holds
 
 All datasets are packaged as `data.tar` and uploaded to Alibaba Cloud Drive:
 
+- **Link**: https://www.alipan.com/s/KL9QnhGA6qZ
+- **Extraction code**: `l6c4`
+
 ```bash
-# 1. Download data.tar from Alibaba Cloud Drive
+# 1. Open the link above, enter the extraction code l6c4, and download data.tar
 # 2. Extract it to the project root
 tar xf data.tar -C .
 # You will get a datasets/ directory containing 5 benchmarks (~35 GB)
