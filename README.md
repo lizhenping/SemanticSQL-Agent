@@ -261,7 +261,7 @@ Enforced by `infra/dataset_split.py` (`assert_train_only`). Any command (`run`, 
 
 ```bash
 $ python cli.py analyze -b spider -d concert_singer
-Error: 数据泄露防护：库 'concert_singer' 属于 spider 的评估集（dev/test），不能用于合成训练数据。
+Error: Data leakage prevention: database 'concert_singer' belongs to the spider evaluation set (dev/test) and cannot be used for synthetic training data.
 ```
 
 ---
