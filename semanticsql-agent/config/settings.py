@@ -51,6 +51,14 @@ def get_env_float(env_var: str, default: float) -> float:
         return default
 
 
+def get_env_bool(env_var: str, default: bool) -> bool:
+    """从环境变量获取布尔值（false/0/no/off 均视为 False，不区分大小写）"""
+    raw = os.getenv(env_var)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"false", "0", "no", "off"}
+
+
 class Settings(BaseModel):
     """Global application settings"""
 
@@ -85,6 +93,12 @@ class Settings(BaseModel):
     llm_max_tokens: int = Field(
         default=get_env_int("SEMANTICSQL_LLM_MAX_TOKENS", 8000),
         description="Maximum tokens for LLM",
+    )
+    llm_enable_thinking: bool = Field(
+        default=get_env_bool("SEMANTICSQL_LLM_ENABLE_THINKING", True),
+        description="Enable thinking mode for reasoning LLMs (e.g. Qwen3 on vLLM); "
+        "when False, sends chat_template_kwargs.enable_thinking=false to skip "
+        "reasoning output entirely",
     )
     llm_timeout: int = 1200
     llm_max_retries: int = 1

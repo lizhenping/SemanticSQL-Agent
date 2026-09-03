@@ -44,8 +44,16 @@ class ChatOpenAILLMClient:
         max_tokens: int = 8000,
         timeout: int = 1200,
         max_retries: int = 1,
+        enable_thinking: bool = True,
     ):
         from langchain_openai import ChatOpenAI
+
+        # 关闭思考模式：Qwen3 系列在 vLLM 上通过 chat_template_kwargs 控制，
+        # 请求体里直接省掉推理过程（比事后正则剥离更快、更省 token）。
+        # 思考模式开启时不传该字段，避免云端 OpenAI 兼容 API 拒绝未知参数。
+        extra_body = None
+        if not enable_thinking:
+            extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
 
         self._llm = ChatOpenAI(
             model=model,
@@ -55,6 +63,7 @@ class ChatOpenAILLMClient:
             max_tokens=max_tokens,
             timeout=timeout,
             max_retries=max_retries,
+            extra_body=extra_body,
         )
 
     def generate(self, prompt: str) -> str:
@@ -129,4 +138,5 @@ def create_llm_client(settings: Optional["Settings"] = None) -> LLMClient:
         max_tokens=settings.llm_max_tokens,
         timeout=settings.llm_timeout,
         max_retries=settings.llm_max_retries,
+        enable_thinking=settings.llm_enable_thinking,
     )

@@ -14,6 +14,8 @@ services:
       SEMANTICSQL_LLM_API_KEY: ${OPENAI_API_KEY:?请在 .env 中设置 OPENAI_API_KEY}
       SEMANTICSQL_LLM_TEMPERATURE: ${OPENAI_TEMPERATURE:-0.1}
       SEMANTICSQL_LLM_MAX_TOKENS: ${OPENAI_MAX_TOKENS:-8000}
+      # 思考模式开关（Qwen3 系思考模型可关掉推理输出，省 token 提速）
+      SEMANTICSQL_LLM_ENABLE_THINKING: ${OPENAI_ENABLE_THINKING:-true}
       # 数据库根目录指向挂载的数据集
       SEMANTICSQL_DB_TYPE: sqlite
       SEMANTICSQL_DB_ROOT: /data

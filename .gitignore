@@ -194,3 +194,7 @@ trae_config.yaml
 # VS Code settings
 .vscode/
 !.vscode/launch.template.json
+
+# SSH 隧道代理（含明文密码与本地依赖，禁止进 git）
+ssh-proxy/
+node_modules/
