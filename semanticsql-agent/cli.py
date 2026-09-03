@@ -132,6 +132,67 @@ def list_dbs(benchmark, db_root):
 
 
 # ----------------------------------------------------------------
+# 审计：audit-summary
+# ----------------------------------------------------------------
+@cli.command("audit-summary")
+@click.option("--history-dir", required=True,
+              help="包含 diagnosis_trace.jsonl 的单库产物目录")
+def audit_summary(history_dir):
+    """汇总 Phase 3 的准入裁决、错误分类和修正结果（不调用模型）。"""
+    trace_path = Path(history_dir) / "diagnosis_trace.jsonl"
+    if not trace_path.exists():
+        raise click.ClickException(f"未找到诊断轨迹: {trace_path}")
+
+    traces = []
+    with open(trace_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                traces.append(json.loads(line))
+    if not traces:
+        click.echo("没有可汇总的诊断记录")
+        return
+
+    from collections import Counter
+    decisions = Counter(t.get("decision", "unresolved") for t in traces)
+    error_types = Counter()
+    categories = Counter()
+    detectors = Counter()
+    corrected = 0
+    for trace in traces:
+        iterations = trace.get("iterations", [])
+        if any(item.get("action") == "corrected" for item in iterations):
+            corrected += 1
+        for item in iterations:
+            for error in item.get("errors", []):
+                error_types[error.get("type", "unknown")] += 1
+                categories[error.get("category", "unknown")] += 1
+                detectors[error.get("detector", "unknown")] += 1
+
+    total = len(traces)
+    click.echo(f"样本数: {total}")
+    click.echo(
+        "准入裁决: " + ", ".join(
+            f"{name}={decisions[name]} ({decisions[name] / total:.1%})"
+            for name in ("accepted", "rejected", "unresolved")
+        )
+    )
+    click.echo(f"曾进入修正: {corrected} ({corrected / total:.1%})")
+    if categories:
+        click.echo("错误边界: " + ", ".join(
+            f"{name}={count}" for name, count in sorted(categories.items())
+        ))
+    if detectors:
+        click.echo("检测来源: " + ", ".join(
+            f"{name}={count}" for name, count in sorted(detectors.items())
+        ))
+    if error_types:
+        click.echo("错误类型:")
+        for name, count in error_types.most_common():
+            click.echo(f"  {name}: {count}")
+
+
+# ----------------------------------------------------------------
 # Phase 1: analyze
 # ----------------------------------------------------------------
 @cli.command()
@@ -270,12 +331,13 @@ def diagnose(input, benchmark, database, sqlite, db_root, output, max_iters, deb
     refined = pipeline.run_diagnosis(triples, max_iters=max_iters)
 
     out_path = output or (str(Path(input).with_suffix("")) + ".corrected.jsonl")
-    _save_triples(refined, out_path)
+    _save_triples(refined, out_path, accepted_only=True)
 
     ok = sum(1 for t in refined if t.sql_result.execution_success)
+    accepted = sum(1 for t in refined if t.rationale.admission_decision == "accepted")
     corrected = sum(1 for t in refined if t.rationale.correction_history)
     click.echo(
-        f"✅ 完成：{ok}/{len(refined)} 条 SQL 执行通过，"
+        f"✅ 完成：{accepted}/{len(refined)} 条通过训练准入（{ok} 条 SQL 执行通过），"
         f"{corrected} 条经修正 → {out_path}"
     )
 
@@ -323,9 +385,10 @@ def run(benchmark, database, sqlite, db_root, count, max_iters, output, debug):
 
     _layer = f"{benchmark}/{db_name}" if benchmark else db_name
     out_path = output or f"history/{_layer}/training_data.jsonl"
-    _save_triples(triples, out_path)
+    _save_triples(triples, out_path, accepted_only=True)
     ok = sum(1 for t in triples if t.sql_result.execution_success)
-    click.echo(f"✅ 完成：{len(triples)} 条（{ok} 条执行通过）→ {out_path}")
+    accepted = sum(1 for t in triples if t.rationale.admission_decision == "accepted")
+    click.echo(f"✅ 完成：{accepted}/{len(triples)} 条通过训练准入（{ok} 条执行通过）→ {out_path}")
 
 
 # ----------------------------------------------------------------
@@ -398,12 +461,13 @@ def run_benchmark(benchmark, count, max_iters, db_root, limit, debug):
 
             # 导出该库的 training_data.jsonl
             out_path = f"history/{benchmark}/{db_name}/training_data.jsonl"
-            _save_triples(triples, out_path)
+            _save_triples(triples, out_path, accepted_only=True)
 
             ok = sum(1 for t in triples if t.sql_result.execution_success)
+            accepted = sum(1 for t in triples if t.rationale.admission_decision == "accepted")
             total_triples += len(triples)
             total_ok += ok
-            click.echo(f"  ✅ {len(triples)} 条（{ok} 执行通过）")
+            click.echo(f"  ✅ {accepted}/{len(triples)} 条通过训练准入（{ok} 执行通过）")
         except Exception as e:
             click.echo(f"  ❌ 失败: {e}")
             failed_dbs.append(db_name)
@@ -443,14 +507,16 @@ def _load_triples(input_path: str) -> list:
             s = SQLResult(sql=rec.get("answer", rec.get("sql", "")))
             triples.append(Triple(question=q, sql_result=s))
     return triples
-def _save_triples(triples: list, output: str) -> None:
-    """把 list[Triple] 写成 JSONL（论文 Fig.training_data_format）"""
+def _save_triples(triples: list, output: str, accepted_only: bool = False) -> None:
+    """把 list[Triple] 写成 JSONL；训练导出仅接收已通过准入的样本。"""
     Path(output).parent.mkdir(parents=True, exist_ok=True)
     # 延迟导入，避免 Phase 2 未迁移时 cli import 失败
     from models.synthesis import Triple
     with open(output, "w", encoding="utf-8") as f:
         for t in triples:
             if isinstance(t, Triple):
+                if accepted_only and t.rationale.admission_decision != "accepted":
+                    continue
                 f.write(json.dumps(t.to_training_record(), ensure_ascii=False) + "\n")
             else:
                 f.write(json.dumps(t, ensure_ascii=False) + "\n")

@@ -299,10 +299,14 @@ class PipelineExecutor:
         )
 
         refined: list = []
+        traces: list = []
         for i, triple in enumerate(triples, 1):
             try:
-                result = self._eq4_loop(triple, diagnose_tool, correct_tool, max_iters)
+                result, trace = self._eq4_loop(
+                    triple, diagnose_tool, correct_tool, max_iters
+                )
                 refined.append(result)
+                traces.append(trace)
                 n_corr = len(result.rationale.correction_history)
                 ok = result.sql_result.execution_success
                 self.logger.info(
@@ -314,10 +318,11 @@ class PipelineExecutor:
                     f"  [{i}/{len(triples)}] {triple.question_id} 诊断失败: {e}"
                 )
                 refined.append(triple)  # 失败则保留原样
+                traces.append(self._failed_trace(triple, max_iters, str(e)))
 
         # 落盘修正后的 sql（覆盖 Phase 2 的 sql 层）
         if self.kbase and refined:
-            self._persist_phase3(refined)
+            self._persist_phase3(refined, traces)
 
         ok_count = sum(1 for t in refined if t.sql_result.execution_success)
         self.logger.info(
@@ -328,24 +333,107 @@ class PipelineExecutor:
     def _eq4_loop(
         self, triple, diagnose_tool: DiagnoseTool,
         correct_tool: CorrectTool, max_iters: int,
-    ):
+    ) -> tuple:
         """单个 triple 的 Eq.4 循环：Diagnose→Retrieve→Correct 直到收敛"""
-        from models.synthesis import Triple
+        from models.diagnosis import DiagnosisIteration, DiagnosisTrace, SampleDecision
         current = triple
+        trace = DiagnosisTrace(
+            question_id=triple.question_id,
+            original_question=triple.question.text,
+            original_sql=triple.sql_result.sql,
+            max_correction_iterations=max_iters,
+        )
+        terminal_errors = []
         for k in range(1, max_iters + 1):
             # E = Diagnose(...)
             errors = diagnose_tool.run(current)
             if not errors:
                 # 收敛：无错误，停止迭代（论文 "until no errors are detected"）
+                terminal_errors = []
+                trace.iterations.append(DiagnosisIteration(
+                    iteration=k,
+                    question=current.question.text,
+                    sql_before=current.sql_result.sql,
+                    rationale_focus=current.rationale.focus,
+                    errors=[],
+                    execution_success_after=current.sql_result.execution_success,
+                    execution_error_after=current.sql_result.execution_error,
+                    result_count_after=current.sql_result.result_count,
+                    action="verified",
+                ))
                 break
             # Φ = Retrieve(E, K)
             evidence = self.kbase.retrieve_evidence(errors)
             # (q', s', r') = Correct(...)
+            before = current
             current = correct_tool.run(current, errors, evidence, iteration=k)
-        return current
+            trace.iterations.append(DiagnosisIteration(
+                iteration=k,
+                question=before.question.text,
+                sql_before=before.sql_result.sql,
+                rationale_focus=before.rationale.focus,
+                errors=errors,
+                evidence=evidence,
+                sql_after=current.sql_result.sql,
+                execution_success_after=current.sql_result.execution_success,
+                execution_error_after=current.sql_result.execution_error,
+                result_count_after=current.sql_result.result_count,
+                action="corrected",
+            ))
+            terminal_errors = errors
+        else:
+            # 修正次数耗尽后必须再检查最终 SQL，不能把“已修正”误写成“已通过”。
+            terminal_errors = diagnose_tool.run(current)
+            trace.iterations.append(DiagnosisIteration(
+                iteration=max_iters + 1,
+                question=current.question.text,
+                sql_before=current.sql_result.sql,
+                rationale_focus=current.rationale.focus,
+                errors=terminal_errors,
+                execution_success_after=current.sql_result.execution_success,
+                execution_error_after=current.sql_result.execution_error,
+                result_count_after=current.sql_result.result_count,
+                action="max_iterations_reached",
+            ))
 
-    def _persist_phase3(self, triples: list) -> None:
-        """把 Phase 3 修正后的 sql 落盘（覆盖 questions/sql 层）"""
+        trace.final_question = current.question.text
+        trace.final_sql = current.sql_result.sql
+        trace.final_execution_success = current.sql_result.execution_success
+        trace.final_execution_error = current.sql_result.execution_error
+        trace.final_result_count = current.sql_result.result_count
+        if current.sql_result.execution_success is not True:
+            trace.decision = SampleDecision.REJECTED
+            trace.decision_reason = "final_sql_not_executable"
+        elif terminal_errors:
+            trace.decision = SampleDecision.UNRESOLVED
+            trace.decision_reason = "diagnosis_errors_remain_after_limit"
+        else:
+            trace.decision = SampleDecision.ACCEPTED
+            trace.decision_reason = "executable_and_no_detected_errors"
+        current.rationale.admission_decision = trace.decision.value
+        current.rationale.admission_reason = trace.decision_reason
+        return current, trace
+
+    def _failed_trace(self, triple, max_iters: int, detail: str):
+        """将编排异常也写成可审计的拒绝记录，避免静默丢失候选样本。"""
+        from models.diagnosis import DiagnosisTrace, SampleDecision
+        triple.rationale.admission_decision = SampleDecision.REJECTED.value
+        triple.rationale.admission_reason = "diagnosis_pipeline_exception"
+        return DiagnosisTrace(
+            question_id=triple.question_id,
+            original_question=triple.question.text,
+            original_sql=triple.sql_result.sql,
+            max_correction_iterations=max_iters,
+            final_question=triple.question.text,
+            final_sql=triple.sql_result.sql,
+            final_execution_success=triple.sql_result.execution_success,
+            final_execution_error=triple.sql_result.execution_error,
+            decision=SampleDecision.REJECTED,
+            decision_reason=f"diagnosis_pipeline_exception: {detail}",
+        )
+
+    def _persist_phase3(self, triples: list, traces: list) -> None:
+        """持久化最终 SQL、逐轮诊断轨迹和训练语料准入裁决。"""
         from models.synthesis import Triple
         s_records = []
         for t in triples:
@@ -363,6 +451,19 @@ class PipelineExecutor:
                 "correction_rounds": len(t.rationale.correction_history),
             })
         self.kbase.store.save("sql", s_records)
+        self.kbase.store.save(
+            "diagnosis_trace", [trace.model_dump(mode="json") for trace in traces]
+        )
+        self.kbase.store.save("corpus_manifest", [
+            {
+                "question_id": trace.question_id,
+                "decision": trace.decision.value,
+                "decision_reason": trace.decision_reason,
+                "final_execution_success": trace.final_execution_success,
+                "diagnosis_iterations": len(trace.iterations),
+            }
+            for trace in traces
+        ])
 
     # ============================================================
     # 全流程（三阶段串联）

@@ -68,6 +68,8 @@ class Rationale(BaseModel):
     # Phase 3 反思阶段填充（论文 §III.E 要求）
     errors: list[Error] = Field(default_factory=list)
     correction_history: list[Correction] = Field(default_factory=list)
+    admission_decision: str = "unresolved"
+    admission_reason: str = "not_diagnosed"
 
 
 class Question(BaseModel):
@@ -113,6 +115,7 @@ class Triple(BaseModel):
         column_selection 输出为 {columns_used: [...]} 对齐论文格式。
         """
         return {
+            "question_id": self.question_id,
             "question": self.question.text,
             "think": {
                 "focus": self.rationale.focus,

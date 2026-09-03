@@ -34,10 +34,15 @@ from models.synthesis import (
 # Phase 3 诊断模型
 from models.diagnosis import (
     ErrorType,
+    ErrorCategory,
+    DetectorType,
+    SampleDecision,
     ErrorLocation,
     Error,
     Evidence,
     Correction,
+    DiagnosisIteration,
+    DiagnosisTrace,
 )
 
 __all__ = [
@@ -49,5 +54,7 @@ __all__ = [
     "GenerationMetadata", "TableSelection", "ColumnOperation",
     "SQLStrategy", "Rationale", "Question", "SQLResult", "Triple",
     # diagnosis
-    "ErrorType", "ErrorLocation", "Error", "Evidence", "Correction",
+    "ErrorType", "ErrorCategory", "DetectorType", "SampleDecision",
+    "ErrorLocation", "Error", "Evidence", "Correction",
+    "DiagnosisIteration", "DiagnosisTrace",
 ]

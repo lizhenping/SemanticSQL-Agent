@@ -14,6 +14,8 @@ layer 名 -> 文件名映射（唯一真相源）：
   er        -> er_analysis.jsonl              (K6)
   questions -> questions.jsonl                (Phase 2 产物)
   sql       -> sql_results.jsonl              (Phase 2 产物)
+  diagnosis_trace -> diagnosis_trace.jsonl    (Phase 3 可审计轨迹)
+  corpus_manifest -> corpus_manifest.jsonl    (训练样本准入裁决)
 """
 
 import json
@@ -59,6 +61,8 @@ class JSONLKnowledgeStore:
         "er":         "er_analysis.jsonl",
         "questions":  "questions.jsonl",
         "sql":        "sql_results.jsonl",
+        "diagnosis_trace": "diagnosis_trace.jsonl",
+        "corpus_manifest": "corpus_manifest.jsonl",
     }
 
     def __init__(self, history_dir: Union[str, Path]):

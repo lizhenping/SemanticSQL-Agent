@@ -42,6 +42,28 @@ class ErrorType(str, Enum):
     SEMANTIC_INCONSISTENCY = "semantic_inconsistency"
 
 
+class ErrorCategory(str, Enum):
+    """错误的验证边界，避免把可执行性与语义正确性混为一谈。"""
+
+    STRUCTURAL = "structural"
+    SEMANTIC = "semantic"
+
+
+class DetectorType(str, Enum):
+    """错误发现者，用于分别报告确定性检查和 LLM 审查的效果。"""
+
+    DETERMINISTIC = "deterministic"
+    LLM = "llm"
+
+
+class SampleDecision(str, Enum):
+    """样本准入状态。只有 ACCEPTED 可以进入训练集。"""
+
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    UNRESOLVED = "unresolved"
+
+
 class ErrorLocation(BaseModel):
     """错误在 r 中的定位（论文要求 positions in r）"""
 
@@ -57,6 +79,26 @@ class Error(BaseModel):
     location: ErrorLocation = Field(default_factory=ErrorLocation)
     detail: str = ""
     evidence_ref: Optional[str] = None   # 指向 Evidence 的 key，便于 Retrieve 路由
+    category: Optional[ErrorCategory] = None
+    detector: Optional[DetectorType] = None
+
+    def model_post_init(self, __context) -> None:
+        """为既有检查函数产生的 Error 补全可审计的来源和边界。"""
+        if self.category is None:
+            self.category = (
+                ErrorCategory.SEMANTIC
+                if self.type in {
+                    ErrorType.SEMANTIC_INCONSISTENCY,
+                    ErrorType.COLUMN_SEMANTIC_MISMATCH,
+                }
+                else ErrorCategory.STRUCTURAL
+            )
+        if self.detector is None:
+            self.detector = (
+                DetectorType.LLM
+                if self.type == ErrorType.SEMANTIC_INCONSISTENCY
+                else DetectorType.DETERMINISTIC
+            )
 
     def with_location(self, clause: str = "", column: Optional[str] = None,
                       table: Optional[str] = None) -> "Error":
@@ -101,3 +143,36 @@ class Correction(BaseModel):
     sql_before: str = ""
     sql_after: str = ""
     summary: str = ""
+
+
+class DiagnosisIteration(BaseModel):
+    """Eq.4 的一次可复现检查，保存 Diagnose/Retrieve/Correct 的完整证据。"""
+
+    iteration: int
+    question: str = ""
+    sql_before: str = ""
+    rationale_focus: str = ""
+    errors: list[Error] = Field(default_factory=list)
+    evidence: Optional[Evidence] = None
+    sql_after: Optional[str] = None
+    execution_success_after: Optional[bool] = None
+    execution_error_after: Optional[str] = None
+    result_count_after: Optional[int] = None
+    action: str = "verified"  # verified / corrected / max_iterations_reached
+
+
+class DiagnosisTrace(BaseModel):
+    """一个候选样本从原始生成到最终裁决的审计记录。"""
+
+    question_id: str
+    original_question: str = ""
+    original_sql: str = ""
+    max_correction_iterations: int = 0
+    iterations: list[DiagnosisIteration] = Field(default_factory=list)
+    final_question: str = ""
+    final_sql: str = ""
+    final_execution_success: Optional[bool] = None
+    final_execution_error: Optional[str] = None
+    final_result_count: Optional[int] = None
+    decision: SampleDecision = SampleDecision.UNRESOLVED
+    decision_reason: str = ""
