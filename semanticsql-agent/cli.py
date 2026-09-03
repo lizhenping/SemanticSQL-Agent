@@ -158,6 +158,7 @@ def audit_summary(history_dir):
     error_types = Counter()
     categories = Counter()
     detectors = Counter()
+    semantic_classes = Counter()
     corrected = 0
     for trace in traces:
         iterations = trace.get("iterations", [])
@@ -168,6 +169,8 @@ def audit_summary(history_dir):
                 error_types[error.get("type", "unknown")] += 1
                 categories[error.get("category", "unknown")] += 1
                 detectors[error.get("detector", "unknown")] += 1
+                if error.get("semantic_class"):
+                    semantic_classes[error["semantic_class"]] += 1
 
     total = len(traces)
     click.echo(f"样本数: {total}")
@@ -178,6 +181,12 @@ def audit_summary(history_dir):
         )
     )
     click.echo(f"曾进入修正: {corrected} ({corrected / total:.1%})")
+    if semantic_classes:
+        # 论文 Table semantic-taxonomy 的七类语义错误频次
+        order = ["I-1", "I-2", "I-3", "I-4", "II-1", "II-2", "III-1"]
+        click.echo("七类语义错误（论文 Table taxonomy）: " + ", ".join(
+            f"{name}={semantic_classes[name]}" for name in order if semantic_classes[name]
+        ))
     if categories:
         click.echo("错误边界: " + ", ".join(
             f"{name}={count}" for name, count in sorted(categories.items())
@@ -394,28 +403,48 @@ def run(benchmark, database, sqlite, db_root, count, max_iters, output, debug):
 # ----------------------------------------------------------------
 # 批量：run-benchmark（一键跑整个 benchmark 的所有 train 库）
 # ----------------------------------------------------------------
+def _split_total(total: int, n_dbs: int) -> list[int]:
+    """把论文设定的 benchmark 总量平均分配到每个数据库。
+
+    均分规则：count_i = total // n_dbs，前 (total % n_dbs) 个库各 +1，
+    保证 Σcount_i == total（如 spider2 20000/30 → 20 库 667 + 10 库 666）。
+    """
+    if n_dbs <= 0:
+        return []
+    base, extra = divmod(total, n_dbs)
+    return [base + (1 if i < extra else 0) for i in range(n_dbs)]
+
+
 @cli.command("run-benchmark")
 @click.option("--benchmark", "-b", required=True, help="benchmark 名（spider/bird/spider2/ehrsql/science_benchmark）")
-@click.option("--count", "-n", default=10, type=int, help="每个库合成样本数")
+@click.option("--count", "-n", default=None, type=int, help="每个库合成样本数（与 --total 二选一）")
+@click.option("--total", "-t", default=None, type=int,
+              help="benchmark 合成总量（论文 Table synth_source_stats），均分到每个 train 库")
 @click.option("--max-iters", default=3, type=int, help="Phase 3 Eq.4 修正循环最大迭代")
 @click.option("--db-root", default=os.getenv("SEMANTICSQL_DB_ROOT", "datasets"),
               help="数据库根目录")
+@click.option("--output-root", default=os.getenv("SEMANTICSQL_OUTPUT_ROOT", "history"),
+              help="产物根目录（默认 history；批量实验用 data，按 benchmark/database 分层）")
 @click.option("--limit", type=int, help="只跑前 N 个库（调试用，不传则跑全部）")
 @click.option("--debug", is_flag=True, help="启用 DEBUG 日志")
-def run_benchmark(benchmark, count, max_iters, db_root, limit, debug):
+def run_benchmark(benchmark, count, total, max_iters, db_root, output_root, limit, debug):
     """一键跑整个 benchmark：自动遍历所有 train 库，跳过 dev/test（防泄露）
 
     自动完成：扫描 {db_root}/{benchmark}/databases/ → 排除评估库 →
     逐库执行三阶段（Analysis→Generation→Diagnosis）→ 产物存到
-    data-assets/{benchmark}/{database}/。
+    {output_root}/{benchmark}/{database}/。
+
+    数据量两种指定方式（二选一，都不传则每库 10 条）：
+      --total 30000   # 论文总量，均分到每个库（如 BIRD 95 库 → 315/316 条/库）
+      --count 100     # 每库固定条数
 
     \b
     示例：
-      # 跑 bird 全部 train 库，每库 50 条
-      python cli.py run-benchmark -b bird -n 50
+      # bird 全部 train 库，按论文总量 30000 均分
+      python cli.py run-benchmark -b bird --total 30000
 
       # 调试：只跑前 2 个库
-      python cli.py run-benchmark -b spider -n 5 --limit 2
+      python cli.py run-benchmark -b spider --total 40000 --limit 2
     """
     _setup_logging(debug)
     from infra.dataset_split import list_train_databases
@@ -428,8 +457,15 @@ def run_benchmark(benchmark, count, max_iters, db_root, limit, debug):
     if limit:
         train_dbs = train_dbs[:limit]
 
-    click.echo(f"🚀 run-benchmark: {benchmark}，{len(train_dbs)} 个 train 库，每库 {count} 条")
-    click.echo(f"📁 产物存到 data-assets/{benchmark}/<database>/")
+    # 每库数量：--total 均分优先，其次 --count 固定
+    if total is not None:
+        per_db_counts = _split_total(total, len(train_dbs))
+        click.echo(f"🚀 run-benchmark: {benchmark}，{len(train_dbs)} 个 train 库，"
+                   f"总量 {total} 均分（{per_db_counts[0]}~{per_db_counts[-1]} 条/库）")
+    else:
+        per_db_counts = [count if count is not None else 10] * len(train_dbs)
+        click.echo(f"🚀 run-benchmark: {benchmark}，{len(train_dbs)} 个 train 库，每库 {per_db_counts[0]} 条")
+    click.echo(f"📁 产物存到 {output_root}/{benchmark}/<database>/")
     click.echo(f"🛡️  已自动排除 dev/test 评估库（防数据泄露）")
     click.echo(f"🔄 断点续跑：已有产物的库自动跳过，中断后重跑会从未完成的库继续")
     click.echo("")
@@ -438,30 +474,30 @@ def run_benchmark(benchmark, count, max_iters, db_root, limit, debug):
     total_ok = 0
     failed_dbs = []
     skipped_dbs = []
-    for i, db_name in enumerate(train_dbs, 1):
+    for i, (db_name, per_db) in enumerate(zip(train_dbs, per_db_counts), 1):
         # 断点续跑：检查产物是否已存在且非空
-        out_path = f"history/{benchmark}/{db_name}/training_data.jsonl"
-        if Path(out_path).exists() and Path(out_path).stat().st_size > 0:
+        out_path = Path(output_root) / benchmark / db_name / "training_data.jsonl"
+        if out_path.exists() and out_path.stat().st_size > 0:
             click.echo(f"[{i}/{len(train_dbs)}] {benchmark}/{db_name} ... ⏭️  跳过（已有产物）")
             skipped_dbs.append(db_name)
             continue
 
         sqlite_path = str(Path(db_root) / benchmark / "databases" / db_name / f"{db_name}.sqlite")
-        click.echo(f"[{i}/{len(train_dbs)}] {benchmark}/{db_name} ...")
+        click.echo(f"[{i}/{len(train_dbs)}] {benchmark}/{db_name}（目标 {per_db} 条）...")
 
         try:
             pipeline = PipelineExecutor.for_sqlite(
                 sqlite_path=sqlite_path,
                 database_name=db_name,
                 benchmark=benchmark,
+                history_dir=str(Path(output_root) / benchmark / db_name),
             )
             pipeline.run_analysis()
-            triples = pipeline.run_generation(count=count)
+            triples = pipeline.run_generation(count=per_db)
             triples = pipeline.run_diagnosis(triples, max_iters=max_iters)
 
             # 导出该库的 training_data.jsonl
-            out_path = f"history/{benchmark}/{db_name}/training_data.jsonl"
-            _save_triples(triples, out_path, accepted_only=True)
+            _save_triples(triples, str(out_path), accepted_only=True)
 
             ok = sum(1 for t in triples if t.sql_result.execution_success)
             accepted = sum(1 for t in triples if t.rationale.admission_decision == "accepted")

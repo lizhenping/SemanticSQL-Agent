@@ -16,6 +16,7 @@ from models.knowledge import (
     FieldCategory,
     CrossTableRelation,
     DomainKnowledge,
+    TableSemantics,
 )
 
 
@@ -24,7 +25,7 @@ class ErrorType(str, Enum):
 
     分两类，呼应论文修改后的"程序化校验 + LLM 语义审查"混合：
     - 结构性错误（程序化校验产出）：COLUMN_* / JOIN_* / AGGREGATION_* / TABLE_* / SYNTAX / TYPE / EXECUTION / EMPTY
-    - 语义性错误（LLM 审查产出）：SEMANTIC_INCONSISTENCY
+    - 语义性错误（LLM 审查产出）：SEMANTIC_INCONSISTENCY（带 SemanticClass 七类标注）
     """
 
     # 结构性错误（程序化校验，对齐论文 §III.E L268 的 checks/verifies/executes）
@@ -40,6 +41,38 @@ class ErrorType(str, Enum):
 
     # 语义性错误（LLM 审查，对齐论文 §III.E "semantic reviewer"）
     SEMANTIC_INCONSISTENCY = "semantic_inconsistency"
+
+
+class SemanticClass(str, Enum):
+    """论文 Table semantic-taxonomy 的七类语义错误（§III.E + App.taxonomy）。
+
+    Group I（意图错配，仅凭 (q, s) 即可判定，不取知识）：
+      I-1 任务错配 / I-2 条件错配 / I-3 聚合或粒度错配 / I-4 排序或结果形式错配
+    Group II（元素误用）：
+      II-1 字段角色误用（证据 K3, K4）/ II-2 JOIN 误用（证据 K6）
+    Group III（域规则违反）：
+      III-1 域规则违反（证据 K2, K5, K6）
+    """
+
+    I_1_TASK_MISMATCH = "I-1"
+    I_2_CONDITION_MISMATCH = "I-2"
+    I_3_AGGREGATION_GRANULARITY_MISMATCH = "I-3"
+    I_4_ORDERING_RESULT_FORM_MISMATCH = "I-4"
+    II_1_FIELD_ROLE_MISUSE = "II-1"
+    II_2_JOIN_MISUSE = "II-2"
+    III_1_DOMAIN_RULE_VIOLATION = "III-1"
+
+
+# 七类 → 取证所需的 K 层（论文 Table semantic-taxonomy 第三列）
+SEMANTIC_CLASS_EVIDENCE: dict["SemanticClass", set[str]] = {
+    SemanticClass.I_1_TASK_MISMATCH: set(),
+    SemanticClass.I_2_CONDITION_MISMATCH: set(),
+    SemanticClass.I_3_AGGREGATION_GRANULARITY_MISMATCH: set(),
+    SemanticClass.I_4_ORDERING_RESULT_FORM_MISMATCH: set(),
+    SemanticClass.II_1_FIELD_ROLE_MISUSE: {"K3", "K4"},
+    SemanticClass.II_2_JOIN_MISUSE: {"K6"},
+    SemanticClass.III_1_DOMAIN_RULE_VIOLATION: {"K2", "K5", "K6"},
+}
 
 
 class ErrorCategory(str, Enum):
@@ -73,7 +106,12 @@ class ErrorLocation(BaseModel):
 
 
 class Error(BaseModel):
-    """单个错误（论文 E 的元素）"""
+    """单个错误（论文 E 的元素）
+
+    论文 §III.E：语义错误写作 e_j = (t_j, u_j, λ_j, v_j)，
+    即 (类别, 受影响产物, 位置, 违反的条件)。对应字段：
+    semantic_class=t_j, artifact=u_j, location=λ_j, detail=v_j。
+    """
 
     type: ErrorType
     location: ErrorLocation = Field(default_factory=ErrorLocation)
@@ -81,6 +119,12 @@ class Error(BaseModel):
     evidence_ref: Optional[str] = None   # 指向 Evidence 的 key，便于 Retrieve 路由
     category: Optional[ErrorCategory] = None
     detector: Optional[DetectorType] = None
+    # 论文七类语义错误类别（仅语义性错误填写）
+    semantic_class: Optional[SemanticClass] = None
+    # 受影响产物：q / s / r（论文 u_j；q 受影响 = 问题无效，不可修复 → 拒绝）
+    artifact: Optional[str] = None
+    # 违反的条件描述（论文 v_j）
+    violated_condition: str = ""
 
     def model_post_init(self, __context) -> None:
         """为既有检查函数产生的 Error 补全可审计的来源和边界。"""
@@ -110,17 +154,19 @@ class Error(BaseModel):
 class Evidence(BaseModel):
     """修正证据 Φ（论文 Retrieve 产物）。
 
-    按错误类型从 K 的对应层取证：
-    - columns（K4）：列语义正确描述，供 Correct 替换错误列引用
-    - field_types（K3）：字段类型，供聚合错误时找正确 measure 列
-    - relations（K6）：关系/外键，供 JOIN 错误时找正确连接键
-    - domain_rules（K2）：域规则，供语义审查参考
+    按错误类别从 K 的对应层取证（论文 Table semantic-taxonomy）：
+    - columns（K4）：列语义正确描述，供 Correct 替换错误列引用（II-1）
+    - field_types（K3）：字段类型，供聚合错误时找正确 measure 列（II-1）
+    - relations（K6）：关系/外键，供 JOIN 错误时找正确连接键（II-2/III-1）
+    - domain_rules（K2）：域规则（III-1）
+    - table_constraints（K5）：表约束，供域规则违反修正参考（III-1）
     """
 
     columns: dict[str, ColumnSemantics] = Field(default_factory=dict)
     field_types: dict[str, FieldCategory] = Field(default_factory=dict)
     relations: list[CrossTableRelation] = Field(default_factory=list)
     domain_rules: Optional[DomainKnowledge] = None
+    table_constraints: list[TableSemantics] = Field(default_factory=list)
 
     def is_empty(self) -> bool:
         return (
@@ -128,6 +174,7 @@ class Evidence(BaseModel):
             and not self.field_types
             and not self.relations
             and self.domain_rules is None
+            and not self.table_constraints
         )
 
 

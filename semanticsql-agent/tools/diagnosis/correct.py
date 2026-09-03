@@ -1,17 +1,16 @@
 """Phase 3 / Correct: 语义错误修正（tools/diagnosis/correct.py）
 
 论文 §III.E Eq.4 的第三个算子 Correct：
-    (q', s', r') = Correct(q, s, r, Φ, K)
+    τ⁽ᵏ⁺¹⁾ = Correct(τ⁽ᵏ⁾, B⁽ᵏ⁾, Φ⁽ᵏ⁾)
 
-论文 L272 要求 Correct 做三件事：
-1. 替换 s 里无效的 schema 元素（用 Φ 里的合法替代）
-2. 必要时改写 q 消除歧义/错误假设
-3. 把 detected errors + applied corrections 追加到 r 保历史
+论文 L311 的硬约束（Correct 函数语义）：
+1. 只做局部、以诊断为条件的编辑，落点由诊断指出；**绝不重新生成整条三元组**
+2. **问题 q 永不编辑**：所有检查都相对 q 定义，改 q 就消解了判断标准；
+   问题无效的样本不可修复，直接拒绝（由 pipeline 处理 artifact="q" 的错误）
+3. 每次编辑后同步更新 r 保持一致，并把 applied edits 追加到 correction_history
 
 设计：CorrectTool 注入 Evidence Φ + 原始 triple + errors，调 LLM 生成
-修正后的 (q, s)，然后组装新的 Rationale（含 correction_history 追加）。
-
-不照搬旧 reflection_tools，按论文 §III.E 重新实现。
+修正后的 s（可顺带修正 r 的 focus 描述），q 保持原样。
 """
 
 import logging
@@ -56,16 +55,21 @@ class CorrectTool(BaseSemanticTool):
             f"errors={len(errors)}"
         )
 
+        # 论文硬约束：问题无效（artifact="q"）的错误不可修复，
+        # 由 pipeline 直接拒绝；这里只修正 s/r 上的可修复错误。
+        repairable = [e for e in errors if (e.artifact or "s") != "q"]
+
         sql_before = triple.sql_result.sql
         sql_after = sql_before
-        question_after = triple.question.text
 
-        # 1. LLM 生成修正后的 SQL（必要时也改写 q）
-        if self.llm is not None:
-            sql_after, question_after = self._llm_correct(
-                triple, errors, evidence
-            )
+        # 1. LLM 生成修正后的 SQL（q 固定，绝不改写）
+        if self.llm is not None and repairable:
+            sql_after = self._llm_correct(triple, repairable, evidence)
             sql_after = self._postprocess_sql(sql_after)
+        elif not repairable:
+            self.logger.debug(
+                f"{triple.question_id}: 仅问题无效类错误，无 s/r 可修正"
+            )
         else:
             # 无 LLM 时退化为启发式：只处理纯执行类错误的 trivial 情况
             self.logger.warning("correct_tool 未注入 llm，跳过 LLM 修正")
@@ -76,24 +80,21 @@ class CorrectTool(BaseSemanticTool):
         # 3. 组装修正记录（论文要求 append to r 保历史）
         correction = Correction(
             iteration=iteration,
-            errors_addressed=[e.type for e in errors],
+            errors_addressed=[e.type for e in repairable],
             sql_before=sql_before,
             sql_after=sql_after,
-            summary=self._summarize_errors(errors),
+            summary=self._summarize_errors(repairable),
         )
 
-        # 4. 构造新 triple：question 改写、sql 替换、rationale 追加历史
-        new_question = triple.question
-        if question_after and question_after != triple.question.text:
-            new_question = triple.question.model_copy(update={"text": question_after})
-
+        # 4. 构造新 triple：q 原样（论文 "The question is never edited"）、
+        #    s 替换、r 追加历史
         new_rationale = triple.rationale.model_copy(deep=True)
         new_rationale.errors = errors
         new_rationale.correction_history.append(correction)
         new_rationale.expected_output = self._expected_output_from_evidence(evidence)
 
         return Triple(
-            question=new_question,
+            question=triple.question,
             sql_result=new_sql_result,
             rationale=new_rationale,
         )
@@ -104,8 +105,8 @@ class CorrectTool(BaseSemanticTool):
 
     def _llm_correct(
         self, triple: Triple, errors: list[Error], evidence
-    ) -> tuple[str, str]:
-        """调 LLM 生成修正后的 (sql, question)"""
+    ) -> str:
+        """调 LLM 生成修正后的 SQL（q 固定不可修改，论文 correct.j2 约束）"""
         # 把 Evidence Φ 渲染成可读文本
         evidence_text = self._render_evidence(evidence)
         errors_text = self._render_errors(errors)
@@ -122,12 +123,7 @@ class CorrectTool(BaseSemanticTool):
         result = self._llm_generate_json(prompt)
 
         sql = result.get("sql") or result.get("corrected_sql") or triple.sql_result.sql
-        question = (
-            result.get("question")
-            or result.get("corrected_question")
-            or triple.question.text
-        )
-        return sql, question
+        return sql
 
     # ============================================================
     # SQL 后处理 + 执行（复用 sql_synth 的逻辑模式）
@@ -209,6 +205,9 @@ class CorrectTool(BaseSemanticTool):
         dr = getattr(evidence, "domain_rules", None)
         if dr is not None and getattr(dr, "description", ""):
             parts.append(f"域规则（K2）：{dr.description}")
+        # K5 表约束（域规则违反时参考）
+        for ts in getattr(evidence, "table_constraints", []) or []:
+            parts.append(f"表约束（K5）{ts.table_name}: {ts.description}")
 
         return "\n".join(parts) if parts else "(无具体证据)"
 

@@ -27,7 +27,13 @@ from models.knowledge import (
     TableSemantics,
     CrossTableRelation,
 )
-from models.diagnosis import Error, ErrorType, ErrorLocation, Evidence
+from models.diagnosis import (
+    Error,
+    ErrorType,
+    ErrorLocation,
+    Evidence,
+    SEMANTIC_CLASS_EVIDENCE,
+)
 from infra.storage import KnowledgeStore
 from infra.sql_ast import AggregateCall, JoinClause
 
@@ -341,18 +347,52 @@ class KnowledgeBase:
     # ============================================================
 
     def retrieve_evidence(self, errors: list[Error]) -> Evidence:
-        """按错误类型路由到对应 K 层取证（论文 Φ）
+        """按论文七类语义错误路由到对应 K 层取证（论文 Φ）
 
-        论文 §III.E: "Retrieve queries K using detected errors E to extract evidence Φ"
-
-        路由规则：
-        - column_* -> 取 K4 列语义（正确描述供 Correct 替换）
-        - join_*   -> 取 K6 关系（正确 FK 供 Correct 修正 JOIN）
-        - aggregation_* -> 取 K3 字段类型（正确 measure 列供 Correct 替换）
+        论文 §III.E + Table semantic-taxonomy："The class t_j names the
+        additional evidence to draw"：
+        - I-1..I-4（意图错配）：仅凭 (q, s) 判定，不取知识条目
+        - II-1 字段角色误用：K3 字段类型 + K4 列语义
+        - II-2 JOIN 误用：K6 关系
+        - III-1 域规则违反：K2 域规则 + K5 表约束 + K6 关系
+        结构性错误（程序化校验产出，B 类失败）按修复需要取对应层：
+        - column_not_found → K4（可用合法列）
+        - join_invalid     → K6（正确外键）
+        - aggregation_type_mismatch → K3（正确 measure 列）
         """
         evidence = Evidence()
 
         for err in errors:
+            sc = err.semantic_class
+            if sc is not None:
+                # ---- 语义错误：按论文七类路由 ----
+                needed = SEMANTIC_CLASS_EVIDENCE.get(sc, set())
+                table = err.location.table
+                if "K3" in needed and table:
+                    for ft in self.get_field_types():
+                        if ft.table_name == table:
+                            evidence.field_types[ft.field_key] = ft.category
+                if "K4" in needed:
+                    cols = (
+                        self.get_columns(table) if table else self.get_column_semantics()
+                    )
+                    for col in cols:
+                        evidence.columns[col.field_key] = col
+                if "K5" in needed:
+                    if table:
+                        ts = self.get_table_semantic(table)
+                        if ts:
+                            evidence.table_constraints.append(ts)
+                    else:
+                        evidence.table_constraints.extend(self.get_table_semantics())
+                if "K6" in needed:
+                    for fk in self.get_foreign_keys():
+                        evidence.relations.append(fk)
+                if "K2" in needed and evidence.domain_rules is None:
+                    evidence.domain_rules = self.get_domain()
+                continue
+
+            # ---- 结构性错误：保持原有按修复需要取证 ----
             if err.type in (ErrorType.COLUMN_NOT_FOUND, ErrorType.COLUMN_SEMANTIC_MISMATCH):
                 # 取 K4：相关表的列语义
                 if err.location.table:
@@ -370,9 +410,6 @@ class KnowledgeBase:
                     for ft in self.get_field_types():
                         if ft.table_name == err.location.table:
                             evidence.field_types[ft.field_key] = ft.category
-
-        # K2 域规则总是包含（供 LLM 语义审查参考）
-        evidence.domain_rules = self.get_domain()
 
         return evidence
 

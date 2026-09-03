@@ -23,12 +23,13 @@ with LLM-based semantic inspection"）：
 """
 
 import logging
+import re
 from typing import Optional
 
 from tools.base_tool import BaseSemanticTool
 from infra.sql_ast import SQLAstParser, SqlglotParser
 from infra.database import DatabaseManager
-from models.diagnosis import Error, ErrorType, ErrorLocation
+from models.diagnosis import Error, ErrorType, ErrorLocation, SemanticClass
 from models.synthesis import Triple
 
 
@@ -156,20 +157,23 @@ class DiagnoseTool(BaseSemanticTool):
         return errors
 
     # ============================================================
-    # LLM 语义审查（论文 L270 "semantic side"）
+    # LLM 语义审查（论文 §III.E "semantic checks"，Definition 1 顺序）
     # ============================================================
 
     def _llm_semantic_review(self, triple: Triple) -> list[Error]:
-        """LLM 对照 q 意图 + K2 域规则审查 r，捕捉结构检查抓不到的问题"""
+        """LLM 按 Definition 1 顺序审查：问题有效性 → 意图匹配 → 使用一致性
+
+        论文 Diagnose(τ, K, D)：K 以"所涉元素的相关知识条目"形式注入提示；
+        每个违例解析为论文 e_j=(t_j,u_j,λ_j,v_j)，即
+        (semantic_class, artifact, location, detail/violated_condition)。
+        """
         try:
             prompt = self._render_prompt(
                 "diagnosis/semantic_review.j2",
                 question=triple.question.text,
                 sql=triple.sql_result.sql,
                 rationale=triple.rationale.focus,
-                domain_rules=(
-                    self.kbase.get_domain().description if self.kbase else ""
-                ),
+                knowledge_context=self._kb_digest(triple.sql_result.sql),
             )
             result = self._llm_generate_json(prompt)
         except Exception as e:
@@ -186,14 +190,82 @@ class DiagnoseTool(BaseSemanticTool):
             detail = (issue.get("detail") or issue.get("description") or "").strip()
             if not detail:
                 continue
-            clause = issue.get("clause", "")
+            # 论文七类 t_j（非法类名兜底为通用语义不一致）
+            try:
+                sc = SemanticClass(str(issue.get("class", "")).strip())
+            except ValueError:
+                sc = None
+            artifact = (issue.get("artifact") or "s").strip().lower()
+            if artifact not in {"q", "s", "r"}:
+                artifact = "s"
             errors.append(Error(
                 type=ErrorType.SEMANTIC_INCONSISTENCY,
                 location=ErrorLocation(
-                    clause=clause,
-                    column=issue.get("column"),
-                    table=issue.get("table"),
+                    clause=issue.get("clause", ""),
+                    column=issue.get("column") or None,
+                    table=issue.get("table") or None,
                 ),
                 detail=detail,
+                semantic_class=sc,
+                artifact=artifact,
+                violated_condition=(issue.get("condition") or "").strip(),
             ))
         return errors
+
+    def _kb_digest(self, sql: str) -> str:
+        """聚合所涉 schema 元素的 K 条目，作为 Diagnose 的证据上下文（论文 τ,K,D）
+
+        只取与 SQL 涉及的表/列相关的条目，避免整库 K 撑爆提示：
+        K2 域规则全量 + K3/K4（SQL 涉及列）+ K5（涉及表约束）+ K6（涉及表关系）。
+        """
+        if self.kbase is None:
+            return ""
+        parts: list[str] = []
+
+        domain = self.kbase.get_domain()
+        if domain is not None and getattr(domain, "description", ""):
+            parts.append(f"[K2 域规则] {domain.description}")
+
+        try:
+            touched_tables = {
+                t for t, _ in self.ast_parser.extract_tables(sql)
+            } if hasattr(self.ast_parser, "extract_tables") else set()
+        except Exception:
+            touched_tables = set()
+        if not touched_tables:
+            # 兜底：从 SQL 文本里猜表名（K1 全部表名中出现者）
+            try:
+                names = self.kbase.get_table_names()
+                touched_tables = {n for n in names if re.search(rf"\b{re.escape(n)}\b", sql, re.IGNORECASE)}
+            except Exception:
+                touched_tables = set()
+
+        try:
+            touched_cols = self.ast_parser.extract_columns(sql)
+        except Exception:
+            touched_cols = []
+
+        # K4/K3：SQL 涉及的列
+        for table, column in touched_cols[:30]:
+            cs = self.kbase.get_column(table, column)
+            if cs is not None:
+                parts.append(f"[K4] {table}.{column}: {cs.description}")
+            cat = self.kbase.get_field_type(table, column)
+            if cat is not None:
+                parts.append(f"[K3] {table}.{column}: {cat.value}")
+
+        # K5：涉及表的约束/描述
+        for table in sorted(touched_tables)[:10]:
+            ts = self.kbase.get_table_semantic(table)
+            if ts is not None:
+                parts.append(f"[K5] {table}: {ts.description}")
+
+        # K6：涉及表之间的关系
+        for rel in self.kbase.get_relations():
+            if rel.source_table in touched_tables or rel.target_table in touched_tables:
+                src = f"{rel.source_table}.{rel.source_column}" if rel.source_column else rel.source_table
+                tgt = f"{rel.target_table}.{rel.target_column}" if rel.target_column else rel.target_table
+                reason = f" ({rel.reason})" if rel.reason else ""
+                parts.append(f"[K6] {src} → {tgt} {rel.relationship_type}{reason}")
+
+        return "\n".join(parts)

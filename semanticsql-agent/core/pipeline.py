@@ -362,6 +362,23 @@ class PipelineExecutor:
                     action="verified",
                 ))
                 break
+            # 论文硬约束："A pair whose question is invalid is therefore
+            # unrepairable and is rejected."（问题永不编辑 → 无修复标准）
+            q_invalid = [e for e in errors if (e.artifact or "") == "q"]
+            if q_invalid:
+                terminal_errors = q_invalid
+                trace.iterations.append(DiagnosisIteration(
+                    iteration=k,
+                    question=current.question.text,
+                    sql_before=current.sql_result.sql,
+                    rationale_focus=current.rationale.focus,
+                    errors=q_invalid,
+                    execution_success_after=current.sql_result.execution_success,
+                    execution_error_after=current.sql_result.execution_error,
+                    result_count_after=current.sql_result.result_count,
+                    action="rejected_question_invalid",
+                ))
+                break
             # Φ = Retrieve(E, K)
             evidence = self.kbase.retrieve_evidence(errors)
             # (q', s', r') = Correct(...)
@@ -405,8 +422,13 @@ class PipelineExecutor:
             trace.decision = SampleDecision.REJECTED
             trace.decision_reason = "final_sql_not_executable"
         elif terminal_errors:
-            trace.decision = SampleDecision.UNRESOLVED
-            trace.decision_reason = "diagnosis_errors_remain_after_limit"
+            if any((e.artifact or "") == "q" for e in terminal_errors):
+                # 论文：问题无效不可修复，直接拒绝（而非 unresolved）
+                trace.decision = SampleDecision.REJECTED
+                trace.decision_reason = "question_invalid_unrepairable"
+            else:
+                trace.decision = SampleDecision.UNRESOLVED
+                trace.decision_reason = "diagnosis_errors_remain_after_limit"
         else:
             trace.decision = SampleDecision.ACCEPTED
             trace.decision_reason = "executable_and_no_detected_errors"
