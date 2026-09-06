@@ -117,6 +117,8 @@ class SQLSynthTool(BaseSemanticTool):
                     "is_primary": col.primary_key,
                     "is_foreign": col.foreign_key,
                     "is_nullable": col.nullable,
+                    # K1 provides database-specific instance cues without hard-coded rules.
+                    "sample_values": col.sample_values[:5],
                 })
             tables[table.name] = {
                 "name": table.name,
@@ -249,6 +251,9 @@ class SQLSynthTool(BaseSemanticTool):
                         line += " [PK]"
                     if col.get("is_foreign"):
                         line += " [FK]"
+                    if col.get("sample_values"):
+                        observed = ", ".join(str(v) for v in col["sample_values"])
+                        line += f" [观测示例值: {observed}]"
                     parts.append(line)
 
         # 外键关系
@@ -334,11 +339,9 @@ class SQLSynthTool(BaseSemanticTool):
             }
         """
         q_data = context["question_data"]
-        metadata = GenerationMetadata(
-            main_scenario=question.business_rules[0].get("main_scenario", "") if question.business_rules else "",
-            sub_scenario=question.business_rules[0].get("sub_scenario", "") if question.business_rules else "",
-            use_case=question.business_rules[0].get("use_case", "") if question.business_rules else "",
-        )
+        # σ=(C,T), ℓ 直接沿用问题合成阶段的元数据（此前从 business_rules
+        # 用错误 key 重建，导致 think.metadata 全空）
+        metadata = question.metadata
 
         # table_selection（嵌套结构）
         ts_raw = rationale_raw.get("table_selection", {}) or {}

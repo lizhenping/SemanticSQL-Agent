@@ -241,7 +241,10 @@ class PipelineExecutor:
         return triples
 
     def _persist_phase2(self, triples: list) -> None:
-        """把 Phase 2 产物落到 questions/sql 两层 JSONL（供 Phase 3 与导出用）"""
+        """把 Phase 2 产物追加到 questions/sql 两层 JSONL（供 Phase 3 与导出用）
+
+        追加而非覆盖：分批合成时保留全部批次的审计记录。
+        """
         from models.synthesis import Triple
         q_records = []
         s_records = []
@@ -253,6 +256,7 @@ class PipelineExecutor:
                 "question_text": t.question.text,
                 "question_focus": t.question.question_focus,
                 "business_rules": t.question.business_rules,
+                "metadata": t.question.metadata.model_dump(),
             })
             s_records.append({
                 "question_id": t.question_id,
@@ -263,8 +267,10 @@ class PipelineExecutor:
                 "result_count": t.sql_result.result_count,
                 "execution_error": t.sql_result.execution_error,
             })
-        self.kbase.store.save("questions", q_records)
-        self.kbase.store.save("sql", s_records)
+        for rec in q_records:
+            self.kbase.store.append("questions", rec)
+        for rec in s_records:
+            self.kbase.store.append("sql", rec)
 
     # ============================================================
     # Phase 3: Diagnosis (DT) — 论文 §III.E, Eq.4 循环
@@ -335,7 +341,7 @@ class PipelineExecutor:
         correct_tool: CorrectTool, max_iters: int,
     ) -> tuple:
         """单个 triple 的 Eq.4 循环：Diagnose→Retrieve→Correct 直到收敛"""
-        from models.diagnosis import DiagnosisIteration, DiagnosisTrace, SampleDecision
+        from models.diagnosis import DiagnosisIteration, DiagnosisTrace, SampleDecision, ErrorType
         current = triple
         trace = DiagnosisTrace(
             question_id=triple.question_id,
@@ -360,6 +366,21 @@ class PipelineExecutor:
                     execution_error_after=current.sql_result.execution_error,
                     result_count_after=current.sql_result.result_count,
                     action="verified",
+                ))
+                break
+            # A failed review is not a repairable semantic finding.
+            if any(e.type == ErrorType.SEMANTIC_REVIEW_FAILED for e in errors):
+                terminal_errors = errors
+                trace.iterations.append(DiagnosisIteration(
+                    iteration=k,
+                    question=current.question.text,
+                    sql_before=current.sql_result.sql,
+                    rationale_focus=current.rationale.focus,
+                    errors=errors,
+                    execution_success_after=current.sql_result.execution_success,
+                    execution_error_after=current.sql_result.execution_error,
+                    result_count_after=current.sql_result.result_count,
+                    action="semantic_review_failed",
                 ))
                 break
             # 论文硬约束："A pair whose question is invalid is therefore
@@ -455,7 +476,7 @@ class PipelineExecutor:
         )
 
     def _persist_phase3(self, triples: list, traces: list) -> None:
-        """持久化最终 SQL、逐轮诊断轨迹和训练语料准入裁决。"""
+        """持久化最终 SQL、逐轮诊断轨迹和训练语料准入裁决（追加，保留全批次审计史）。"""
         from models.synthesis import Triple
         s_records = []
         for t in triples:
@@ -472,20 +493,18 @@ class PipelineExecutor:
                 "corrected_by_reflection": t.sql_result.corrected_by_reflection,
                 "correction_rounds": len(t.rationale.correction_history),
             })
-        self.kbase.store.save("sql", s_records)
-        self.kbase.store.save(
-            "diagnosis_trace", [trace.model_dump(mode="json") for trace in traces]
-        )
-        self.kbase.store.save("corpus_manifest", [
-            {
+        for rec in s_records:
+            self.kbase.store.append("sql", rec)
+        for trace in traces:
+            self.kbase.store.append("diagnosis_trace", trace.model_dump(mode="json"))
+        for trace in traces:
+            self.kbase.store.append("corpus_manifest", {
                 "question_id": trace.question_id,
                 "decision": trace.decision.value,
                 "decision_reason": trace.decision_reason,
                 "final_execution_success": trace.final_execution_success,
                 "diagnosis_iterations": len(trace.iterations),
-            }
-            for trace in traces
-        ])
+            })
 
     # ============================================================
     # 全流程（三阶段串联）

@@ -79,13 +79,15 @@ class Question(BaseModel):
     text: str = ""
     question_focus: str = ""       # 问题关注点（生成阶段产出）
     business_rules: list[dict] = Field(default_factory=list)  # 复杂查询的业务规则
+    # 生成场景元数据 σ=(C,T), ℓ（论文 Fig.training_data_format 的 think.metadata）
+    metadata: GenerationMetadata = Field(default_factory=GenerationMetadata)
 
 
 class SQLResult(BaseModel):
     """s + 执行结果"""
 
     sql: str = ""
-    dialect: str = "mysql"
+    dialect: str = "sqlite"
     executed: bool = False
     execution_success: Optional[bool] = None
     result_count: Optional[int] = None

@@ -43,7 +43,7 @@ class ChatOpenAILLMClient:
         temperature: float = 0.1,
         max_tokens: int = 8000,
         timeout: int = 1200,
-        max_retries: int = 1,
+        max_retries: int = 2,
         enable_thinking: bool = True,
     ):
         from langchain_openai import ChatOpenAI
@@ -55,13 +55,17 @@ class ChatOpenAILLMClient:
         if not enable_thinking:
             extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
 
+        # 显式超时：远端 vLLM 经 SSH 隧道访问，隧道断线时连接仍可建立
+        # 但数据永不流动，若不设读超时请求会无限挂起（实测卡死 8 小时）。
+        # 注意：langchain-openai 1.6 会对传入的 httpx.Timeout 再包一层导致
+        # "unhashable type" 报错，因此这里必须传标量秒数。
         self._llm = ChatOpenAI(
             model=model,
             api_key=api_key,
             base_url=base_url,
             temperature=temperature,
             max_tokens=max_tokens,
-            timeout=timeout,
+            timeout=float(timeout),
             max_retries=max_retries,
             extra_body=extra_body,
         )

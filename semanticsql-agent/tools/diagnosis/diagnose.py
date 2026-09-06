@@ -103,7 +103,14 @@ class DiagnoseTool(BaseSemanticTool):
         return errors
 
     def _execution_check(self, triple: Triple) -> list[Error]:
-        """执行性 + 空结果检查（论文第 4 个 check）"""
+        """执行性检查（论文 B 类失败：数据库自己报告的失败）
+
+        论文 §III.E：执行与 schema 检查覆盖 "whether a query does not parse,
+        references a column that does not exist, or violates a constraint"。
+        **空结果不算失败**——一个语义正确的问题完全可能合法地返回 0 行
+        （如"列出满足某条件的记录"而无记录满足），把空结果当错误会诱导
+        修正循环去放宽正确的 WHERE 条件，反而破坏语义。
+        """
         errors: list[Error] = []
         sr = triple.sql_result
 
@@ -114,12 +121,6 @@ class DiagnoseTool(BaseSemanticTool):
                     type=ErrorType.EXECUTION_FAILED,
                     location=ErrorLocation(clause="EXECUTION"),
                     detail=sr.execution_error or "SQL 执行失败",
-                ))
-            elif sr.result_count is not None and sr.result_count == 0:
-                errors.append(Error(
-                    type=ErrorType.EMPTY_RESULT,
-                    location=ErrorLocation(clause="EXECUTION"),
-                    detail="SQL 执行返回空结果，可能 WHERE 条件过严或 JOIN 错误",
                 ))
             return errors
 
@@ -138,13 +139,7 @@ class DiagnoseTool(BaseSemanticTool):
                 data = ret.get("data", [])
                 sr.executed = True
                 sr.execution_success = True
-                sr.result_count = len(data)
-                if len(data) == 0:
-                    errors.append(Error(
-                        type=ErrorType.EMPTY_RESULT,
-                        location=ErrorLocation(clause="EXECUTION"),
-                        detail="SQL 执行返回空结果",
-                    ))
+                sr.result_count = len(data)  # 空结果仅记录，不作为错误
         except Exception as e:
             sr.executed = True
             sr.execution_success = False
@@ -178,7 +173,13 @@ class DiagnoseTool(BaseSemanticTool):
             result = self._llm_generate_json(prompt)
         except Exception as e:
             self.logger.warning(f"LLM 语义审查失败 {triple.question_id}: {e}")
-            return []
+            # A failed review is not evidence that the pair is semantically clean.
+            return [Error(
+                type=ErrorType.SEMANTIC_REVIEW_FAILED,
+                detail=f"LLM semantic review failed: {e}",
+                artifact="s",
+                detector=DetectorType.LLM,
+            )]
 
         errors: list[Error] = []
         issues = result.get("issues", [])
@@ -227,9 +228,13 @@ class DiagnoseTool(BaseSemanticTool):
             parts.append(f"[K2 域规则] {domain.description}")
 
         try:
+            extracted_tables = self.ast_parser.extract_tables(sql) if hasattr(self.ast_parser, "extract_tables") else []
+            # The parser contract returns table-name strings, not (table, alias) pairs.
             touched_tables = {
-                t for t, _ in self.ast_parser.extract_tables(sql)
-            } if hasattr(self.ast_parser, "extract_tables") else set()
+                item[0] if isinstance(item, (tuple, list)) else item
+                for item in extracted_tables
+                if item
+            }
         except Exception:
             touched_tables = set()
         if not touched_tables:
@@ -254,11 +259,25 @@ class DiagnoseTool(BaseSemanticTool):
             if cat is not None:
                 parts.append(f"[K3] {table}.{column}: {cat.value}")
 
-        # K5：涉及表的约束/描述
+        # K5：涉及表的约束/描述与 K1 观测实例样本
         for table in sorted(touched_tables)[:10]:
             ts = self.kbase.get_table_semantic(table)
             if ts is not None:
                 parts.append(f"[K5] {table}: {ts.description}")
+            schema_table = self.kbase.get_schema().get_table(table)
+            if schema_table is not None:
+                for col in schema_table.columns:
+                    if any(tbl == table and column == col.name for tbl, column in touched_cols):
+                        if col.sample_values:
+                            observed = ", ".join(str(v) for v in col.sample_values[:5])
+                            parts.append(
+                                f"[K1 observed sample] {table}.{col.name}: "
+                                f"{observed} (not a complete domain)"
+                            )
+                        parts.append(
+                            f"[K1 metadata] {table}.{col.name}: "
+                            f"entropy={col.entropy_level}, rows={schema_table.row_count}"
+                        )
 
         # K6：涉及表之间的关系
         for rel in self.kbase.get_relations():

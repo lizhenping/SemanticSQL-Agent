@@ -41,6 +41,7 @@ class ErrorType(str, Enum):
 
     # 语义性错误（LLM 审查，对齐论文 §III.E "semantic reviewer"）
     SEMANTIC_INCONSISTENCY = "semantic_inconsistency"
+    SEMANTIC_REVIEW_FAILED = "semantic_review_failed"
 
 
 class SemanticClass(str, Enum):
@@ -133,6 +134,7 @@ class Error(BaseModel):
                 ErrorCategory.SEMANTIC
                 if self.type in {
                     ErrorType.SEMANTIC_INCONSISTENCY,
+                    ErrorType.SEMANTIC_REVIEW_FAILED,
                     ErrorType.COLUMN_SEMANTIC_MISMATCH,
                 }
                 else ErrorCategory.STRUCTURAL

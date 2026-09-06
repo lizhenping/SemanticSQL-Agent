@@ -101,7 +101,7 @@ class Settings(BaseModel):
         "reasoning output entirely",
     )
     llm_timeout: int = 1200
-    llm_max_retries: int = 1
+    llm_max_retries: int = 2  # 隧道/vLLM 偶发断连时自动重试
 
     # Neo4j configuration - NO HARDCODED DEFAULTS IN PRODUCTION
     neo4j_uri: str = Field(

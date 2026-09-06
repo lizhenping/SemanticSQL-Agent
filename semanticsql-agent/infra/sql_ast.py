@@ -67,6 +67,21 @@ class SqlglotParser:
         import sqlglot
         return sqlglot.parse_one(sql, dialect=self.dialect)
 
+    def _alias_map(self, ast) -> dict:
+        """提取 SQL 里的别名映射 {alias: real_table}
+
+        例：FROM SalesOrderHeader AS soh → {"soh": "SalesOrderHeader"}。
+        生成 SQL 几乎必用别名；不解析会导致把 soh 当表名去查 schema，
+        造成大量 column_not_found 误报（实测 353 次/25 条样本）。
+        """
+        mapping = {}
+        for t in self._nodes_by_classname(ast, "Table"):
+            name = (getattr(t, "name", "") or "").strip()
+            alias = (getattr(t, "alias", "") or "").strip()
+            if name and alias:
+                mapping[alias] = name
+        return mapping
+
     @staticmethod
     def _nodes_by_classname(ast, class_name: str):
         """按类名遍历 AST 节点（兼容 sqlglot 各版本的 walk()）。
@@ -88,6 +103,7 @@ class SqlglotParser:
 
         aggregates = []
         agg_funcs = {"SUM", "AVG", "COUNT", "MIN", "MAX"}
+        aliases = self._alias_map(ast)
 
         for node in self._nodes_by_classname(ast, "AggFunc"):
             func_name = str(node.key).upper() if hasattr(node, "key") else node.sql_name().upper()
@@ -96,6 +112,7 @@ class SqlglotParser:
                 arg = node.this if hasattr(node, "this") else None
                 if arg is not None:
                     table, column = self._extract_table_column(arg)
+                    table = aliases.get(table, table)
                     clause = self._find_containing_clause(ast, node)
                     aggregates.append(AggregateCall(
                         func=func_name, table=table, column=column, clause=clause
@@ -110,11 +127,13 @@ class SqlglotParser:
             return []
 
         joins = []
+        aliases = self._alias_map(ast)
         for join_node in self._nodes_by_classname(ast, "Join"):
             # 获取 JOIN 的右侧表
             right_table = ""
             if hasattr(join_node, "this"):
                 right_table = join_node.this.name or ""
+            right_table = aliases.get(right_table, right_table)
 
             # 获取 ON 条件
             on_condition = None
@@ -125,6 +144,7 @@ class SqlglotParser:
                 # 从 ON 条件提取左右列
                 left_col, right_col = self._extract_join_columns(on_condition)
                 left_table = self._find_table_for_column(ast, left_col, right_table)
+                left_table = aliases.get(left_table, left_table)
                 if left_col and right_col:
                     joins.append(JoinClause(
                         left_table=left_table,
@@ -135,19 +155,37 @@ class SqlglotParser:
         return joins
 
     def extract_columns(self, sql: str) -> list[tuple[str, str]]:
-        """提取所有引用的列，返回 [(table, column), ...]"""
+        """提取所有引用的列，返回 [(table, column), ...]
+
+        - 表别名已解析为真实表名（soh.SalesPersonID → SalesOrderHeader.SalesPersonID）
+        - 引用 SELECT 输出别名（如 SUM(x) AS total_sales 里的 total_sales）的
+          裸列会被跳过——它们不是 schema 列
+        """
         try:
             ast = self._parse(sql)
         except Exception:
             return []
 
+        aliases = self._alias_map(ast)
+        output_aliases = set()
+        try:
+            output_aliases = {s for s in (getattr(ast, "named_selects", None) or []) if s}
+        except Exception:
+            pass
+
         columns = []
         seen = set()
         for col_node in self._nodes_by_classname(ast, "Column"):
-            table = col_node.table or ""
-            column = col_node.name or ""
+            raw_table = (getattr(col_node, "table", "") or "").strip()
+            column = (col_node.name or "").strip()
+            if not column or column == "*":
+                continue
+            # 无表前缀且命中 SELECT 输出别名 → 别名引用，跳过
+            if not raw_table and column in output_aliases:
+                continue
+            table = aliases.get(raw_table, raw_table)
             key = (table, column)
-            if key not in seen and column:
+            if key not in seen:
                 seen.add(key)
                 columns.append(key)
         return columns

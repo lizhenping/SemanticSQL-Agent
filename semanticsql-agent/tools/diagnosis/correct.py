@@ -91,7 +91,8 @@ class CorrectTool(BaseSemanticTool):
         new_rationale = triple.rationale.model_copy(deep=True)
         new_rationale.errors = errors
         new_rationale.correction_history.append(correction)
-        new_rationale.expected_output = self._expected_output_from_evidence(evidence)
+        # 保留生成阶段的 expected_output（原文记录设计意图），
+        # 不用证据里的列名猜测去覆盖
 
         return Triple(
             question=triple.question,

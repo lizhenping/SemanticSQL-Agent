@@ -42,6 +42,7 @@
 **✅ 此表可用的列引用（严格按照这些使用）：**
 {% for col in table.columns %}
 - `{{ col.full_reference }}` ({{ col.type }}): {{ (col.description or col.comment or '无描述') | truncate(60) }}
+{% if col.sample_values %}  观测示例值（仅作实例与格式参考，不代表完整值域或业务规则）: {{ col.sample_values | map('string') | join(', ') }}{% endif %}
 {% endfor %}
 
 **❌ 禁止的错误用法**：

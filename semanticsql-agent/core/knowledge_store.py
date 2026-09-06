@@ -251,54 +251,58 @@ class KnowledgeBase:
                     ))
                     continue
 
-            # 检查 K4 语义（可选：描述是否为空）
-            col_sem = self.get_column(table, column)
-            if col_sem and not col_sem.description:
-                errors.append(Error(
-                    type=ErrorType.COLUMN_SEMANTIC_MISMATCH,
-                    location=ErrorLocation(column=column, table=table),
-                    detail=f"列 {table}.{column} 缺少语义描述",
-                ))
+            # 注：不因 K4 缺少该列的语义描述而报错——知识库覆盖不全
+            # 不等于 SQL 有错（II-1 字段角色误用由 LLM 语义审查判定）。
 
         return errors
 
     def check_joins(self, joins: list[JoinClause]) -> list[Error]:
-        """JOIN vs K6 外键校验（论文 "verifies JOIN conditions consistent with K6"）
+        """JOIN vs K6 外键校验（论文 II-2 需要关系不存在的正面证据）
+
+        保守规则（避免 K6 稀疏导致的大量误报）：
+        - K6 未覆盖该表对 → 不报错（无正面证据，交给 LLM 语义审查 II-2）
+        - K6 明确建模了这两个表之间的关系、但 JOIN 列与所有已知关系
+          的连接列都不匹配 → 报 JOIN_INVALID（正面矛盾）
 
         Args:
             joins: 来自 SQLAstParser.extract_joins
 
         Returns:
-            错误列表（JOIN 不匹配外键结构）
+            错误列表
         """
         errors = []
         fks = self.get_foreign_keys()
 
-        # 构建合法 JOIN 对的集合 {(src_table, src_col, tgt_table, tgt_col)}
-        valid_joins = set()
+        # 合法连接列对集合 {(src_table, src_col, tgt_table, tgt_col)}（含反向）
+        valid_join_cols = set()
         for fk in fks:
-            valid_joins.add((fk.source_table, fk.source_column, fk.target_table, fk.target_column))
-            # 反向也合法
-            valid_joins.add((fk.target_table, fk.target_column, fk.source_table, fk.source_column))
+            valid_join_cols.add((fk.source_table, fk.source_column,
+                                 fk.target_table, fk.target_column))
+            valid_join_cols.add((fk.target_table, fk.target_column,
+                                 fk.source_table, fk.source_column))
 
         for join in joins:
-            # 检查 JOIN 的列对是否匹配某个外键
+            # 只有 K6 明确覆盖这个表对时才有资格判错
+            pair_covered = any(
+                {fk.source_table, fk.target_table} == {join.left_table, join.right_table}
+                for fk in fks
+            )
+            if not pair_covered:
+                continue
+
             forward = (join.left_table, join.left_column, join.right_table, join.right_column)
             reverse = (join.right_table, join.right_column, join.left_table, join.left_column)
-
-            if forward not in valid_joins and reverse not in valid_joins:
-                # 可能是合法的非外键 JOIN（如自然连接），记为警告而非硬错误
-                # 只在 K6 有外键信息时才报错
-                if fks:
-                    errors.append(Error(
-                        type=ErrorType.JOIN_INVALID,
-                        location=ErrorLocation(
-                            clause="JOIN",
-                            table=f"{join.left_table} JOIN {join.right_table}",
-                        ),
-                        detail=f"JOIN {join.left_table}.{join.left_column} = "
-                               f"{join.right_table}.{join.right_column} 不匹配 K6 外键结构",
-                    ))
+            if forward not in valid_join_cols and reverse not in valid_join_cols:
+                errors.append(Error(
+                    type=ErrorType.JOIN_INVALID,
+                    location=ErrorLocation(
+                        clause="JOIN",
+                        table=f"{join.left_table} JOIN {join.right_table}",
+                    ),
+                    detail=f"JOIN {join.left_table}.{join.left_column} = "
+                           f"{join.right_table}.{join.right_column} 与 K6 已知的"
+                           f"该表对连接列不一致",
+                ))
 
         return errors
 

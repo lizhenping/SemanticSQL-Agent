@@ -149,6 +149,12 @@ datasets/*
 !datasets/README.md
 # data-assets/ 生成产物（不进 git），但保留目录结构
 data-assets/*
+# semanticsql-agent/data/ 合成数据落盘目录（体积大，不进 git）
+semanticsql-agent/data/
+# semanticsql-agent/pilot_eval/ 试点评测产物（不进 git）
+semanticsql-agent/pilot_eval/
+# baselines/ 基线上游克隆与适配代码（第三方代码+数据产物，仅存本机，不进 git）
+baselines/
 output/
 history/
 *.jsonl.history
@@ -198,3 +204,6 @@ trae_config.yaml
 # SSH 隧道代理（含明文密码与本地依赖，禁止进 git）
 ssh-proxy/
 node_modules/
+
+# 论文目录（本地撰写，不进 git）
+paper/

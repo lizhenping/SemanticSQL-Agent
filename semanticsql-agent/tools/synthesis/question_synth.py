@@ -263,6 +263,7 @@ class QuestionSynthTool(BaseSemanticTool):
             text=text,
             question_focus=q_data.get("question_focus", ""),
             business_rules=self._extract_business_rules(q_data),
+            metadata=metadata,
         )
 
     # ============================================================
@@ -295,6 +296,8 @@ class QuestionSynthTool(BaseSemanticTool):
                     "description": col_desc or (col.comment or ""),
                     "classification": {"category": self._classify_type(col.data_type)},
                     "full_reference": f"{table.name}.{col.name}",
+                    # K1 provides database-specific instance cues without hard-coded rules.
+                    "sample_values": col.sample_values[:5],
                 })
             tables.append({
                 "name": table.name,

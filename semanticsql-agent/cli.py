@@ -415,6 +415,28 @@ def _split_total(total: int, n_dbs: int) -> list[int]:
     return [base + (1 if i < extra else 0) for i in range(n_dbs)]
 
 
+# K1..K6 六层知识库对应的 LAYER_FILES key（复用判断用）
+_KB_LAYER_KEYS = ["schema", "domain", "field", "column", "table", "er"]
+
+
+def _kb_complete(output_root: str, benchmark: str, db_name: str) -> bool:
+    """该库的 K1..K6 知识库是否已完整落盘（六层 JSONL 均存在且非空）"""
+    from infra.storage import JSONLKnowledgeStore
+    d = Path(output_root) / benchmark / db_name
+    return all(
+        (d / JSONLKnowledgeStore.LAYER_FILES[k]).exists()
+        and (d / JSONLKnowledgeStore.LAYER_FILES[k]).stat().st_size > 0
+        for k in _KB_LAYER_KEYS
+    )
+
+
+def _count_records(path: Path) -> int:
+    """统计 training_data.jsonl 已落盘的样本条数（文件不存在返回 0）"""
+    if not path.exists():
+        return 0
+    return sum(1 for line in open(path, encoding="utf-8") if line.strip())
+
+
 @cli.command("run-benchmark")
 @click.option("--benchmark", "-b", required=True, help="benchmark 名（spider/bird/spider2/ehrsql/science_benchmark）")
 @click.option("--count", "-n", default=None, type=int, help="每个库合成样本数（与 --total 二选一）")
@@ -425,9 +447,13 @@ def _split_total(total: int, n_dbs: int) -> list[int]:
               help="数据库根目录")
 @click.option("--output-root", default=os.getenv("SEMANTICSQL_OUTPUT_ROOT", "history"),
               help="产物根目录（默认 history；批量实验用 data，按 benchmark/database 分层）")
+@click.option("--batch-size", default=25, type=int,
+              help="每批次合成+落盘的样本数（分批落盘，中断最多损失一个批次）")
+@click.option("--shard", type=int, help="分片编号（0 起），与 --num-shards 配合把库列表错开并行")
+@click.option("--num-shards", type=int, help="总分片数；>1 时本 worker 只跑 train_dbs[shard::num_shards]")
 @click.option("--limit", type=int, help="只跑前 N 个库（调试用，不传则跑全部）")
 @click.option("--debug", is_flag=True, help="启用 DEBUG 日志")
-def run_benchmark(benchmark, count, total, max_iters, db_root, output_root, limit, debug):
+def run_benchmark(benchmark, count, total, max_iters, db_root, output_root, batch_size, shard, num_shards, limit, debug):
     """一键跑整个 benchmark：自动遍历所有 train 库，跳过 dev/test（防泄露）
 
     自动完成：扫描 {db_root}/{benchmark}/databases/ → 排除评估库 →
@@ -465,6 +491,17 @@ def run_benchmark(benchmark, count, total, max_iters, db_root, output_root, limi
     else:
         per_db_counts = [count if count is not None else 10] * len(train_dbs)
         click.echo(f"🚀 run-benchmark: {benchmark}，{len(train_dbs)} 个 train 库，每库 {per_db_counts[0]} 条")
+
+    # 分片：库列表按编号错开（shard i 取 i::num_shards），多 worker 并行互不重复；
+    # 计数先在全量列表上均分再切片，保证各片合计仍等于总量
+    if num_shards is not None and num_shards > 1:
+        if shard is None:
+            raise click.ClickException("使用 --num-shards 时必须同时指定 --shard")
+        if not (0 <= shard < num_shards):
+            raise click.ClickException(f"--shard 必须在 [0, {num_shards}) 内")
+        train_dbs = train_dbs[shard::num_shards]
+        per_db_counts = per_db_counts[shard::num_shards]
+        click.echo(f"🧩 分片 {shard}/{num_shards}: 本片 {len(train_dbs)} 个库")
     click.echo(f"📁 产物存到 {output_root}/{benchmark}/<database>/")
     click.echo(f"🛡️  已自动排除 dev/test 评估库（防数据泄露）")
     click.echo(f"🔄 断点续跑：已有产物的库自动跳过，中断后重跑会从未完成的库继续")
@@ -475,15 +512,25 @@ def run_benchmark(benchmark, count, total, max_iters, db_root, output_root, limi
     failed_dbs = []
     skipped_dbs = []
     for i, (db_name, per_db) in enumerate(zip(train_dbs, per_db_counts), 1):
-        # 断点续跑：检查产物是否已存在且非空
+        # 断点续跑：按已落盘样本条数判断（而非仅看文件存在）
         out_path = Path(output_root) / benchmark / db_name / "training_data.jsonl"
-        if out_path.exists() and out_path.stat().st_size > 0:
-            click.echo(f"[{i}/{len(train_dbs)}] {benchmark}/{db_name} ... ⏭️  跳过（已有产物）")
+        have = _count_records(out_path)
+        if have >= per_db:
+            click.echo(f"[{i}/{len(train_dbs)}] {benchmark}/{db_name} ... ⏭️  已有 {have}/{per_db} 条，跳过")
             skipped_dbs.append(db_name)
             continue
 
         sqlite_path = str(Path(db_root) / benchmark / "databases" / db_name / f"{db_name}.sqlite")
-        click.echo(f"[{i}/{len(train_dbs)}] {benchmark}/{db_name}（目标 {per_db} 条）...")
+        click.echo(f"[{i}/{len(train_dbs)}] {benchmark}/{db_name}（已有 {have}/{per_db} 条）...")
+
+        # 从零起跑（无已落盘样本）时清空旧的中间层，
+        # 保证 questions/sql/diagnosis_trace/corpus_manifest 的追加语义干净
+        if have == 0:
+            for fname in ("questions.jsonl", "sql_results.jsonl",
+                          "diagnosis_trace.jsonl", "corpus_manifest.jsonl"):
+                stale = Path(output_root) / benchmark / db_name / fname
+                if stale.exists():
+                    stale.unlink()
 
         try:
             pipeline = PipelineExecutor.for_sqlite(
@@ -492,18 +539,34 @@ def run_benchmark(benchmark, count, total, max_iters, db_root, output_root, limi
                 benchmark=benchmark,
                 history_dir=str(Path(output_root) / benchmark / db_name),
             )
-            pipeline.run_analysis()
-            triples = pipeline.run_generation(count=per_db)
-            triples = pipeline.run_diagnosis(triples, max_iters=max_iters)
+            # 复用已有知识：K1..K6 六层完整落盘的库跳过 Phase 1（省大量重复分析）
+            if _kb_complete(output_root, benchmark, db_name):
+                click.echo(f"  ♻️  复用已有 K1..K6（跳过 Phase 1）")
+            else:
+                pipeline.run_analysis()
 
-            # 导出该库的 training_data.jsonl
-            _save_triples(triples, str(out_path), accepted_only=True)
+            # 分批合成 + 即时落盘：中断最多损失一个批次（batch_size 条）
+            produced = have
+            attempts = 0
+            max_attempts = per_db * 3 + batch_size  # 安全阀：准入率极低时避免死循环
+            while produced < per_db and attempts < max_attempts:
+                n = min(batch_size, per_db - produced)
+                triples = pipeline.run_generation(count=n)
+                attempts += n
+                if not triples:
+                    continue
+                triples = pipeline.run_diagnosis(triples, max_iters=max_iters)
+                _save_triples(triples, str(out_path), accepted_only=True,
+                              append=produced > 0)
+                produced = _count_records(out_path)
+                ok = sum(1 for t in triples if t.sql_result.execution_success)
+                total_ok += ok
+                click.echo(f"  ✅ 批次完成：累计 {produced}/{per_db}"
+                           f"（本批 {len(triples)} 条，{ok} 执行通过）")
 
-            ok = sum(1 for t in triples if t.sql_result.execution_success)
-            accepted = sum(1 for t in triples if t.rationale.admission_decision == "accepted")
-            total_triples += len(triples)
-            total_ok += ok
-            click.echo(f"  ✅ {accepted}/{len(triples)} 条通过训练准入（{ok} 执行通过）")
+            if produced < per_db:
+                click.echo(f"  ⚠️  达到尝试上限，仅 {produced}/{per_db} 条（准入率过低），继续下一库")
+            total_triples += produced - have
         except Exception as e:
             click.echo(f"  ❌ 失败: {e}")
             failed_dbs.append(db_name)
@@ -543,12 +606,16 @@ def _load_triples(input_path: str) -> list:
             s = SQLResult(sql=rec.get("answer", rec.get("sql", "")))
             triples.append(Triple(question=q, sql_result=s))
     return triples
-def _save_triples(triples: list, output: str, accepted_only: bool = False) -> None:
-    """把 list[Triple] 写成 JSONL；训练导出仅接收已通过准入的样本。"""
+def _save_triples(triples: list, output: str, accepted_only: bool = False,
+                  append: bool = False) -> None:
+    """把 list[Triple] 写成 JSONL；训练导出仅接收已通过准入的样本。
+
+    append=True 时追加写入（分批落盘的续写模式），否则覆盖。
+    """
     Path(output).parent.mkdir(parents=True, exist_ok=True)
     # 延迟导入，避免 Phase 2 未迁移时 cli import 失败
     from models.synthesis import Triple
-    with open(output, "w", encoding="utf-8") as f:
+    with open(output, "a" if append else "w", encoding="utf-8") as f:
         for t in triples:
             if isinstance(t, Triple):
                 if accepted_only and t.rationale.admission_decision != "accepted":
